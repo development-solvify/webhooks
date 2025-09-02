@@ -1403,36 +1403,139 @@ class WhatsAppService:
             }
         }
 
-    def send_template_message(self, to_phone: str, template_name: str, template_data: dict, timeout=15):
-        payload = self._build_template_payload(template_name, template_data, to_phone)
+    def get_company_config_by_phone(self, phone: str) -> dict:
+        """
+        Obtiene la configuración de la compañía basada en el número de teléfono.
+        Hace una llamada a la API para obtener los datos de la compañía.
+        """
+        clean_phone = PhoneUtils.strip_34(phone)
+        if not PhoneUtils.validate_spanish_phone(clean_phone):
+            raise ValueError(f"Número de teléfono inválido: {phone}")
+
+        # Llamar a la API para obtener el company_id basado en el teléfono
+        api_url = f"{self.config.base_url}/leads/phone/{clean_phone}/company"
+        headers = {
+            'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+            'Content-Type': 'application/json'
+        }
+
         try:
+            logger.info(f"[WhatsApp] Buscando compañía para teléfono: {phone} → URL: {api_url}")
+            response = requests.get(api_url, headers=headers)
+            response.raise_for_status()
+            company_data = response.json()
+            company_id = company_data.get('company_id')
+            logger.debug(f"[WhatsApp] Respuesta API compañía: {json.dumps(company_data)}")
+            
+            if not company_id:
+                raise ValueError(f"No se encontró compañía para el teléfono: {phone}")
+
+            # Obtener configuración de la compañía
+            config_url = f"https://test.solvify.es/api/custom-properties/companies/{company_id}/property-value"
+            logger.info(f"[WhatsApp] Obteniendo config para company_id: {company_id} → URL: {config_url}")
+            config_response = requests.get(config_url, headers=headers)
+            config_response.raise_for_status()
+            properties = config_response.json()
+            logger.debug(f"[WhatsApp] Propiedades obtenidas: {json.dumps(properties)}")
+
+            # Extraer configuración de WhatsApp
+            whatsapp_config = {}
+            for prop in properties:
+                if prop['is_deleted']:
+                    continue
+                if prop['property_name'] == 'WHATSAPP_ACCESS_TOKEN':
+                    whatsapp_config['access_token'] = prop['value']
+                elif prop['property_name'] == 'WHATSAPP_PHONE_NUMBER_ID':
+                    whatsapp_config['phone_number_id'] = prop['value']
+                elif prop['property_name'] == 'WHATSAPP_BUSINESS_ID':
+                    whatsapp_config['business_id'] = prop['value']
+
+            logger.info(f"[WhatsApp] Config obtenida para company_id {company_id}: " + 
+                       f"access_token={bool(whatsapp_config.get('access_token'))}, " +
+                       f"phone_number_id={whatsapp_config.get('phone_number_id')}, " +
+                       f"business_id={whatsapp_config.get('business_id')}")
+
+            if not all(whatsapp_config.values()):
+                raise ValueError(f"Configuración de WhatsApp incompleta para la compañía {company_id}")
+
+            return whatsapp_config
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error obteniendo configuración de compañía: {str(e)}")
+            raise
+
+    def send_template_message(self, to_phone: str, template_name: str, template_data: dict, timeout=15):
+        try:
+            # 1. Validar teléfono y obtener configuración de la compañía
+            company_config = self.get_company_config_by_phone(to_phone)
+            
+            # 2. Actualizar la configuración de WhatsApp para este envío
+            headers = {
+                'Authorization': f"Bearer {company_config['access_token']}",
+                'Content-Type': 'application/json'
+            }
+            base_url = f"https://graph.facebook.com/v20.0/{company_config['phone_number_id']}/messages"
+            
+            # 3. Construir y enviar el mensaje
+            payload = self._build_template_payload(template_name, template_data, to_phone)
             logger.debug(f"Enviando template '{template_name}' a {to_phone} → payload: {json.dumps(payload)}")
-            response = requests.post(self.base_url, headers=self.headers, json=payload, timeout=timeout)
+            
+            response = requests.post(base_url, headers=headers, json=payload, timeout=timeout)
             if not response.ok:
                 logger.error(f"❌ WhatsApp template error {response.status_code}: {response.text}")
             response.raise_for_status()
+            
             message_id = response.json()['messages'][0]['id']
             logger.info(f"✅ Template '{template_name}' enviado exitosamente. ID: {message_id}")
             return True, message_id, payload
-        except HTTPError:
+            
+        except ValueError as e:
+            logger.error(f"Error de validación: {str(e)}")
+            return False, None, None
+        except HTTPError as e:
+            logger.error(f"Error de HTTP: {str(e)}")
+            return False, None, None
+        except Exception as e:
+            logger.error(f"Error inesperado: {str(e)}")
             return False, None, None
 
     def send_text_message(self, to_phone: str, message: str, timeout: int = 10):
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": to_phone,
-            "type": "text",
-            "text": {"body": message}
-        }
         try:
+            # 1. Validar teléfono y obtener configuración de la compañía
+            company_config = self.get_company_config_by_phone(to_phone)
+            
+            # 2. Actualizar la configuración de WhatsApp para este envío
+            headers = {
+                'Authorization': f"Bearer {company_config['access_token']}",
+                'Content-Type': 'application/json'
+            }
+            base_url = f"https://graph.facebook.com/v20.0/{company_config['phone_number_id']}/messages"
+            
+            # 3. Construir y enviar el mensaje
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": to_phone,
+                "type": "text",
+                "text": {"body": message}
+            }
+
             logger.debug(f"Enviando texto a {to_phone} → payload: {payload}")
-            resp = requests.post(self.base_url, headers=self.headers, json=payload, timeout=timeout)
+            resp = requests.post(base_url, headers=headers, json=payload, timeout=timeout)
+            
             if not resp.ok:
                 logger.error(f"❌ Error {resp.status_code} enviando texto: {resp.text}")
             resp.raise_for_status()
+            
             msg_id = resp.json()["messages"][0]["id"]
             logger.info(f"✅ Texto enviado. ID: {msg_id}")
             return True, msg_id
+            
+        except ValueError as e:
+            logger.error(f"Error de validación: {str(e)}", exc_info=True)
+            return False, None
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error de HTTP: {str(e)}", exc_info=True)
+            return False, None
         except Exception as e:
             logger.error(f"❌ Excepción enviando texto: {e}", exc_info=True)
             return False, None
