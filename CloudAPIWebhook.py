@@ -932,12 +932,71 @@ class Config:
 
     def load_company_config(self, company_id):
         """
-        Carga configuración de la empresa desde Supabase y sobreescribe variables relevantes.
-        Primero carga todo de fichero, luego DB sobrescribe solo las variables presentes.
-        Loguea el origen de cada variable (file/db).
+        Carga configuración de la empresa desde la API de propiedades personalizadas.
+        Primero carga todo de fichero, luego la API sobrescribe solo las variables presentes.
         """
         logger = self._logger
         try:
+            # Configurar la llamada a la API
+            api_url = f"https://test.solvify.es/api/custom-properties/companies/{company_id}/property-value"
+            headers = {
+                'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjEyMmZlYTI1LWQ1OWEtNGE2Zi04YzQ0LWIzZTVmZTExZTZmZSIsImVtYWlsIjoic2VydmljZUBzb2x2aWZ5LmVzIiwiZmlyc3RfbmFtZSI6IlNlcnZpY2UiLCJsYXN0X25hbWUiOiJTb2x2aWZ5IiwiaXNfYWN0aXZlIjp0cnVlLCJjcmVhdGVkX2F0IjoiMjAyNC0xMC0xN1QxNzowODozOC4xNjY3OTEiLCJjcmVhdGVkX2J5IjpudWxsLCJ1cGRhdGVkX2F0IjoiMjAyNC0xMC0xN1QxNTowODozOC45OCIsInVwZGF0ZWRfYnkiOm51bGwsImRlbGV0ZWRfYXQiOm51bGwsImRlbGV0ZWRfYnkiOm51bGwsImlzX2RlbGV0ZWQiOmZhbHNlLCJyb2xlX2lkIjoiODQ5ZmFiZTgtNDhjYi00ZWY4LWE0YWUtZTJiN2MzZjNlYTViIiwic3RyaXBlX2N1c3RvbWVyX2lkIjpudWxsLCJleHBvX3B1c2hfdG9rZW4iOm51bGwsInBob25lIjoiMCIsInJvbGVfbmFtZSI6IkFETUlOIiwicm9sZXMiOltdLCJpYXQiOjE3MjkxNzc4OTIsImV4cCI6Nzc3NzE3Nzg5Mn0.TJWtiOnLW8XyWjQDR_LAWvEiqrw50tWUmYiKXxo_5Wg',
+                'Content-Type': 'application/json'
+            }
+
+            # Hacer la llamada a la API
+            response = requests.get(api_url, headers=headers)
+            response.raise_for_status()
+            properties = response.json()
+
+            # Crear un diccionario con las propiedades
+            config_map = {}
+            for prop in properties:
+                if prop['is_deleted']:
+                    continue
+                
+                # Convertir el valor según el tipo de propiedad
+                value = prop['value']
+                if prop['property_type'] == 'boolean':
+                    value = value.lower() == 'true'
+                elif prop['property_type'] == 'number':
+                    value = float(value) if '.' in value else int(value)
+                
+                config_map[prop['property_name']] = value
+
+            # Actualizar la configuración de WhatsApp
+            self.whatsapp_config = {
+                'access_token': config_map.get('WHATSAPP_ACCESS_TOKEN'),
+                'phone_number_id': config_map.get('WHATSAPP_PHONE_NUMBER_ID'),
+                'business_id': config_map.get('WHATSAPP_BUSINESS_ID'),
+                'base_url': f"https://graph.facebook.com/v20.0/{config_map.get('WHATSAPP_PHONE_NUMBER_ID')}/messages",
+                'headers': {
+                    'Authorization': f"Bearer {config_map.get('WHATSAPP_ACCESS_TOKEN')}",
+                    'Content-Type': 'application/json'
+                }
+            }
+
+            # Configuración de horario comercial
+            self.business_hours = {
+                'enabled': config_map.get('WHATSAPP_BUSINESS_HOURS_ENABLED', False),
+                'start_time': config_map.get('BUSINESS_HOURS_START_TIME', '09:00:00'),
+                'end_time': config_map.get('BUSINESS_HOURS_END_TIME', '18:00:00'),
+                'weekdays': [int(d) for d in config_map.get('BUSINESS_HOURS_WEEKDAYS', '0,1,2,3,4').split(',')]
+            }
+
+            # Otras configuraciones
+            self.hours_ahead = config_map.get('HOURS_AHEAD', 24)
+            self.message_file = config_map.get('MESSAGE_FILE', 'messages/')
+            self.templates_file = config_map.get('MESSAGE_TEMPLATES_FILE', 'templates/whatsapp.json')
+            self.default_from_email = config_map.get('DEFAULT_FROM_EMAIL')
+
+            # Guardar la configuración completa para acceso posterior
+            self.company_config = config_map
+            logger.info(f"[Config] Loaded configuration for company {company_id} from API")
+
+        except Exception as e:
+            logger.error(f"[Config] Error loading company config from API: {str(e)}")
+            raise
             # Llama a la función RPC de Supabase
             resp = self.supabase_client.rpc('get_company_data', {"company_id": company_id}).execute()
             if not resp.data:
@@ -1058,11 +1117,7 @@ class Config:
 
         access_token = os.getenv('WHATSAPP_ACCESS_TOKEN') or wa_cfg.get('WHATSAPP_ACCESS_TOKEN')
         phone_number_id = os.getenv('WHATSAPP_PHONE_NUMBER_ID') or wa_cfg.get('WHATSAPP_PHONE_NUMBER_ID')
-        verify_token = (
-            os.getenv('VERIFY_TOKEN')
-            or wa_cfg.get('VERIFY_TOKEN')
-            or fb_cfg.get('FB_VERIFY_TOKEN')
-        )
+        verify_token = wa_cfg.get('VERIFY_TOKEN', 'solvify-whatsapp-2024')
         business_id = os.getenv('WHATSAPP_BUSINESS_ID') or wa_cfg.get('WHATSAPP_BUSINESS_ID')
         self.whatsapp_config = {
             'access_token': access_token,
@@ -2993,7 +3048,8 @@ flow_exit_client = build_flow_exit_client(config, logger)
 ACCESS_TOKEN = config.whatsapp_config['access_token']
 PHONE_NUMBER_ID = config.whatsapp_config['phone_number_id']
 WHATSAPP_PHONE_NUMBER_ID = config.whatsapp_config['phone_number_id']
-VERIFY_TOKEN = config.whatsapp_config['verify_token']
+# Token de verificación del webhook (desde scripts.conf)
+VERIFY_TOKEN = config.config['WHATSAPP']['VERIFY_TOKEN']
 WHATSAPP_BASE_URL = config.whatsapp_config['base_url']
 WHATSAPP_HEADERS = config.whatsapp_config['headers']
 WABA_ID = config.whatsapp_config['business_id']
