@@ -294,7 +294,7 @@ class ExtendedFileService:
         
         try:
             response = requests.get(
-                f'https://graph.facebook.com/v20.0/{media_id}',
+                f'https://graph.facebook.com/v22.0/{media_id}',
                 headers=headers,
                 timeout=15
             )
@@ -580,7 +580,7 @@ class ExtendedFileService:
         }
         
         response = requests.post(
-            f'https://graph.facebook.com/v20.0/{self.config.whatsapp_config["phone_number_id"]}/media',
+            f'https://graph.facebook.com/v22.0/{self.config.whatsapp_config["phone_number_id"]}/media',
             headers={'Authorization': headers['Authorization']},
             files=files,
             timeout=60
@@ -969,7 +969,7 @@ class Config:
                 'access_token': config_map.get('WHATSAPP_ACCESS_TOKEN'),
                 'phone_number_id': config_map.get('WHATSAPP_PHONE_NUMBER_ID'),
                 'business_id': config_map.get('WHATSAPP_BUSINESS_ID'),
-                'base_url': f"https://graph.facebook.com/v20.0/{config_map.get('WHATSAPP_PHONE_NUMBER_ID')}/messages",
+                'base_url': f"https://graph.facebook.com/v22.0/{config_map.get('WHATSAPP_PHONE_NUMBER_ID')}/messages",
                 'headers': {
                     'Authorization': f"Bearer {config_map.get('WHATSAPP_ACCESS_TOKEN')}",
                     'Content-Type': 'application/json'
@@ -1045,7 +1045,7 @@ class Config:
                                 self.whatsapp_config['headers']['Authorization'] = f'Bearer {db_val}'
                             elif var == 'WHATSAPP_PHONE_NUMBER_ID':
                                 self.whatsapp_config['phone_number_id'] = db_val
-                                self.whatsapp_config['base_url'] = f'https://graph.facebook.com/v20.0/{db_val}/messages'
+                                self.whatsapp_config['base_url'] = f'https://graph.facebook.com/v22.0/{db_val}/messages'
                             elif var == 'WHATSAPP_BUSINESS_ID':
                                 self.whatsapp_config['business_id'] = db_val
                     # También en configparser para compatibilidad
@@ -1124,7 +1124,7 @@ class Config:
             'phone_number_id': phone_number_id,
             'verify_token': verify_token,
             'business_id': business_id,
-            'base_url': f'https://graph.facebook.com/v20.0/{phone_number_id}/messages' if phone_number_id else None,
+            'base_url': f'https://graph.facebook.com/v22.0/{phone_number_id}/messages' if phone_number_id else None,
             'headers': {
                 'Authorization': f'Bearer {access_token}' if access_token else '',
                 'Content-Type': 'application/json',
@@ -1553,7 +1553,7 @@ class WhatsAppService:
                 'Authorization': f"Bearer {company_config['access_token']}",
                 'Content-Type': 'application/json'
             }
-            base_url = f"https://graph.facebook.com/v20.0/{company_config['phone_number_id']}/messages"
+            base_url = f"https://graph.facebook.com/v22.0/{company_config['phone_number_id']}/messages"
             
             # 3. Construir y enviar el mensaje
             payload = self._build_template_payload(template_name, template_data, to_phone)
@@ -1639,7 +1639,7 @@ class WhatsAppService:
                 'Authorization': f"Bearer {company_config['access_token']}",
                 'Content-Type': 'application/json'
             }
-            base_url = f"https://graph.facebook.com/v20.0/{company_config['phone_number_id']}/messages"
+            base_url = f"https://graph.facebook.com/v22.0/{company_config['phone_number_id']}/messages"
             
             # 3. Construir y enviar el mensaje
             payload = {
@@ -4020,7 +4020,7 @@ def get_templates():
             }), 500
 
         templates_resp = requests.get(
-            f'https://graph.facebook.com/v20.0/{waba_id}/message_templates',
+            f'https://graph.facebook.com/v22.0/{waba_id}/message_templates',
             headers=WHATSAPP_HEADERS,
             params={'fields': 'name,status,category,language,components,id,rejected_reason', 'limit': 100},
             timeout=15
@@ -5947,6 +5947,56 @@ def time_to_template():
         "secondsToTemplate": 0 if not is_open else secs
     }), 200
 
+
+
+@app.route('/test_whatsapp_curl', methods=['POST'])
+def test_whatsapp_curl():
+    """Test usando exactamente la misma configuración que funciona en curl"""
+    try:
+        data = request.get_json(force=True)
+        phone = data.get('phone', '34608684495')
+        
+        # Exactamente los mismos valores que tu curl exitoso
+        url = 'https://graph.facebook.com/v22.0/734206063117516/messages'
+        headers = {
+            'Authorization': 'Bearer EAASXAvD0atABPbrErdkYRVwH2LLjfp9fTh6VqpZCodZADLb6SHJnoEiG5mwn3CKBs6yk2nO8ZB7C87mYFIiLMkI0QdZB230rCwxJfn2bXzcPE6HikaTkrZBphil4X4wkXi2g0ZB8KQZBZAuoeRG8imWaxmgyGKZCvK7g7OGHGarwEWlOmvJzTekqOjysZCEzm41ZAZCV0gfEn6ahjtqFuioHPt8qdrxhoEJntPren3P5Anab',
+            'Content-Type': 'application/json'
+        }
+        
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "template",
+            "template": {
+                "name": "hello_world",
+                "language": {"code": "en_US"}
+            }
+        }
+        
+        logger.info(f"[CURL TEST] URL: {url}")
+        logger.info(f"[CURL TEST] Headers: {headers}")
+        logger.info(f"[CURL TEST] Payload: {payload}")
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        
+        return jsonify({
+            'status': 'success' if response.ok else 'error',
+            'status_code': response.status_code,
+            'response': response.json() if response.ok else response.text
+        }), 200 if response.ok else 500
+        
+    except Exception as e:
+        logger.exception("[CURL TEST] Error")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+@app.route('/debug_tokens', methods=['GET'])
+def debug_tokens():
+    return jsonify({
+        'access_token_from_config': f"{config.whatsapp_config['access_token'][:20]}...{config.whatsapp_config['access_token'][-10:]}",
+        'access_token_global': f"{ACCESS_TOKEN[:20]}...{ACCESS_TOKEN[-10:]}",
+        'phone_number_id': PHONE_NUMBER_ID,
+        'base_url': WHATSAPP_BASE_URL,
+        'tokens_match': config.whatsapp_config['access_token'] == ACCESS_TOKEN
+    })    
 ##
 @app.route('/', methods=['GET'])
 def root():
