@@ -903,16 +903,104 @@ class FlowExitClient:
 
 class Config:
     """Centralized configuration management"""
-    def __init__(self, config_path=None):
+    def __init__(self, config_path=None, company_id=None, supabase_client=None):
         import configparser, os, logging
         self._logger = logging.getLogger(__name__)
         self.config = configparser.ConfigParser()
         if config_path is None:
-            config_path = os.path.join(os.path.dirname(__file__), 'scripts.conf')
+            config_path = 'scripts.conf'
         self.config.read(config_path)
-        self._setup_config()
+        self.company_id = company_id
+        self.supabase_client = supabase_client
+        self.company_config = None
+        # 1. Setup config (no error si faltan datos críticos)
+        self._setup_config(raise_on_missing_whatsapp=False)
+        # 2. Si hay company_id y supabase_client, cargar override de DB
+        if self.company_id and self.supabase_client:
+            self.load_company_config(self.company_id)
+        # 3. Ahora sí, validar que los datos críticos existen
+        self._validate_critical_config()
 
-    def _setup_config(self):
+    def _validate_critical_config(self):
+        # Solo lanza error si faltan datos críticos después de cargar DB
+        if not hasattr(self, 'whatsapp_config') or not self.whatsapp_config.get('access_token'):
+            raise RuntimeError("WHATSAPP_ACCESS_TOKEN no configurado (ni en env, ni en [WHATSAPP], ni en DB).")
+        if not self.whatsapp_config.get('phone_number_id'):
+            raise RuntimeError("WHATSAPP_PHONE_NUMBER_ID no configurado (ni en env, ni en [WHATSAPP], ni en DB).")
+        if not self.whatsapp_config.get('business_id'):
+            raise RuntimeError("WHATSAPP_BUSINESS_ID no configurado (ni en env, ni en [WHATSAPP], ni en DB).")
+
+    def load_company_config(self, company_id):
+        """
+        Carga configuración de la empresa desde Supabase y sobreescribe variables relevantes.
+        Primero carga todo de fichero, luego DB sobrescribe solo las variables presentes.
+        Loguea el origen de cada variable (file/db).
+        """
+        logger = self._logger
+        try:
+            # Llama a la función RPC de Supabase
+            resp = self.supabase_client.rpc('get_company_data', {"company_id": company_id}).execute()
+            if not resp.data:
+                logger.warning(f"No company data found in Supabase for company_id={company_id}")
+                return
+            company_data = resp.data[0] if isinstance(resp.data, list) else resp.data
+            self.company_config = company_data
+            custom = company_data.get('custom_properties', {})
+            logger.info(f"[Config] Company data loaded from Supabase for company_id={company_id}")
+            # Lista de variables a sobreescribir si existen en custom_properties
+            override_vars = [
+                'WHATSAPP_ACCESS_TOKEN',
+                'WHATSAPP_PHONE_NUMBER_ID',
+                'WHATSAPP_BUSINESS_ID',
+                'HOURS_AHEAD',
+                'MESSAGE_FILE',
+                'MESSAGE_TEMPLATES_FILE',
+                'DEFAULT_FROM_EMAIL',
+                'WHATSAPP_BUSINESS_HOURS_ENABLED',
+                'BUSINESS_HOURS_TIMEZONE',
+                'BUSINESS_HOURS_START_TIME',
+                'BUSINESS_HOURS_END_TIME',
+                'BUSINESS_HOURS_WEEKDAYS',
+            ]
+            # Primero loguea todo lo que hay en fichero
+            for var in override_vars:
+                file_val = None
+                # Buscar en configparser
+                for section in self.config.sections():
+                    if var in self.config[section]:
+                        file_val = self.config[section][var]
+                        break
+                if file_val is not None:
+                    logger.info(f"[Config] {var} loaded from file: {file_val}")
+            # Luego sobrescribe con DB si existe
+            for var in override_vars:
+                db_val = custom.get(var)
+                if db_val is not None:
+                    logger.info(f"[Config] {var} OVERRIDDEN from DB: {db_val}")
+                    # Actualiza en config y/o atributos
+                    if var.startswith('WHATSAPP_') or var in ['HOURS_AHEAD']:
+                        # WhatsApp config
+                        if hasattr(self, 'whatsapp_config'):
+                            if var == 'WHATSAPP_ACCESS_TOKEN':
+                                self.whatsapp_config['access_token'] = db_val
+                                self.whatsapp_config['headers']['Authorization'] = f'Bearer {db_val}'
+                            elif var == 'WHATSAPP_PHONE_NUMBER_ID':
+                                self.whatsapp_config['phone_number_id'] = db_val
+                                self.whatsapp_config['base_url'] = f'https://graph.facebook.com/v20.0/{db_val}/messages'
+                            elif var == 'WHATSAPP_BUSINESS_ID':
+                                self.whatsapp_config['business_id'] = db_val
+                    # También en configparser para compatibilidad
+                    if self.config.has_section('WHATSAPP'):
+                        self.config['WHATSAPP'][var] = str(db_val)
+                    elif var == 'HOURS_AHEAD':
+                        self.hours_ahead = db_val
+                    else:
+                        # Otros valores
+                        setattr(self, var.lower(), db_val)
+        except Exception as e:
+            logger.error(f"[Config] Error loading company config from Supabase: {e}")
+
+    def _setup_config(self, raise_on_missing_whatsapp=True):
         # ---------- Selección de entorno ----------
         env_use_test = os.getenv('USE_TEST_CONFIG')
         if env_use_test is not None:
@@ -969,36 +1057,32 @@ class Config:
         fb_cfg = self.config['FACEBOOK'] if self.config.has_section('FACEBOOK') else {}
 
         access_token = os.getenv('WHATSAPP_ACCESS_TOKEN') or wa_cfg.get('WHATSAPP_ACCESS_TOKEN')
-        if not access_token:
-            raise RuntimeError("WHATSAPP_ACCESS_TOKEN no configurado (env o [WHATSAPP]).")
-
         phone_number_id = os.getenv('WHATSAPP_PHONE_NUMBER_ID') or wa_cfg.get('WHATSAPP_PHONE_NUMBER_ID')
-        if not phone_number_id:
-            raise RuntimeError("WHATSAPP_PHONE_NUMBER_ID no configurado (env o [WHATSAPP]).")
-
         verify_token = (
             os.getenv('VERIFY_TOKEN')
             or wa_cfg.get('VERIFY_TOKEN')
             or fb_cfg.get('FB_VERIFY_TOKEN')
         )
-        if not verify_token:
-            raise RuntimeError("VERIFY_TOKEN no configurado (env, [WHATSAPP] o [FACEBOOK]).")
-
         business_id = os.getenv('WHATSAPP_BUSINESS_ID') or wa_cfg.get('WHATSAPP_BUSINESS_ID')
-        if not business_id:
-            raise RuntimeError("WHATSAPP_BUSINESS_ID no configurado (env o [WHATSAPP]).")
-
         self.whatsapp_config = {
             'access_token': access_token,
             'phone_number_id': phone_number_id,
             'verify_token': verify_token,
             'business_id': business_id,
-            'base_url': f'https://graph.facebook.com/v20.0/{phone_number_id}/messages',
+            'base_url': f'https://graph.facebook.com/v20.0/{phone_number_id}/messages' if phone_number_id else None,
             'headers': {
-                'Authorization': f'Bearer {access_token}',
+                'Authorization': f'Bearer {access_token}' if access_token else '',
                 'Content-Type': 'application/json',
             }
         }
+        # Solo lanzar error si se pide (por compatibilidad con inicialización por DB)
+        if raise_on_missing_whatsapp:
+            if not access_token:
+                raise RuntimeError("WHATSAPP_ACCESS_TOKEN no configurado (env o [WHATSAPP]).")
+            if not phone_number_id:
+                raise RuntimeError("WHATSAPP_PHONE_NUMBER_ID no configurado (env o [WHATSAPP]).")
+            if not business_id:
+                raise RuntimeError("WHATSAPP_BUSINESS_ID no configurado (env o [WHATSAPP]).")
 
         # ---------- Supabase Storage ----------
         supabase_cfg = self.config['SUPABASE'] if self.config.has_section('SUPABASE') else {}
@@ -1020,13 +1104,32 @@ class Config:
         logger.info(f"[Config] Supabase bucket: {self.supabase_config['bucket']}")
 
         # ---------- Servidor webhook ----------
+        import pathlib
         webhook_cfg = self.config['WEBHOOK'] if self.config.has_section('WEBHOOK') else {}
+        base_dir = pathlib.Path(__file__).parent.resolve()
+        # Permitir override por variable de entorno
+        ssl_cert_env = os.getenv('SSL_CERT_PATH')
+        ssl_key_env = os.getenv('SSL_KEY_PATH')
+        ssl_cert = ssl_cert_env or webhook_cfg.get('SSL_CERT_PATH')
+        ssl_key = ssl_key_env or webhook_cfg.get('SSL_KEY_PATH')
+        # Si la ruta no es absoluta, hacerla relativa al proyecto
+        if ssl_cert and not pathlib.Path(ssl_cert).is_absolute():
+            ssl_cert = str((base_dir / ssl_cert).resolve())
+        if ssl_key and not pathlib.Path(ssl_key).is_absolute():
+            ssl_key = str((base_dir / ssl_key).resolve())
+        # Comprobar si existen los certificados
+        cert_exists = ssl_cert and pathlib.Path(ssl_cert).is_file()
+        key_exists = ssl_key and pathlib.Path(ssl_key).is_file()
+        if not (cert_exists and key_exists):
+            self._logger.warning(f"[Config] SSL cert or key not found. Falling back to HTTP only. Cert: {ssl_cert}, Key: {ssl_key}")
+            ssl_cert = None
+            ssl_key = None
         self.server_config = {
             'http_port': int(webhook_cfg.get('HTTP_PORT', webhook_cfg.get('WEBHOOK_HTTP', '5041'))),
             'https_port': int(webhook_cfg.get('WEBHOOK_PORT', '5042')),
             'host': webhook_cfg.get('WEBHOOK_HOST', '0.0.0.0'),
-            'ssl_cert': webhook_cfg.get('SSL_CERT_PATH'),
-            'ssl_key': webhook_cfg.get('SSL_KEY_PATH'),
+            'ssl_cert': ssl_cert,
+            'ssl_key': ssl_key,
             'public_url': webhook_cfg.get('WEBHOOK_PUBLIC_URL'),
         }
 
@@ -2807,8 +2910,83 @@ def handle_message_statuses_webhook(value: dict, db_manager) -> None:
             logger.warning(f"⚠️ No se pudo actualizar estado para mensaje {message_id}")
 
 
+
+import sys
+import os
+
+
+
 logger = configure_logging()
-config = Config()
+# Reducir verbosidad de hpack y httpcore
+import logging
+logging.getLogger('hpack').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+
+
+# --- Inicialización dinámica por compañía ---
+import configparser
+from supabase import create_client
+
+# 1. Leer config para obtener datos de Supabase
+temp_config = configparser.ConfigParser()
+temp_config.read('scripts.conf')
+supabase_cfg = temp_config['SUPABASE'] if temp_config.has_section('SUPABASE') else {}
+SUPABASE_URL = os.getenv('SUPABASE_URL') or supabase_cfg.get('SUPABASE_URL')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY') or supabase_cfg.get('SUPABASE_KEY')
+
+supabase_client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    logger.info(f"Supabase client created successfully with URL: {SUPABASE_URL[:30]}...")
+else:
+    logger.warning(f"Supabase client not created. URL: {SUPABASE_URL}, KEY: {SUPABASE_KEY[:20] if SUPABASE_KEY else None}...")
+
+company_id = None
+company_name = None
+if len(sys.argv) > 1:
+    company_name = sys.argv[1]
+    logger.info(f"[Startup] Booting for company: {company_name}")
+    if supabase_client:
+        try:
+            # Buscar company_id por nombre
+            resp = supabase_client.table('companies').select('id').eq('name', company_name).limit(1).execute()
+            if resp.data and len(resp.data) > 0:
+                company_id = resp.data[0]['id']
+                logger.info(f"[Startup] Found company_id for '{company_name}': {company_id}")
+            else:
+                logger.warning(f"[Startup] Company name '{company_name}' not found in DB. Using file config only.")
+        except Exception as e:
+            logger.error(f"[Startup] Error fetching company_id for '{company_name}': {e}")
+    else:
+        logger.warning("[Startup] Supabase client not configured. Using file config only.")
+else:
+    logger.info("[Startup] No company name provided. Using file config only.")
+
+config = Config(company_id=company_id, supabase_client=supabase_client)
+
+# Mostrar variables clave y su origen
+def log_config_summary(config, company_name=None):
+    logger.info("==============================")
+    logger.info(f"[Startup] CONFIG SUMMARY for company: {company_name or 'N/A'}")
+    db_vars = {}
+    file_vars = {}
+    # Variables de la base de datos
+    if hasattr(config, 'company_config') and config.company_config:
+        db_vars = config.company_config.get('custom_properties', {})
+        if db_vars:
+            logger.info("[Startup] Variables loaded from DB (custom_properties):")
+            for k, v in db_vars.items():
+                logger.info(f"   • {k} = {v}   [DB]")
+    # Variables del fichero (solo las que no están en DB)
+    logger.info("[Startup] Variables loaded from file (not overridden by DB):")
+    for section in config.config.sections():
+        for k, v in config.config[section].items():
+            if not db_vars or k not in db_vars:
+                logger.info(f"   • {k} = {v}   [file:{section}]")
+    logger.info("==============================")
+
+log_config_summary(config, company_name)
+
 flow_exit_client = build_flow_exit_client(config, logger)
 
 # Global vars for compatibility
