@@ -3199,7 +3199,6 @@ def handle_message_statuses_webhook(value: dict, db_manager) -> None:
 
 
 
-import sys
 import os
 
 
@@ -3229,28 +3228,10 @@ if SUPABASE_URL and SUPABASE_KEY:
 else:
     logger.warning(f"Supabase client not created. URL: {SUPABASE_URL}, KEY: {SUPABASE_KEY[:20] if SUPABASE_KEY else None}...")
 
-company_id = None
-company_name = None
-if len(sys.argv) > 1:
-    company_name = sys.argv[1]
-    logger.info(f"[Startup] Booting for company: {company_name}")
-    if supabase_client:
-        try:
-            # Buscar company_id por nombre
-            resp = supabase_client.table('companies').select('id').eq('name', company_name).limit(1).execute()
-            if resp.data and len(resp.data) > 0:
-                company_id = resp.data[0]['id']
-                logger.info(f"[Startup] Found company_id for '{company_name}': {company_id}")
-            else:
-                logger.warning(f"[Startup] Company name '{company_name}' not found in DB. Using file config only.")
-        except Exception as e:
-            logger.error(f"[Startup] Error fetching company_id for '{company_name}': {e}")
-    else:
-        logger.warning("[Startup] Supabase client not configured. Using file config only.")
-else:
-    logger.info("[Startup] No company name provided. Using file config only.")
+# Multi-tenant support - no need for command line arguments
+logger.info("[Startup] Starting multi-tenant WhatsApp webhook service")
 
-config = Config(company_id=company_id, supabase_client=supabase_client)
+config = Config(company_id=None, supabase_client=supabase_client)
 
 # Mostrar variables clave y su origen
 def log_config_summary(config, company_name=None):
@@ -3273,7 +3254,7 @@ def log_config_summary(config, company_name=None):
                 logger.info(f"   • {k} = {v}   [file:{section}]")
     logger.info("==============================")
 
-log_config_summary(config, company_name)
+log_config_summary(config, None)
 
 flow_exit_client = build_flow_exit_client(config, logger)
 
