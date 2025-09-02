@@ -1387,15 +1387,13 @@ class WhatsAppService:
             # URL base para API de propiedades personalizadas
             self.api_base_url    = "https://test.solvify.es/api"
         else:
-            self.access_token    = config['access_token']
-            self.phone_number_id = config['phone_number_id']
-            self.base_url        = f'https://graph.facebook.com/v20.0/{self.phone_number_id}/messages'
-            self.headers         = {
-                'Authorization': f'Bearer {self.access_token}',
-                'Content-Type':  'application/json'
-            }
+            # Acceder a través de whatsapp_config que es donde están los valores
+            self.access_token    = config.whatsapp_config['access_token']
+            self.phone_number_id = config.whatsapp_config['phone_number_id']
+            self.base_url        = config.whatsapp_config['base_url']
+            self.headers         = config.whatsapp_config['headers']
             # URL base para API de propiedades personalizadas
-            self.api_base_url    = config.get('api_base_url', "https://test.solvify.es/api")
+            self.api_base_url    = getattr(config, 'api_base_url', "https://test.solvify.es/api")
 
     def get_debug_info(self):
         return {
