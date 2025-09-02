@@ -1378,11 +1378,14 @@ class PhoneUtils:
 class WhatsAppService:
     """WhatsApp API service con templates y logging de errores"""
     def __init__(self, config=None):
+        self.config = config  # Guardar la configuración completa
         if config is None:
             self.access_token    = ACCESS_TOKEN
             self.phone_number_id = PHONE_NUMBER_ID
             self.base_url        = WHATSAPP_BASE_URL
             self.headers         = WHATSAPP_HEADERS
+            # URL base para API de propiedades personalizadas
+            self.api_base_url    = "https://test.solvify.es/api"
         else:
             self.access_token    = config['access_token']
             self.phone_number_id = config['phone_number_id']
@@ -1391,6 +1394,8 @@ class WhatsAppService:
                 'Authorization': f'Bearer {self.access_token}',
                 'Content-Type':  'application/json'
             }
+            # URL base para API de propiedades personalizadas
+            self.api_base_url    = config.get('api_base_url', "https://test.solvify.es/api")
 
     def get_debug_info(self):
         return {
@@ -1413,7 +1418,7 @@ class WhatsAppService:
             raise ValueError(f"Número de teléfono inválido: {phone}")
 
         # Llamar a la API para obtener el company_id basado en el teléfono
-        api_url = f"{self.config.base_url}/leads/phone/{clean_phone}/company"
+        api_url = f"{self.api_base_url}/leads/phone/{clean_phone}/company"
         headers = {
             'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
             'Content-Type': 'application/json'
@@ -3183,7 +3188,7 @@ logger.info(f"   • HTTPS Port: {config.server_config['https_port']}")
 db_manager = DatabaseManager(config.db_config)
 lead_service = LeadService(db_manager)
 message_service = MessageService(db_manager, lead_service)
-whatsapp_service = WhatsAppService()
+whatsapp_service = WhatsAppService(config)
 auto_reply_service = AutoReplyService(db_manager)
 
 # --- Inicialización del FileService extendido ---
