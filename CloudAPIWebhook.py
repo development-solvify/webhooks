@@ -1406,117 +1406,148 @@ class WhatsAppService:
             }
         }
 
-    def get_company_config_by_phone(self, phone: str) -> dict:
+    def _get_company_data(self, phone: str) -> tuple[dict, str, str]:
         """
-        Obtiene la configuración de WhatsApp de la compañía basada en el número de teléfono.
-        1. Obtiene el lead.id usando el teléfono
-        2. Obtiene el company_id del deal asociado al lead
-        3. Obtiene la configuración de WhatsApp de la compañía
+        Método interno para obtener los datos de la compañía y su configuración de WhatsApp.
+        Retorna: (company_config, company_name, company_id)
         """
         clean_phone = PhoneUtils.strip_34(phone)
         if not PhoneUtils.validate_spanish_phone(clean_phone):
             raise ValueError(f"Número de teléfono inválido: {phone}")
 
         try:
-            # 1. Obtener lead.id
-            query_lead = """
-                SELECT id FROM public.leads 
-                WHERE phone = %s AND is_deleted = false 
+            query = """
+                SELECT l.id as lead_id, d.company_id, c.name as company_name, 
+                       public.get_company_data(d.company_id) as company_data
+                FROM public.leads l
+                INNER JOIN public.deals d ON d.lead_id = l.id AND d.is_deleted = false
+                INNER JOIN public.companies c ON d.company_id = c.id
+                WHERE l.phone = %s AND l.is_deleted = false
                 LIMIT 1
             """
             with db_manager.get_connection() as conn:
                 cur = conn.cursor()
-                cur.execute(query_lead, [clean_phone])
-                lead_result = cur.fetchone()
+                cur.execute(query, [clean_phone])
+                result = cur.fetchone()
 
-            if not lead_result:
-                logger.warning(f"[WhatsApp] No se encontró lead para teléfono {phone}, usando config por defecto")
-                return {
-                    'access_token': self.access_token,
-                    'phone_number_id': self.phone_number_id,
-                    'business_id': getattr(self, 'business_id', None)
-                }
+            if not result:
+                logger.warning(f"[WhatsApp] No se encontró lead/deal/company para teléfono {phone}, usando config por defecto")
+                return (
+                    {
+                        'access_token': self.access_token,
+                        'phone_number_id': self.phone_number_id,
+                        'business_id': getattr(self, 'business_id', None)
+                    },
+                    None,
+                    None
+                )
 
-            lead_id = lead_result[0]
-            logger.info(f"[WhatsApp] Lead encontrado: {lead_id}")
+            lead_id, company_id, company_name, company_data = result
+            logger.info(f"[WhatsApp] Lead {lead_id} encontrado para company: {company_name} (id: {company_id})")
 
-            # 2. Obtener company_id del deal
-            query_company = """
-                SELECT d.company_id 
-                FROM public.deals d 
-                WHERE d.lead_id = %s AND d.is_deleted = false 
-                LIMIT 1
-            """
-            with db_manager.get_connection() as conn:
-                cur = conn.cursor()
-                cur.execute(query_company, [lead_id])
-                company_result = cur.fetchone()
+            if not company_data or 'custom_properties' not in company_data:
+                logger.warning(f"[WhatsApp] No se encontraron custom_properties para company {company_id}, usando config por defecto")
+                return (
+                    {
+                        'access_token': self.access_token,
+                        'phone_number_id': self.phone_number_id,
+                        'business_id': getattr(self, 'business_id', None)
+                    },
+                    company_name,
+                    company_id
+                )
 
-            if not company_result or not company_result[0]:
-                logger.warning(f"[WhatsApp] No se encontró company_id para lead {lead_id}, usando config por defecto")
-                return {
-                    'access_token': self.access_token,
-                    'phone_number_id': self.phone_number_id,
-                    'business_id': getattr(self, 'business_id', None)
-                }
+            custom_props = company_data['custom_properties']
+            whatsapp_config = {
+                'access_token': custom_props.get('WHATSAPP_ACCESS_TOKEN'),
+                'phone_number_id': custom_props.get('WHATSAPP_PHONE_NUMBER_ID'),
+                'business_id': custom_props.get('WHATSAPP_BUSINESS_ID')
+            }
 
-            company_id = company_result[0]
-            logger.info(f"[WhatsApp] Company encontrada: {company_id}")
-
-            # 3. Obtener configuración de WhatsApp de la compañía
-            query_config = """
-                SELECT p.property_name, p.value 
-                FROM public.company_properties p 
-                WHERE p.company_id = %s 
-                AND p.property_name IN (
-                    'WHATSAPP_ACCESS_TOKEN', 
-                    'WHATSAPP_PHONE_NUMBER_ID', 
-                    'WHATSAPP_BUSINESS_ID'
-                ) 
-                AND p.is_deleted = false
-            """
-            with db_manager.get_connection() as conn:
-                cur = conn.cursor()
-                cur.execute(query_config, [company_id])
-                config_results = cur.fetchall()
-
-            # Construir configuración de WhatsApp
-            whatsapp_config = {}
-            for row in config_results:
-                property_name, value = row
-                if property_name == 'WHATSAPP_ACCESS_TOKEN':
-                    whatsapp_config['access_token'] = value
-                elif property_name == 'WHATSAPP_PHONE_NUMBER_ID':
-                    whatsapp_config['phone_number_id'] = value
-                elif property_name == 'WHATSAPP_BUSINESS_ID':
-                    whatsapp_config['business_id'] = value
-
-            # Validar que tenemos toda la configuración necesaria
             if not all(whatsapp_config.values()):
                 logger.warning(f"[WhatsApp] Config incompleta para company {company_id}, usando por defecto")
-                return {
-                    'access_token': self.access_token,
-                    'phone_number_id': self.phone_number_id,
-                    'business_id': getattr(self, 'business_id', None)
-                }
+                return (
+                    {
+                        'access_token': self.access_token,
+                        'phone_number_id': self.phone_number_id,
+                        'business_id': getattr(self, 'business_id', None)
+                    },
+                    company_name,
+                    company_id
+                )
 
-            logger.info(f"[WhatsApp] Usando config específica de company_id {company_id}")
-            return whatsapp_config
+            logger.info(f"[WhatsApp] Usando config específica de company {company_name} (id: {company_id})")
+            return whatsapp_config, company_name, company_id
 
         except Exception as e:
             logger.error(f"[WhatsApp] Error obteniendo config: {str(e)}")
             logger.info("[WhatsApp] Usando configuración por defecto debido al error")
-            return {
-                'access_token': self.access_token,
-                'phone_number_id': self.phone_number_id,
-                'business_id': getattr(self, 'business_id', None)
-            }
+            return (
+                {
+                    'access_token': self.access_token,
+                    'phone_number_id': self.phone_number_id,
+                    'business_id': getattr(self, 'business_id', None)
+                },
+                None,
+                None
+            )
 
     def send_template_message(self, to_phone: str, template_name: str, template_data: dict, timeout=15):
         try:
-            # 1. Validar teléfono y obtener configuración de la compañía
-            company_config = self.get_company_config_by_phone(to_phone)
-            
+            clean_phone = PhoneUtils.strip_34(to_phone)
+            if not PhoneUtils.validate_spanish_phone(clean_phone):
+                raise ValueError(f"Número de teléfono inválido: {to_phone}")
+
+            # 1. Obtener información de la compañía y su configuración
+            query = """
+                SELECT l.id as lead_id, d.company_id, c.name as company_name, 
+                       public.get_company_data(d.company_id) as company_data
+                FROM public.leads l
+                INNER JOIN public.deals d ON d.lead_id = l.id AND d.is_deleted = false
+                INNER JOIN public.companies c ON d.company_id = c.id
+                WHERE l.phone = %s AND l.is_deleted = false
+                LIMIT 1
+            """
+            with db_manager.get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(query, [clean_phone])
+                result = cur.fetchone()
+
+            if not result:
+                logger.warning(f"[WhatsApp] No se encontró lead/deal/company para teléfono {to_phone}, usando config por defecto")
+                company_config = {
+                    'access_token': self.access_token,
+                    'phone_number_id': self.phone_number_id,
+                    'business_id': getattr(self, 'business_id', None)
+                }
+            else:
+                lead_id, company_id, company_name, company_data = result
+                logger.info(f"[WhatsApp] Lead {lead_id} encontrado para company: {company_name} (id: {company_id})")
+
+                if not company_data or 'custom_properties' not in company_data:
+                    logger.warning(f"[WhatsApp] No se encontraron custom_properties para company {company_id}, usando config por defecto")
+                    company_config = {
+                        'access_token': self.access_token,
+                        'phone_number_id': self.phone_number_id,
+                        'business_id': getattr(self, 'business_id', None)
+                    }
+                else:
+                    custom_props = company_data['custom_properties']
+                    company_config = {
+                        'access_token': custom_props.get('WHATSAPP_ACCESS_TOKEN'),
+                        'phone_number_id': custom_props.get('WHATSAPP_PHONE_NUMBER_ID'),
+                        'business_id': custom_props.get('WHATSAPP_BUSINESS_ID')
+                    }
+                    if not all(company_config.values()):
+                        logger.warning(f"[WhatsApp] Config incompleta para company {company_id}, usando por defecto")
+                        company_config = {
+                            'access_token': self.access_token,
+                            'phone_number_id': self.phone_number_id,
+                            'business_id': getattr(self, 'business_id', None)
+                        }
+                    else:
+                        logger.info(f"[WhatsApp] Usando config específica de company {company_name} (id: {company_id})")
+
             # 2. Actualizar la configuración de WhatsApp para este envío
             headers = {
                 'Authorization': f"Bearer {company_config['access_token']}",
@@ -1549,9 +1580,60 @@ class WhatsAppService:
 
     def send_text_message(self, to_phone: str, message: str, timeout: int = 10):
         try:
-            # 1. Validar teléfono y obtener configuración de la compañía
-            company_config = self.get_company_config_by_phone(to_phone)
-            
+            clean_phone = PhoneUtils.strip_34(to_phone)
+            if not PhoneUtils.validate_spanish_phone(clean_phone):
+                raise ValueError(f"Número de teléfono inválido: {to_phone}")
+
+            # 1. Obtener información de la compañía y su configuración
+            query = """
+                SELECT l.id as lead_id, d.company_id, c.name as company_name, 
+                       public.get_company_data(d.company_id) as company_data
+                FROM public.leads l
+                INNER JOIN public.deals d ON d.lead_id = l.id AND d.is_deleted = false
+                INNER JOIN public.companies c ON d.company_id = c.id
+                WHERE l.phone = %s AND l.is_deleted = false
+                LIMIT 1
+            """
+            with db_manager.get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(query, [clean_phone])
+                result = cur.fetchone()
+
+            if not result:
+                logger.warning(f"[WhatsApp] No se encontró lead/deal/company para teléfono {to_phone}, usando config por defecto")
+                company_config = {
+                    'access_token': self.access_token,
+                    'phone_number_id': self.phone_number_id,
+                    'business_id': getattr(self, 'business_id', None)
+                }
+            else:
+                lead_id, company_id, company_name, company_data = result
+                logger.info(f"[WhatsApp] Lead {lead_id} encontrado para company: {company_name} (id: {company_id})")
+
+                if not company_data or 'custom_properties' not in company_data:
+                    logger.warning(f"[WhatsApp] No se encontraron custom_properties para company {company_id}, usando config por defecto")
+                    company_config = {
+                        'access_token': self.access_token,
+                        'phone_number_id': self.phone_number_id,
+                        'business_id': getattr(self, 'business_id', None)
+                    }
+                else:
+                    custom_props = company_data['custom_properties']
+                    company_config = {
+                        'access_token': custom_props.get('WHATSAPP_ACCESS_TOKEN'),
+                        'phone_number_id': custom_props.get('WHATSAPP_PHONE_NUMBER_ID'),
+                        'business_id': custom_props.get('WHATSAPP_BUSINESS_ID')
+                    }
+                    if not all(company_config.values()):
+                        logger.warning(f"[WhatsApp] Config incompleta para company {company_id}, usando por defecto")
+                        company_config = {
+                            'access_token': self.access_token,
+                            'phone_number_id': self.phone_number_id,
+                            'business_id': getattr(self, 'business_id', None)
+                        }
+                    else:
+                        logger.info(f"[WhatsApp] Usando config específica de company {company_name} (id: {company_id})")
+
             # 2. Actualizar la configuración de WhatsApp para este envío
             headers = {
                 'Authorization': f"Bearer {company_config['access_token']}",
