@@ -1,0 +1,31 @@
+# === Certificados / Claves ===
+*.pem
+*.key
+*.crt
+
+# === Logs ===
+*.log
+
+# === Archivos temporales / copias ===
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+
+# === Python artefactos ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.p~
+*.py_*
+
+# === VSCode ===
+.vscode/
+*.code-workspace
+
+# === Otros comunes ===
+.DS_Store
+Thumbs.db
+
