@@ -426,13 +426,23 @@ class ExtendedFileService:
         
         return safe_name
 
-    def get_whatsapp_media_url(self, media_id: str) -> str:
-        """Get media URL from WhatsApp API"""
-        headers = {
-            'Authorization': f'Bearer {self.config.whatsapp_config["access_token"]}',
-        }
-        
+    def get_whatsapp_media_url(self, media_id: str, phone: str = None) -> str:
+        """Get media URL from WhatsApp API. If phone is provided, resolve token for that company."""
         try:
+            # Resolver credenciales por teléfono si se pasa
+            if phone:
+                creds = get_whatsapp_credentials_for_phone(phone)
+                token = creds.get('access_token')
+            else:
+                token = self.config.whatsapp_config.get("access_token")
+
+            if not token:
+                raise RuntimeError("No WhatsApp access token available to fetch media URL")
+
+            headers = {
+                'Authorization': f'Bearer {token}',
+            }
+
             response = requests.get(
                 f'https://graph.facebook.com/v22.0/{media_id}',
                 headers=headers,
@@ -440,38 +450,48 @@ class ExtendedFileService:
             )
             response.raise_for_status()
             media_info = response.json()
-            
+
             logger.info(f"Media info retrieved for {media_id}: {media_info}")
             return media_info.get('url')
-            
-        except Exception as e:
-            logger.error(f"Error getting media URL for {media_id}: {e}")
-            raise
 
-    def download_whatsapp_media(self, media_url: str) -> tuple[bytes, str, str]:
-        """Download media from WhatsApp and return content, filename, mime_type"""
-        headers = {
-            'Authorization': f'Bearer {self.config.whatsapp_config["access_token"]}',
-        }
-        
+        except Exception as e:
+            logger.error(f"Error getting media URL for {media_id}: {e}", exc_info=True)
+            raise
+   
+    def download_whatsapp_media(self, media_url: str, phone: str = None) -> tuple[bytes, str, str]:
+        """Download media from WhatsApp and return content, filename, mime_type.
+           If phone provided, uses company-specific token."""
         try:
+            # Resolver token por teléfono si se proporciona
+            if phone:
+                creds = get_whatsapp_credentials_for_phone(phone)
+                token = creds.get('access_token')
+            else:
+                token = self.config.whatsapp_config.get("access_token")
+
+            if not token:
+                raise RuntimeError("No WhatsApp access token available to download media")
+
+            headers = {
+                'Authorization': f'Bearer {token}',
+            }
+
             response = requests.get(media_url, headers=headers, timeout=60)
             response.raise_for_status()
-            
+
             # Detectar tipo MIME del response
             content_type = response.headers.get('content-type', 'application/octet-stream')
             content_type = content_type.split(';')[0].strip().lower()
-            
+
             # Generar nombre de archivo basado en content type
             filename = self._generate_filename_from_content_type(content_type)
-            
+
             logger.info(f"Downloaded media: {len(response.content)} bytes, type: {content_type}")
             return response.content, filename, content_type
-            
-        except Exception as e:
-            logger.error(f"Error downloading media from {media_url}: {e}")
-            raise
 
+        except Exception as e:
+            logger.error(f"Error downloading media from {media_url}: {e}", exc_info=True)
+            raise
     def _generate_filename_from_content_type(self, content_type: str) -> str:
         """Generate appropriate filename based on content type"""
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -505,53 +525,54 @@ class ExtendedFileService:
         return f"whatsapp_{timestamp}_{random_id}{extension}"
 
     def process_whatsapp_media_extended(self, media_id: str, object_reference_type: str, 
-                                       object_reference_id: str, original_filename: str = None) -> dict:
-        """
-        Pipeline completo extendido: download desde WhatsApp -> validar -> subir a Supabase -> guardar metadata
-        Soporta cualquier MIME type válido según WhatsApp Cloud API
-        """
-        try:
-            # 1. Obtener URL del media
-            media_url = self.get_whatsapp_media_url(media_id)
-            if not media_url:
-                raise ValueError("Could not get media URL from WhatsApp")
-            
-            # 2. Descargar media
-            content, filename, content_type = self.download_whatsapp_media(media_url)
-            
-            # 3. Validación extendida
-            validation = self.validate_file_extended(content, filename, content_type)
-            
-            # 4. Subir a Supabase
-            upload_result = self.upload_to_supabase(content, filename, content_type)
-            
-            # 5. Guardar metadata en base de datos
-            upload_result['original_filename'] = original_filename or filename
-            document_id = self.save_file_metadata_extended(
-                upload_result, validation, object_reference_type, object_reference_id
-            )
-            
-            result = {
-                'success': True,
-                'document_id': document_id,
-                'media_id': media_id,
-                'filename': filename,
-                'original_filename': original_filename,
-                'content_type': content_type,
-                'media_type': validation['media_type'],
-                'whatsapp_type': validation['whatsapp_type'],
-                'file_size': validation['file_size'],
-                'supabase_path': upload_result['file_path'],
-                'public_url': upload_result['public_url']
-            }
-            
-            logger.info(f"Media processed successfully: {media_id} -> {document_id} (type: {validation['media_type']})")
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error processing WhatsApp media {media_id}: {e}")
-            raise
+                                        object_reference_id: str, original_filename: str = None, phone: str = None) -> dict:
+            """
+            Pipeline completo extendido: download desde WhatsApp -> validar -> subir a Supabase -> guardar metadata
+            Soporta cualquier MIME type válido según WhatsApp Cloud API
+            Ahora acepta phone opcional para resolver token/company específico.
+            """
+            try:
+                # 1. Obtener URL del media (usa token adecuado si phone provisto)
+                media_url = self.get_whatsapp_media_url(media_id, phone)
+                if not media_url:
+                    raise ValueError("Could not get media URL from WhatsApp")
 
+                # 2. Descargar media (pasa phone para usar token correcto)
+                content, filename, content_type = self.download_whatsapp_media(media_url, phone)
+
+                # 3. Validación extendida
+                validation = self.validate_file_extended(content, filename, content_type)
+
+                # 4. Subir a Supabase
+                upload_result = self.upload_to_supabase(content, filename, content_type)
+
+                # 5. Guardar metadata en base de datos
+                upload_result['original_filename'] = original_filename or filename
+                document_id = self.save_file_metadata_extended(
+                    upload_result, validation, object_reference_type, object_reference_id
+                )
+
+                result = {
+                    'success': True,
+                    'document_id': document_id,
+                    'media_id': media_id,
+                    'filename': filename,
+                    'original_filename': original_filename,
+                    'content_type': content_type,
+                    'media_type': validation['media_type'],
+                    'whatsapp_type': validation['whatsapp_type'],
+                    'file_size': validation['file_size'],
+                    'supabase_path': upload_result['file_path'],
+                    'public_url': upload_result['public_url']
+                }
+
+                logger.info(f"Media processed successfully: {media_id} -> {document_id} (type: {validation['media_type']})")
+                return result
+
+            except Exception as e:
+                logger.error(f"Error processing WhatsApp media {media_id}: {e}", exc_info=True)
+                raise
+            
     def save_file_metadata_extended(self, file_info: dict, validation_result: dict, 
                                    object_reference_type: str, object_reference_id: str) -> str:
         """Save file metadata with extended type support"""
@@ -4579,7 +4600,9 @@ def webhook():
                                         file_result = file_service.process_whatsapp_media_extended(
                                             media_id, object_ref_type, object_ref_id, original_filename
                                         )
-                                        
+                                        file_result = file_service.process_whatsapp_media_extended(
+                                            media_id, object_ref_type, object_ref_id, original_filename, sender_phone
+                                        )
                                         # 🔧 MEJORAR: Construir file_info más completo para el JSON
                                         file_info = {
                                             'document_id': file_result['document_id'],
