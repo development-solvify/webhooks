@@ -50,30 +50,76 @@ class CompanyConfigCache:
     def preload_all_companies(self, db_manager):
         """Load all company configurations into cache"""
         try:
-            query = """
-                SELECT c.id, c.name, public.get_company_data(c.id) as config
-                FROM public.companies c 
-                WHERE c.is_deleted = false 
-                AND c.is_active = true
+            # Obtener todos los IDs de compañías activas
+            companies_query = """
+                SELECT id 
+                FROM public.companies 
+                WHERE is_deleted = false 
             """
-            companies = db_manager.execute_query(query, fetch_all=True)
+            company_results = db_manager.execute_query(companies_query, fetch_all=True)
             
+            if not company_results:
+                self._logger.warning("No se encontraron compañías activas")
+                return
+                
+            # Extraer los IDs de los resultados
+            company_ids = [str(row[0]) for row in company_results]
+            self._logger.info(f"Encontradas {len(company_ids)} compañías activas para cargar")
             loaded = 0
-            for company in companies:
-                company_id, company_name, company_data = company
-                if company_data and isinstance(company_data, dict):
-                    self._cache[company_id] = {
-                        'id': company_id,
-                        'name': company_name,
-                        'config': company_data
-                    }
-                    loaded += 1
+            for company_id in company_ids:
+                try:
+                    # Llamar directamente a get_company_data para cada compañía
+                    result = db_manager.execute_query(
+                        "SELECT public.get_company_data(%s) as config",
+                        [company_id],
+                        fetch_one=True
+                    )
                     
+                    if result and result[0]:
+                        company_data = result[0]
+                        
+                        # Verificar que tenemos los datos necesarios
+                        if isinstance(company_data, dict) and company_data.get('id'):
+                            self._cache[company_id] = {
+                                'id': company_id,
+                                'name': company_data.get('name', 'Unknown'),
+                                'config': company_data
+                            }
+                            loaded += 1
+                            
+                            # Log de configuración cargada
+                            self._logger.info(f"✅ Configuración cargada para {company_data.get('name')} (id: {company_id})")
+                            
+                            # Log de valores críticos de WhatsApp si existen
+                            custom_props = company_data.get('custom_properties', {})
+                            if custom_props:
+                                self._logger.debug(f"   • WhatsApp config para {company_id}:")
+                                self._logger.debug(f"     - Business ID: {custom_props.get('WHATSAPP_BUSINESS_ID')}")
+                                self._logger.debug(f"     - Phone ID: {custom_props.get('WHATSAPP_PHONE_NUMBER_ID')}")
+                                token = custom_props.get('WHATSAPP_ACCESS_TOKEN', '')
+                                if token:
+                                    self._logger.debug(f"     - Token: {token[:20]}...")
+                            else:
+                                self._logger.warning(f"   • No custom_properties encontradas para {company_id}")
+                        else:
+                            self._logger.warning(f"❌ Datos inválidos o incompletos para compañía {company_id}")
+                    else:
+                        self._logger.warning(f"❌ No se encontraron datos para compañía {company_id}")
+                            
+                except Exception as e:
+                    self._logger.error(f"Error cargando config para compañía {company_id}: {e}")
+                    continue
+            
             self._last_reload = time.time()
-            self._logger.info(f"✅ Preloaded {loaded} company configurations")
+            self._logger.info(f"✅ Precargadas {loaded}/{len(company_ids)} configuraciones de compañías")
+            
+            # Log del estado final de la caché
+            self._logger.info(f"📦 Caché contiene {len(self._cache)} configuraciones en total")
             
         except Exception as e:
-            self._logger.exception(f"Error preloading company configs: {e}")
+            self._logger.exception(f"Error precargando configuraciones de compañías: {e}")
+
+
 
     def get_config_by_phone(self, phone: str, db_manager) -> tuple[dict, str, str]:
         """Get company config by phone number, returns (config, company_name, company_id)"""
@@ -1049,6 +1095,13 @@ class Config:
             })
 
     def _validate_critical_config(self):
+
+
+        print("HOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO")
+        if not self.company_id:
+            logger.info("Skipping critical config validation for temporary config object")
+            return
+        
         # Solo lanza error si faltan datos críticos después de cargar DB
         if not hasattr(self, 'whatsapp_config') or not self.whatsapp_config.get('access_token'):
             raise RuntimeError("WHATSAPP_ACCESS_TOKEN no configurado (ni en env, ni en [WHATSAPP], ni en DB).")
@@ -3358,7 +3411,49 @@ else:
 # Multi-tenant support - no need for command line arguments
 logger.info("[Startup] Starting multi-tenant WhatsApp webhook service")
 
-config = Config(company_id=None, supabase_client=supabase_client)
+# Preload all company configs into memory at startup
+if supabase_client:
+    logger.info("[PRELOAD] Starting preload of all company configs into memory")
+    # Use a temp config to get DB config for preload
+    try:
+        logger.info("[PRELOAD] Creating temporary Config object for DB config (company_id=None)")
+        temp_config_obj = Config(company_id=None, supabase_client=supabase_client)
+        logger.info("[PRELOAD] Temporary Config object created successfully")
+        logger.debug(f"[PRELOAD] temp_config_obj.whatsapp_config: {getattr(temp_config_obj, 'whatsapp_config', None)}")
+        db_manager_for_cache = DatabaseManager(temp_config_obj.db_config)
+        logger.info("[PRELOAD] DatabaseManager for cache created")
+        company_cache.preload_all_companies(db_manager_for_cache)
+        logger.info("[PRELOAD] Finished preload_all_companies")
+    except Exception as e:
+        logger.error(f"[PRELOAD] Exception during temp Config preload: {e}", exc_info=True)
+        raise
+
+    # Pick a default company_id if not provided
+    default_company_id = None
+    logger.info(f"[PRELOAD] company_cache._cache keys: {list(company_cache._cache.keys())}")
+    if company_cache._cache:
+        default_company_id = next(iter(company_cache._cache.keys()))
+        logger.info(f"[PRELOAD] Default company_id selected: {default_company_id}")
+    else:
+        logger.error("[PRELOAD] No company configs loaded in cache!")
+
+    # Use the default company_id if not explicitly set
+    try:
+        logger.info(f"[PRELOAD] Creating main Config object with company_id={default_company_id}")
+        config = Config(company_id=default_company_id, supabase_client=supabase_client)
+        logger.info("[PRELOAD] Main Config object created successfully")
+        logger.debug(f"[PRELOAD] config.whatsapp_config: {getattr(config, 'whatsapp_config', None)}")
+    except Exception as e:
+        logger.error(f"[PRELOAD] Exception during main Config creation: {e}", exc_info=True)
+        raise
+else:
+    logger.warning("[PRELOAD] Supabase client not created, skipping company config preload.")
+    try:
+        config = Config(company_id=None, supabase_client=None)
+        logger.info("[PRELOAD] Config object created without Supabase client")
+    except Exception as e:
+        logger.error(f"[PRELOAD] Exception during fallback Config creation: {e}", exc_info=True)
+        raise
 
 # Mostrar variables clave y su origen
 def log_config_summary(config, company_name=None):
