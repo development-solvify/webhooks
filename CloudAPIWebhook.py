@@ -4648,10 +4648,7 @@ def webhook():
                                 # Procesar media con ExtendedFileService
                                 if file_service:
                                     try:
-                                        # Usar el método extendido que soporta cualquier MIME type
-                                        file_result = file_service.process_whatsapp_media_extended(
-                                            media_id, object_ref_type, object_ref_id, original_filename
-                                        )
+                                        # PASAR sender_phone para que get_whatsapp_media_url reciba el teléfono correcto
                                         file_result = file_service.process_whatsapp_media_extended(
                                             media_id, object_ref_type, object_ref_id, original_filename, sender_phone
                                         )
@@ -4959,8 +4956,9 @@ def webhook1():
                                 if file_service:
                                     try:
                                         # Usar el método extendido que soporta cualquier MIME type
+                                        # PASAR sender_phone para que get_whatsapp_media_url reciba el teléfono correcto
                                         file_result = file_service.process_whatsapp_media_extended(
-                                            media_id, object_ref_type, object_ref_id, original_filename
+                                            media_id, object_ref_type, object_ref_id, original_filename, sender_phone
                                         )
                                         
                                         # 🔧 MEJORAR: Construir file_info más completo para el JSON
@@ -5088,11 +5086,13 @@ def webhook1():
                         fs = get_file_service()
                         if fs:
                             # guardamos colgándolo de external_messages (mismo patrón que el envío)
+                            # PASAR sender_phone para que get_whatsapp_media_url reciba el teléfono correcto
                             file_result = fs.process_whatsapp_media_extended(
                                 media_id=media_id,
                                 object_reference_type='external_messages',
                                 object_reference_id=msg.get('id'),  # el id del mensaje entrante como referencia cruzada
-                                original_filename=None
+                                original_filename=None,
+                                phone=sender_phone
                             )
 
                             # 3) Persistir un “mensaje” de entrada en tu tabla external_messages
