@@ -457,7 +457,31 @@ class ExtendedFileService:
         except Exception as e:
             logger.error(f"Error getting media URL for {media_id}: {e}", exc_info=True)
             raise
-   
+    def get_whatsapp_credentials_for_phone(phone: str) -> dict:
+        """Obtiene credenciales de WhatsApp para un teléfono específico usando el caché."""
+        try:
+            clean_phone = PhoneUtils.strip_34(phone)
+            
+            # Usar el caché global ya existente
+            config_data, company_name, company_id = company_cache.get_config_by_phone(
+                clean_phone, db_manager
+            )
+            
+            if config_data:
+                logger.info(f"[CREDENTIALS] Using config for {company_name} (phone: {clean_phone})")
+                return {
+                    'access_token': config_data.get('WHATSAPP_ACCESS_TOKEN'),
+                    'phone_number_id': config_data.get('WHATSAPP_PHONE_NUMBER_ID'),  
+                    'business_id': config_data.get('WHATSAPP_BUSINESS_ID')
+                }
+            else:
+                logger.warning(f"[CREDENTIALS] No config found for phone {clean_phone}")
+                return {}
+                
+        except Exception as e:
+            logger.error(f"[CREDENTIALS] Error getting credentials for {phone}: {e}")
+            return {}
+           
     def download_whatsapp_media(self, media_url: str, phone: str = None) -> tuple[bytes, str, str]:
         """Download media from WhatsApp and return content, filename, mime_type.
            If phone provided, uses company-specific token."""
