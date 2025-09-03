@@ -4206,25 +4206,117 @@ def handle_template():
         logger.exception('Error in handle_template')
         return jsonify({'status': 'error', 'message': 'Internal error'}), 500
 
+
+# ...existing code...
+def get_whatsapp_credentials_for_phone(phone: str) -> dict:
+    """
+    Devuelve las credenciales a usar para llamadas a la API de WhatsApp según el teléfono.
+    - Intenta resolver company config desde la caché (company_cache.get_config_by_phone)
+    - Si encuentra WHATSAPP_ACCESS_TOKEN y WHATSAPP_PHONE_NUMBER_ID en custom_properties
+      devuelve headers y base_url concretos para esa compañía.
+    - Si no, devuelve las credenciales globales (ACCESS_TOKEN, PHONE_NUMBER_ID, WABA_ID).
+    Retorna dict con keys: access_token, phone_number_id, business_id, headers, base_url, company_name, company_id
+    """
+    # Valores por defecto (globales)
+    default = {
+        'access_token': ACCESS_TOKEN,
+        'phone_number_id': PHONE_NUMBER_ID,
+        'business_id': WABA_ID,
+        'headers': WHATSAPP_HEADERS,
+        'base_url': WHATSAPP_BASE_URL,
+        'company_name': None,
+        'company_id': None
+    }
+
+    try:
+        if not phone:
+            return default
+
+        clean_phone = PhoneUtils.strip_34(phone)
+        # company_cache.get_config_by_phone devuelve (custom_props_dict, company_name, company_id)
+        custom_props, company_name, company_id = company_cache.get_config_by_phone(clean_phone, db_manager)
+
+        if not custom_props:
+            logger.debug(f"[get_whatsapp_credentials_for_phone] No company config for phone {phone}, using default credentials")
+            return default
+
+        # custom_props viene de get_company_data().get('custom_properties', {})
+        token = custom_props.get('WHATSAPP_ACCESS_TOKEN')
+        pnid = custom_props.get('WHATSAPP_PHONE_NUMBER_ID')
+        bid = custom_props.get('WHATSAPP_BUSINESS_ID') or WABA_ID
+
+        if token and pnid:
+            headers = {
+                'Authorization': f"Bearer {token}",
+                'Content-Type': 'application/json'
+            }
+            base_url = f"https://graph.facebook.com/v22.0/{pnid}/messages"
+            logger.info(f"[get_whatsapp_credentials_for_phone] Using company credentials for company_id={company_id}, phone={phone}")
+            return {
+                'access_token': token,
+                'phone_number_id': pnid,
+                'business_id': bid,
+                'headers': headers,
+                'base_url': base_url,
+                'company_name': company_name,
+                'company_id': company_id
+            }
+
+        logger.debug(f"[get_whatsapp_credentials_for_phone] Company config incomplete for phone {phone}, using default")
+        return default
+
+    except Exception:
+        logger.exception(f"[get_whatsapp_credentials_for_phone] Error resolving credentials for phone {phone}")
+        return default
+# ...existing code...
 @app.route('/get_templates', methods=['GET'])
 def get_templates():
     try:
         logger.info("🔍 Obteniendo lista de templates de WhatsApp Business API")
-        logger.info(f"📊 Usando WABA_ID configurado: {WABA_ID}")
-        logger.info(f"📊 Usando ACCESS_TOKEN: {ACCESS_TOKEN[:20]}...")
-        logger.info(f"📊 Usando PHONE_NUMBER_ID: {PHONE_NUMBER_ID}")
+        logger.info(f"📊 Usando DEFAULT WABA_ID configurado: {WABA_ID}")
+        logger.info(f"📊 Usando DEFAULT ACCESS_TOKEN preview: {ACCESS_TOKEN[:20]}...")
+        logger.info(f"📊 Usando DEFAULT PHONE_NUMBER_ID: {PHONE_NUMBER_ID}")
 
-        waba_id = WABA_ID
-        if not waba_id:
-            return jsonify({
-                'status': 'error',
-                'message': 'WABA_ID no configurado. Verifica tu configuración.',
-                'debug_info': {'phone_number_id': PHONE_NUMBER_ID}
-            }), 500
+        # Aceptar optional query params ?id=<uuid>&phone=<phone>
+        lead_info = None
+        query_phone = request.args.get('phone')
+        query_id = request.args.get('company_id') or request.args.get('id')
 
+        logger.info(f"📊 Usando query_phone: {query_phone}...")
+        logger.info(f"📊 Usando query_id: {query_id}")
+
+        # Resolver teléfono desde id si hace falta
+        resolved_phone = None
+        try:
+            if query_phone:
+                resolved_phone = PhoneUtils.strip_34(query_phone)
+            elif query_id and _is_valid_uuid(query_id):
+                phone_from_id = _get_lead_phone(db_manager, query_id)
+                if phone_from_id:
+                    resolved_phone = PhoneUtils.strip_34(phone_from_id)
+        except Exception:
+            logger.exception("Error resolviendo teléfono desde query params")
+
+        # Obtener lead_info si hay teléfono
+        try:
+            if resolved_phone:
+                lead_info = lead_service.get_lead_data_by_phone(resolved_phone)
+        except Exception:
+            logger.exception("Error obteniendo lead_info desde lead_service")
+
+        # RESOLVER CREDENCIALES por teléfono (usa cache/company config) -> helper
+        creds = get_whatsapp_credentials_for_phone(resolved_phone)
+        used_company_name = creds.get('company_name')
+        used_company_id = creds.get('company_id')
+        headers = creds.get('headers') or WHATSAPP_HEADERS
+        waba_id = creds.get('business_id') or WABA_ID
+
+        logger.info(f"📌 Usando WABA_ID: {waba_id} | phone_number_id: {creds.get('phone_number_id')} | company: {used_company_name}")
+
+        # Llamada a Facebook para obtener templates (usando credenciales resueltas)
         templates_resp = requests.get(
             f'https://graph.facebook.com/v22.0/{waba_id}/message_templates',
-            headers=WHATSAPP_HEADERS,
+            headers=headers,
             params={'fields': 'name,status,category,language,components,id,rejected_reason', 'limit': 100},
             timeout=15
         )
@@ -4238,7 +4330,10 @@ def get_templates():
                 'status': 'error',
                 'message': f'Error obteniendo templates: {templates_resp.status_code}',
                 'details': error_detail,
-                'waba_id_used': waba_id
+                'waba_id_used': waba_id,
+                'phone_used': resolved_phone,
+                'company': used_company_name,
+                'company_id': used_company_id
             }), templates_resp.status_code
 
         data_js = templates_resp.json().get('data', [])
@@ -4265,15 +4360,30 @@ def get_templates():
 
         logger.info(f"📊 Estadísticas de templates: {stats}")
 
-        return jsonify({
+        response_payload = {
             'status': 'success',
             'message': f'Templates obtenidos exitosamente usando WABA_ID: {waba_id}',
             'waba_id': waba_id,
+            'used_phone': resolved_phone,
+            'used_company_name': used_company_name,
+            'used_company_id': used_company_id,
             'total_templates': len(processed),
             'statistics': stats,
             'templates': processed,
             'extended_mime_support': True
-        }), 200
+        }
+
+        # Si resolvimos un lead, incluimos su info para pre‑llenado en cliente
+        if lead_info:
+            response_payload['lead'] = lead_info
+            response_payload['prefill_suggestions'] = {
+                'first_name': lead_info.get('first_name'),
+                'deal_id': lead_info.get('deal_id'),
+                'responsible_first_name': lead_info.get('responsible_first_name'),
+                'company_name': lead_info.get('company_name')
+            }
+
+        return jsonify(response_payload), 200
 
     except Exception as e:
         logger.error(f"💥 Error interno en get_templates: {e}", exc_info=True)
@@ -4282,6 +4392,8 @@ def get_templates():
             'message': f'Error interno: {str(e)}',
             'waba_id_configured': WABA_ID if WABA_ID else 'Not configured'
         }), 500
+# ...existing code...
+
 
 
 @app.route('/webhook', methods=['GET', 'POST'])
