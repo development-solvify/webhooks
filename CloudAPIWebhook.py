@@ -31,6 +31,100 @@ from urllib.parse import urlparse
 from supabase import create_client, Client
 import hashlib
 
+class CompanyConfigCache:
+    """Cache manager for company configurations"""
+    def __init__(self):
+        self._cache = {}
+        self._last_reload = None
+        self.reload_interval = 3600  # 1 hora entre recargas forzadas
+        self._logger = logging.getLogger(__name__)
+
+    def get(self, company_id: str) -> dict:
+        """Get company config from cache"""
+        return self._cache.get(company_id)
+
+    def set(self, company_id: str, config: dict):
+        """Set company config in cache"""
+        self._cache[company_id] = config
+        
+    def preload_all_companies(self, db_manager):
+        """Load all company configurations into cache"""
+        try:
+            query = """
+                SELECT c.id, c.name, public.get_company_data(c.id) as config
+                FROM public.companies c 
+                WHERE c.is_deleted = false 
+                AND c.is_active = true
+            """
+            companies = db_manager.execute_query(query, fetch_all=True)
+            
+            loaded = 0
+            for company in companies:
+                company_id, company_name, company_data = company
+                if company_data and isinstance(company_data, dict):
+                    self._cache[company_id] = {
+                        'id': company_id,
+                        'name': company_name,
+                        'config': company_data
+                    }
+                    loaded += 1
+                    
+            self._last_reload = time.time()
+            self._logger.info(f"✅ Preloaded {loaded} company configurations")
+            
+        except Exception as e:
+            self._logger.exception(f"Error preloading company configs: {e}")
+
+    def get_config_by_phone(self, phone: str, db_manager) -> tuple[dict, str, str]:
+        """Get company config by phone number, returns (config, company_name, company_id)"""
+        try:
+            clean_phone = PhoneUtils.strip_34(phone)
+            query = """
+                SELECT c.id, c.name
+                FROM public.companies c
+                JOIN public.deals d ON d.company_id = c.id
+                JOIN public.leads l ON d.lead_id = l.id
+                WHERE l.phone = %s 
+                AND l.is_deleted = false
+                AND d.is_deleted = false
+                LIMIT 1
+            """
+            result = db_manager.execute_query(query, [clean_phone], fetch_one=True)
+            
+            if not result:
+                return None, None, None
+                
+            company_id, company_name = result
+            company_cache = self.get(company_id)
+            
+            if not company_cache:
+                # Si no está en caché, recargar solo esta compañía
+                query_company = "SELECT public.get_company_data(%s) as config"
+                company_data = db_manager.execute_query(query_company, [company_id], fetch_one=True)
+                if company_data and company_data[0]:
+                    company_cache = {
+                        'id': company_id,
+                        'name': company_name,
+                        'config': company_data[0]
+                    }
+                    self.set(company_id, company_cache)
+            
+            if company_cache:
+                return (
+                    company_cache['config'].get('custom_properties', {}),
+                    company_cache['name'],
+                    company_id
+                )
+                
+            return None, company_name, company_id
+            
+        except Exception as e:
+            self._logger.exception(f"Error getting config by phone: {e}")
+            return None, None, None
+
+# Instancia global de la caché
+company_cache = CompanyConfigCache()
+
 class ExtendedFileService:
     """
     Service para manejar uploads/downloads con soporte completo para todos los MIME types
@@ -902,9 +996,8 @@ class FlowExitClient:
         return False
 
 class Config:
-    """Centralized configuration management"""
+    """Centralized configuration management with company cache support"""
     def __init__(self, config_path=None, company_id=None, supabase_client=None):
-        import configparser, os, logging
         self._logger = logging.getLogger(__name__)
         self.config = configparser.ConfigParser()
         if config_path is None:
@@ -913,13 +1006,47 @@ class Config:
         self.company_id = company_id
         self.supabase_client = supabase_client
         self.company_config = None
-        # 1. Setup config (no error si faltan datos críticos)
+        
+        # Setup inicial sin errores críticos
         self._setup_config(raise_on_missing_whatsapp=False)
-        # 2. Si hay company_id y supabase_client, cargar override de DB
-        if self.company_id and self.supabase_client:
-            self.load_company_config(self.company_id)
-        # 3. Ahora sí, validar que los datos críticos existen
+        
+        # Precargar configs si es la primera instancia
+        global company_cache
+        if not company_cache._last_reload:
+            db_manager = DatabaseManager(self.db_config)
+            company_cache.preload_all_companies(db_manager)
+        
+        # Si hay company_id, cargar de caché
+        if self.company_id:
+            cached_config = company_cache.get(self.company_id)
+            if cached_config:
+                self.company_config = cached_config.get('config', {})
+                self._apply_company_config()
+        
+        # Validar config crítica
         self._validate_critical_config()
+
+    def _apply_company_config(self):
+        """Apply cached company configuration"""
+        if not self.company_config:
+            return
+            
+        custom = self.company_config.get('custom_properties', {})
+        if not custom:
+            return
+            
+        # Actualizar WhatsApp config
+        if all(custom.get(k) for k in ['WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_BUSINESS_ID']):
+            self.whatsapp_config.update({
+                'access_token': custom['WHATSAPP_ACCESS_TOKEN'],
+                'phone_number_id': custom['WHATSAPP_PHONE_NUMBER_ID'],
+                'business_id': custom['WHATSAPP_BUSINESS_ID'],
+                'base_url': f"https://graph.facebook.com/v22.0/{custom['WHATSAPP_PHONE_NUMBER_ID']}/messages",
+                'headers': {
+                    'Authorization': f"Bearer {custom['WHATSAPP_ACCESS_TOKEN']}",
+                    'Content-Type': 'application/json'
+                }
+            })
 
     def _validate_critical_config(self):
         # Solo lanza error si faltan datos críticos después de cargar DB
@@ -3280,7 +3407,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-logger.info("🚀 Iniciando WhatsApp Webhook Service v2.0 con soporte extendido de MIME types")
+logger.info("🚀 Iniciando WhatsApp Webhook Service v2.0 con caché de configuraciones")
 logger.info(f"📊 Configuración cargada:")
 logger.info(f"   • Test mode: {config.use_test}")
 logger.info(f"   • ACCESS_TOKEN: {ACCESS_TOKEN[:20]}..." if ACCESS_TOKEN else "   • ACCESS_TOKEN: None")
