@@ -429,59 +429,87 @@ class ExtendedFileService:
     def get_whatsapp_media_url(self, media_id: str, phone: str = None) -> str:
         """Get media URL from WhatsApp API. If phone is provided, resolve token for that company."""
         try:
+            logger.info(f"[MEDIA DEBUG] Starting get_whatsapp_media_url - media_id: {media_id}, phone: {phone}")
+            
             # Resolver credenciales por teléfono si se pasa
             if phone:
+                logger.info(f"[MEDIA DEBUG] Phone provided: {phone}, getting credentials...")
                 creds = get_whatsapp_credentials_for_phone(phone)
+                logger.info(f"[MEDIA DEBUG] Credentials result: {creds}")
                 token = creds.get('access_token')
+                logger.info(f"[MEDIA DEBUG] Token from credentials: {token[:20] if token else 'None'}...")
             else:
-                token = self.config.whatsapp_config.get("access_token")
+                logger.info("[MEDIA DEBUG] No phone provided, using default config")
+                token = self.config.whatsapp_config["access_token"]
+                logger.info(f"[MEDIA DEBUG] Default token: {token[:20] if token else 'None'}...")
 
             if not token:
                 raise RuntimeError("No WhatsApp access token available to fetch media URL")
 
-            headers = {
-                'Authorization': f'Bearer {token}',
-            }
+            headers = {'Authorization': f'Bearer {token}'}
+            logger.info(f"[MEDIA DEBUG] Making request to: https://graph.facebook.com/v22.0/{media_id}")
+            logger.info(f"[MEDIA DEBUG] Authorization header: Bearer {token[:20]}...")
 
             response = requests.get(
                 f'https://graph.facebook.com/v22.0/{media_id}',
                 headers=headers,
                 timeout=15
             )
+            
+            logger.info(f"[MEDIA DEBUG] Response status: {response.status_code}")
+            if not response.ok:
+                logger.error(f"[MEDIA DEBUG] Response text: {response.text}")
+            
             response.raise_for_status()
             media_info = response.json()
-
+            
             logger.info(f"Media info retrieved for {media_id}: {media_info}")
             return media_info.get('url')
 
         except Exception as e:
-            logger.error(f"Error getting media URL for {media_id}: {e}", exc_info=True)
+            logger.error(f"Error getting media URL for {media_id}: {e}")
             raise
+
+
     def get_whatsapp_credentials_for_phone(phone: str) -> dict:
         """Obtiene credenciales de WhatsApp para un teléfono específico usando el caché."""
         try:
+            logger.info(f"[CREDENTIALS DEBUG] Getting credentials for phone: {phone}")
             clean_phone = PhoneUtils.strip_34(phone)
+            logger.info(f"[CREDENTIALS DEBUG] Clean phone: {clean_phone}")
             
             # Usar el caché global ya existente
             config_data, company_name, company_id = company_cache.get_config_by_phone(
                 clean_phone, db_manager
             )
             
+            logger.info(f"[CREDENTIALS DEBUG] Cache result - company: {company_name}, id: {company_id}")
+            logger.info(f"[CREDENTIALS DEBUG] Config data keys: {list(config_data.keys()) if config_data else 'None'}")
+            
             if config_data:
-                logger.info(f"[CREDENTIALS] Using config for {company_name} (phone: {clean_phone})")
+                token = config_data.get('WHATSAPP_ACCESS_TOKEN')
+                phone_id = config_data.get('WHATSAPP_PHONE_NUMBER_ID')
+                business_id = config_data.get('WHATSAPP_BUSINESS_ID')
+                
+                logger.info(f"[CREDENTIALS DEBUG] Found token: {token[:20] if token else 'None'}...")
+                logger.info(f"[CREDENTIALS DEBUG] Phone ID: {phone_id}")
+                logger.info(f"[CREDENTIALS DEBUG] Business ID: {business_id}")
+                
                 return {
-                    'access_token': config_data.get('WHATSAPP_ACCESS_TOKEN'),
-                    'phone_number_id': config_data.get('WHATSAPP_PHONE_NUMBER_ID'),  
-                    'business_id': config_data.get('WHATSAPP_BUSINESS_ID')
+                    'access_token': token,
+                    'phone_number_id': phone_id,
+                    'business_id': business_id
                 }
             else:
-                logger.warning(f"[CREDENTIALS] No config found for phone {clean_phone}")
+                logger.warning(f"[CREDENTIALS DEBUG] No config found for phone {clean_phone}")
                 return {}
                 
         except Exception as e:
-            logger.error(f"[CREDENTIALS] Error getting credentials for {phone}: {e}")
+            logger.error(f"[CREDENTIALS DEBUG] Error getting credentials for {phone}: {e}")
             return {}
-           
+
+
+
     def download_whatsapp_media(self, media_url: str, phone: str = None) -> tuple[bytes, str, str]:
         """Download media from WhatsApp and return content, filename, mime_type.
            If phone provided, uses company-specific token."""
