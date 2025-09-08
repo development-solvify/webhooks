@@ -2059,7 +2059,7 @@ class WhatsAppService:
             }
 # Agregar este bloque ANTES del else final en _build_template_payload
 
-        elif template_name in ['retomar_contacto', 'baja_comercial']:
+        elif template_name in ['retomar_contacto']:
             # Firma = nombre de pila del responsable
             signer = (
                 template_data.get("responsible_first_name")
@@ -2090,6 +2090,45 @@ class WhatsAppService:
                     ]
                 }
             }
+        elif template_name in ['baja_comercial']:
+            # Firma = nombre de pila del responsable
+            signer = (
+                template_data.get("responsible_first_name")
+                or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
+                or "Equipo"
+            )
+            
+            # Obtener company_name
+            company_name = template_data.get("company_name", "").strip() or "tu empresa"
+            
+            return {
+                "messaging_product": "whatsapp",
+                "to": to_phone,
+                "type": "template",
+                "template": {
+                    "name": template_name,
+                    "language": {"code": "es_ES"},
+                    "components": [
+                        # SIN HEADER - solo body
+                        {
+                            "type": "body",
+                            "parameters": [
+                                {"type": "text", "text": template_data.get("first_name", "Cliente")},
+                                {"type": "text", "text": signer},
+                                {"type": "text", "text": company_name}
+                            ]
+                        },
+                        {
+                            "type": "button",
+                            "sub_type": "url",
+                            "index": 0,
+                            "parameters": [
+                                {"type": "text", "text": str(template_data.get("deal_id", ""))}
+                            ]
+                        }
+                    ]
+                }
+            }        
         else:
             raise ValueError(f"Template '{template_name}' no configurado")
 
