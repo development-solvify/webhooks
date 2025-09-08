@@ -2059,7 +2059,7 @@ class WhatsAppService:
             }
 # Agregar este bloque ANTES del else final en _build_template_payload
 
-        elif template_name == 'retomar_contacto':
+        elif template_name in ['retomar_contacto', 'baja_comercial']:
             # Firma = nombre de pila del responsable
             signer = (
                 template_data.get("responsible_first_name")
@@ -2075,7 +2075,7 @@ class WhatsAppService:
                 "to": to_phone,
                 "type": "template",
                 "template": {
-                    "name": "retomar_contacto",
+                    "name": template_name,
                     "language": {"code": "es_ES"},
                     "components": [
                         # SIN HEADER - solo body
