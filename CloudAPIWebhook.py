@@ -5443,6 +5443,69 @@ Mientras tanto, puedes escribirme cualquier consulta."""
             "Hubo un error procesando tus datos. Por favor, contacta con soporte.")
         return True
 
+def create_portal_user(data, source=None, config=None):
+    """
+    Crea un usuario en el portal Solvify Leads.
+    Args:
+        data: dict con los campos requeridos.
+        source: fuente del lead (opcional).
+        config: configuración adicional (opcional).
+    Returns:
+        dict si éxito, None si error.
+    """
+    category_id = "bcb1ae3e-4c23-4461-9dae-30ed137d53e2"  # LSO
+
+    print("Creating portal user with data:", data)
+   # url = f"https://api.solvify.es/api/leads/{category_id}/"
+     url = f"https://test.solvify.es/api/leads/{category_id}/"
+
+    # Extraer nombre y apellidos
+    first_name = data.get("first_name") or data.get("nombre_y_apellidos", "").split()[0]
+    last_name = data.get("last_name") or " ".join(data.get("nombre_y_apellidos", "").split()[1:])
+
+    # Email y teléfono
+    email = data.get("email") or data.get("correo_electrónico", "")
+    phone = data.get("phone_number") or data.get("número_de_teléfono", "")
+    phone = strip_country_code(phone)
+
+    # Campaña y formulario
+    campaign = data.get("campaign_name") or data.get("campaign") or (config.get("company_name") if config else "")
+    form_name = data.get("form_name") or "Messenger Conversation"
+
+    # Token de autenticación (deberías definir TOKEN en tu config)
+    HEADERS = {
+        'Authorization': f'Bearer {TOKEN}',
+        'Content-Type': 'application/json'
+    }
+
+    payload = {
+        "first_name": first_name,
+        "last_name": last_name,
+        "email": email,
+        "phone": phone,
+        "channel": source or "Messenger",
+        "campaign": campaign,
+        "form_name": form_name
+    }
+    try:
+        response = requests.post(url, data=json.dumps(payload), headers=HEADERS)
+        if response.status_code in [200, 201]:
+            return response.json()
+        else:
+            logging.error("Error al crear el usuario en el portal: %s", response.text)
+            return None
+    except Exception as e:
+        logging.error("Excepción al crear el usuario en el portal: %s", str(e))
+        return None
+
+def strip_country_code(phone):
+    phone = str(phone).strip().replace("+", "")
+    if phone.startswith("34") and len(phone) > 9:
+        return phone[2:]
+    if phone.startswith("0034") and len(phone) > 9:
+        return phone[4:]
+    return phone
+
 def create_messenger_portal_user(user_data: Dict, psid: str) -> Tuple[bool, str]:
     """
     Crea un usuario en el portal usando TU función create_portal_user existente.
