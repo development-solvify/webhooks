@@ -5465,7 +5465,6 @@ def create_messenger_portal_user(user_data: Dict, psid: str) -> Tuple[bool, str]
 # =================================================================================
 # REEMPLAZAR TU FUNCIÓN webhook_messenger EXISTENTE POR ESTA VERSIÓN
 # =================================================================================
-
 @app.route('/webhook/messenger', methods=['GET', 'POST'])
 def webhook_messenger():
     """Webhook de Messenger con flujo conversacional para captura de datos"""
@@ -5558,13 +5557,20 @@ def webhook_messenger():
                 except Exception as e:
                     logger.exception("[Messenger] Error verificando lead existente")
 
+                # Definir chat_id una sola vez
+                chat_id = f"messenger:{page_id}:{sender_id}"
+                chat_url = f"https://www.facebook.com/messages/t/{sender_id}"
+
                 if existing_lead:
                     # Si ya tenemos sus datos, enviar mensaje de espera
                     response = "En estos momentos no hay operadores disponibles. Te contactaremos lo antes posible. Gracias por tu paciencia."
                     send_messenger_text(page_token, sender_id, response)
+                    
+                    # Guardar mensaje y respuesta
+                    save_external_message(text, chat_id, chat_url, from_me=False, status='messenger_received')
+                    save_external_message(response, chat_id, chat_url, from_me=True, status='messenger_sent')
                 else:
                     # Procesar según el estado de la conversación
-                    chat_id = f"messenger:{page_id}:{sender_id}"
                     try:
                         # Buscar último estado en external_messages
                         sql_state = """
@@ -5578,6 +5584,8 @@ def webhook_messenger():
                         row = db_manager.execute_query(sql_state, [chat_id], fetch_one=True)
                         last_message = row[0] if row else None
                         
+                        response = None  # Inicializar response
+                        
                         # Determinar estado actual y siguiente acción
                         if not row or "nombre completo" in last_message.lower():
                             # Primera interacción o esperando nombre
@@ -5586,26 +5594,7 @@ def webhook_messenger():
                                 response = "Por favor, introduce un nombre válido (mínimo 3 caracteres)"
                             else:
                                 # Guardar nombre y pedir email
-                                # Guardar datos del usuario de forma directa en BD
-                                chat_id = f"messenger:{page_id}:{sender_id}"
-
-                                # Para guardar datos del usuario:
-                                db_manager.execute_query("""
-                                    INSERT INTO public.external_messages (
-                                        id, message, sender_phone, chat_id, chat_url, from_me, status, created_at, updated_at, is_deleted
-                                    ) VALUES (
-                                        gen_random_uuid(), %s, NULL, %s, %s, FALSE, 'messenger_data', NOW(), NOW(), FALSE
-                                    )
-                                """, [f"NOMBRE: {nombre}", chat_id, f"https://www.facebook.com/messages/t/{sender_id}"])
-
-                                # Para guardar respuesta del bot:
-                                db_manager.execute_query("""
-                                    INSERT INTO public.external_messages (
-                                        id, message, sender_phone, chat_id, chat_url, from_me, status, created_at, updated_at, is_deleted
-                                    ) VALUES (
-                                        gen_random_uuid(), %s, NULL, %s, %s, TRUE, 'messenger_sent', NOW(), NOW(), FALSE
-                                    )
-                                """, [response, chat_id, f"https://www.facebook.com/messages/t/{sender_id}"])                                                                
+                                save_external_message(f"NOMBRE: {nombre}", chat_id, chat_url, from_me=False, status='messenger_data')
                                 response = f"Gracias {nombre.split()[0]}. ¿Podrías proporcionarme tu email?"
                         
                         elif "email" in last_message.lower():
@@ -5615,7 +5604,7 @@ def webhook_messenger():
                                 response = "Por favor, introduce un email válido"
                             else:
                                 # Guardar email y pedir teléfono
-                                save_messenger_incoming_message(page_id, sender_id, f"EMAIL: {email}", mid, None)
+                                save_external_message(f"EMAIL: {email}", chat_id, chat_url, from_me=False, status='messenger_data')
                                 response = "Perfecto. Por último, ¿podrías proporcionarme tu número de teléfono?"
                         
                         elif "teléfono" in last_message.lower():
@@ -5629,7 +5618,7 @@ def webhook_messenger():
                                     # Obtener datos previos
                                     sql_data = """
                                     SELECT message FROM public.external_messages 
-                                    WHERE chat_id = %s AND message LIKE 'NOMBRE:%' OR message LIKE 'EMAIL:%'
+                                    WHERE chat_id = %s AND (message LIKE 'NOMBRE:%' OR message LIKE 'EMAIL:%')
                                     ORDER BY created_at ASC
                                     """
                                     rows = db_manager.execute_query(sql_data, [chat_id], fetch_one=False)
@@ -5640,6 +5629,9 @@ def webhook_messenger():
                                         elif r[0].startswith("EMAIL: "):
                                             datos['email'] = r[0].replace("EMAIL: ", "")
                                     
+                                    # Guardar teléfono
+                                    save_external_message(f"TELEFONO: {phone}", chat_id, chat_url, from_me=False, status='messenger_data')
+                                    
                                     # Crear lead
                                     lead_data = {
                                         'nombre_y_apellidos': datos['nombre'],
@@ -5649,10 +5641,11 @@ def webhook_messenger():
                                         'company_name': 'default'  # O usar company_id para determinar
                                     }
                                     
-                                    create_portal_user(lead_data)
+                                    lead_id = create_portal_user(lead_data)
                                     
                                     # Guardar PSID en properties del lead
-                                    # (Asumiendo que tienes una función para esto)
+                                    if lead_id:
+                                        save_lead_property(lead_id, 'MESSENGER_PSID', sender_id)
                                     
                                     response = "¡Gracias por proporcionar tus datos! En estos momentos no hay operadores disponibles, pero te contactaremos lo antes posible."
                                 
@@ -5665,33 +5658,21 @@ def webhook_messenger():
                             response = "¡Hola! Para poder ayudarte mejor, ¿podrías proporcionarme tu nombre completo?"
 
                         # Enviar respuesta
-                        send_messenger_text(page_token, sender_id, response)
-                        
-
-                        chat_id = f"messenger:{page_id}:{sender_id}"
-
-                        # Para guardar datos del usuario:
-                        db_manager.execute_query("""
-                            INSERT INTO public.external_messages (
-                                id, message, sender_phone, chat_id, chat_url, from_me, status, created_at, updated_at, is_deleted
-                            ) VALUES (
-                                gen_random_uuid(), %s, NULL, %s, %s, FALSE, 'messenger_data', NOW(), NOW(), FALSE
-                            )
-                        """, [f"NOMBRE: {nombre}", chat_id, f"https://www.facebook.com/messages/t/{sender_id}"])
-
-                        # Para guardar respuesta del bot:
-                        db_manager.execute_query("""
-                            INSERT INTO public.external_messages (
-                                id, message, sender_phone, chat_id, chat_url, from_me, status, created_at, updated_at, is_deleted
-                            ) VALUES (
-                                gen_random_uuid(), %s, NULL, %s, %s, TRUE, 'messenger_sent', NOW(), NOW(), FALSE
-                            )
-                        """, [response, chat_id, f"https://www.facebook.com/messages/t/{sender_id}"])
+                        if response:
+                            send_messenger_text(page_token, sender_id, response)
+                            
+                            # Guardar mensaje del usuario y respuesta del bot
+                            save_external_message(text, chat_id, chat_url, from_me=False, status='messenger_received')
+                            save_external_message(response, chat_id, chat_url, from_me=True, status='messenger_sent')
 
                     except Exception as e:
                         logger.exception("[Messenger] Error en flujo conversacional")
                         response = "Lo siento, ha ocurrido un error. Por favor, inténtalo de nuevo."
                         send_messenger_text(page_token, sender_id, response)
+                        
+                        # Guardar error
+                        save_external_message(text, chat_id, chat_url, from_me=False, status='messenger_received')
+                        save_external_message(response, chat_id, chat_url, from_me=True, status='messenger_error')
 
         logger.info("[Messenger] ✅ Procesamiento de webhook completado")
         return 'ok', 200
@@ -5699,6 +5680,46 @@ def webhook_messenger():
     except Exception as e:
         logger.exception(f"[Messenger] 💥 Error general en webhook: {str(e)}")
         return 'ok', 200
+
+
+def save_external_message(message, chat_id, chat_url, from_me=False, status='received'):
+    """Función auxiliar para guardar mensajes en external_messages"""
+    try:
+        db_manager.execute_query("""
+            INSERT INTO public.external_messages (
+                id, message, sender_phone, chat_id, chat_url, from_me, status, created_at, updated_at, is_deleted
+            ) VALUES (
+                gen_random_uuid(), %s, NULL, %s, %s, %s, %s, NOW(), NOW(), FALSE
+            )
+        """, [message, chat_id, chat_url, from_me, status])
+        logger.info(f"[Messenger] ✅ Mensaje guardado: {status}")
+    except Exception as e:
+        logger.exception(f"[Messenger] Error guardando mensaje: {status}")
+
+
+def save_lead_property(lead_id, property_name, property_value):
+    """Función auxiliar para guardar propiedades del lead"""
+    try:
+        # Buscar property_id
+        sql_prop = "SELECT id FROM public.properties WHERE property_name = %s LIMIT 1"
+        prop_row = db_manager.execute_query(sql_prop, [property_name], fetch_one=True)
+        
+        if prop_row:
+            property_id = prop_row[0]
+            # Insertar valor de propiedad
+            db_manager.execute_query("""
+                INSERT INTO public.object_property_values (
+                    id, object_reference_type, object_reference_id, property_id, value, created_at, updated_at
+                ) VALUES (
+                    gen_random_uuid(), 'leads', %s, %s, %s, NOW(), NOW()
+                )
+            """, [lead_id, property_id, property_value])
+            logger.info(f"[Messenger] ✅ Propiedad {property_name} guardada para lead {lead_id}")
+        else:
+            logger.error(f"[Messenger] Property {property_name} no encontrada")
+    except Exception as e:
+        logger.exception(f"[Messenger] Error guardando propiedad {property_name}")
+
 # =================================================================================
 # OPCIONAL: ENDPOINTS DE ADMINISTRACIÓN (añadir al final de tu archivo)
 # =================================================================================
