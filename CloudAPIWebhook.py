@@ -5487,8 +5487,6 @@ def create_messenger_portal_user(user_data: Dict, psid: str) -> Tuple[bool, str]
 # =================================================================================
 # REEMPLAZAR TU FUNCIÓN webhook_messenger EXISTENTE POR ESTA VERSIÓN
 # =================================================================================
-
-@app.route('/webhook/messenger', methods=['GET', 'POST'])
 def webhook_messenger():
     """Webhook de Messenger con flujo conversacional para captura de datos"""
     
@@ -5560,6 +5558,10 @@ def webhook_messenger():
                     logger.error(f"[Messenger] ❌ No hay token para page_id={page_id}")
                     continue
 
+                # Definir chat_id una sola vez (mover antes del try para evitar errores)
+                chat_id = f"messenger:{page_id}:{sender_id}"
+                chat_url = f"https://www.facebook.com/messages/t/{sender_id}"
+
                 # Verificar si ya tenemos un lead usando el teléfono
                 existing_lead = False
                 clean_phone = PhoneUtils.strip_34(resolve_phone_for_psid(page_id, sender_id) or '')
@@ -5588,10 +5590,6 @@ def webhook_messenger():
                     logger.info(f"[Messenger] Lead existente: {existing_lead} (phone: {clean_phone})")
                 except Exception as e:
                     logger.exception("[Messenger] Error verificando lead existente")
-
-                # Definir chat_id una sola vez
-                chat_id = f"messenger:{page_id}:{sender_id}"
-                chat_url = f"https://www.facebook.com/messages/t/{sender_id}"
 
                 if existing_lead:
                     # Si ya tenemos sus datos, enviar mensaje de espera
@@ -5647,39 +5645,53 @@ def webhook_messenger():
                             else:
                                 # Tenemos todos los datos, crear lead
                                 try:
-                                    # Obtener datos previos
+                                    # CORRECCIÓN: Obtener datos previos usando fetch_all=True
                                     sql_data = """
                                     SELECT message FROM public.external_messages 
                                     WHERE chat_id = %s AND (message LIKE 'NOMBRE:%' OR message LIKE 'EMAIL:%')
                                     ORDER BY created_at ASC
                                     """
-                                    rows = db_manager.execute_query(sql_data, [chat_id], fetch_one=False)
-                                    datos = {}
-                                    for r in rows:
-                                        if r[0].startswith("NOMBRE: "):
-                                            datos['nombre'] = r[0].replace("NOMBRE: ", "")
-                                        elif r[0].startswith("EMAIL: "):
-                                            datos['email'] = r[0].replace("EMAIL: ", "")
+                                    rows = db_manager.execute_query(sql_data, [chat_id], fetch_all=True)
                                     
-                                    # Guardar teléfono
-                                    save_external_message(f"TELEFONO: {phone}", chat_id, chat_url, from_me=False, status='messenger_data')
-                                    
-                                    # Crear lead
-                                    lead_data = {
-                                        'nombre_y_apellidos': datos['nombre'],
-                                        'correo_electrónico': datos['email'],
-                                        'número_de_teléfono': phone,
-                                        'source': 'messenger',
-                                        'company_name': 'default'  # O usar company_id para determinar
-                                    }
-                                    
-                                    lead_id = create_portal_user(lead_data)
-                                    
-                                    # Guardar PSID en properties del lead
-                                    if lead_id:
-                                        save_lead_property(lead_id, 'MESSENGER_PSID', sender_id)
-                                    
-                                    response = "¡Gracias por proporcionar tus datos! En estos momentos no hay operadores disponibles, pero te contactaremos lo antes posible."
+                                    # Verificar que rows sea una lista/tupla antes de iterar
+                                    if not rows:
+                                        logger.error("[Messenger] No se encontraron datos previos")
+                                        response = "Error: No se encontraron tus datos anteriores. Por favor, comienza de nuevo."
+                                    else:
+                                        datos = {}
+                                        # Ahora rows debería ser iterable
+                                        for r in rows:
+                                            message_text = r[0] if isinstance(r, (list, tuple)) else r
+                                            if message_text.startswith("NOMBRE: "):
+                                                datos['nombre'] = message_text.replace("NOMBRE: ", "")
+                                            elif message_text.startswith("EMAIL: "):
+                                                datos['email'] = message_text.replace("EMAIL: ", "")
+                                        
+                                        # Verificar que tenemos todos los datos
+                                        if 'nombre' not in datos or 'email' not in datos:
+                                            logger.error(f"[Messenger] Datos incompletos: {datos}")
+                                            response = "Error: Datos incompletos. Por favor, comienza de nuevo."
+                                        else:
+                                            # Guardar teléfono
+                                            save_external_message(f"TELEFONO: {phone}", chat_id, chat_url, from_me=False, status='messenger_data')
+                                            
+                                            # Crear lead
+                                            lead_data = {
+                                                'nombre_y_apellidos': datos['nombre'],
+                                                'correo_electrónico': datos['email'],
+                                                'número_de_teléfono': phone,
+                                                'source': 'messenger',
+                                                'company_name': 'default'  # O usar company_id para determinar
+                                            }
+                                            
+                                            lead_id = create_portal_user(lead_data)
+                                            
+                                            # Guardar PSID en properties del lead
+                                            if lead_id:
+                                                save_lead_property(lead_id, 'MESSENGER_PSID', sender_id)
+                                                response = "¡Gracias por proporcionar tus datos! En estos momentos no hay operadores disponibles, pero te contactaremos lo antes posible."
+                                            else:
+                                                response = "Error al crear tu perfil. Por favor, inténtalo de nuevo más tarde."
                                 
                                 except Exception as e:
                                     logger.exception("[Messenger] Error creando lead")
@@ -5723,7 +5735,7 @@ def save_external_message(message, chat_id, chat_url, from_me=False, status='rec
             ) VALUES (
                 gen_random_uuid(), %s, NULL, %s, %s, %s, %s, NOW(), NOW(), FALSE
             )
-        """, [message, chat_id, chat_url, from_me, status])
+        """, [message, chat_id, chat_url, from_me, status], fetch_one=False)
         logger.info(f"[Messenger] ✅ Mensaje guardado: {status}")
     except Exception as e:
         logger.exception(f"[Messenger] Error guardando mensaje: {status}")
@@ -5745,14 +5757,12 @@ def save_lead_property(lead_id, property_name, property_value):
                 ) VALUES (
                     gen_random_uuid(), 'leads', %s, %s, %s, NOW(), NOW()
                 )
-            """, [lead_id, property_id, property_value])
+            """, [lead_id, property_id, property_value], fetch_one=False)
             logger.info(f"[Messenger] ✅ Propiedad {property_name} guardada para lead {lead_id}")
         else:
             logger.error(f"[Messenger] Property {property_name} no encontrada")
     except Exception as e:
         logger.exception(f"[Messenger] Error guardando propiedad {property_name}")
-
-
 # =================================================================================
 # OPCIONAL: ENDPOINTS DE ADMINISTRACIÓN (añadir al final de tu archivo)
 # =================================================================================
