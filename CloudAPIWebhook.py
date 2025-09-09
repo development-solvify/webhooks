@@ -5465,6 +5465,7 @@ def create_messenger_portal_user(user_data: Dict, psid: str) -> Tuple[bool, str]
 # =================================================================================
 # REEMPLAZAR TU FUNCIÓN webhook_messenger EXISTENTE POR ESTA VERSIÓN
 # =================================================================================
+
 @app.route('/webhook/messenger', methods=['GET', 'POST'])
 def webhook_messenger():
     """Webhook de Messenger con flujo conversacional para captura de datos"""
@@ -5719,6 +5720,8 @@ def save_lead_property(lead_id, property_name, property_value):
             logger.error(f"[Messenger] Property {property_name} no encontrada")
     except Exception as e:
         logger.exception(f"[Messenger] Error guardando propiedad {property_name}")
+
+
 # =================================================================================
 # OPCIONAL: ENDPOINTS DE ADMINISTRACIÓN (añadir al final de tu archivo)
 # =================================================================================
