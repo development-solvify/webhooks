@@ -4953,6 +4953,26 @@ def resolve_phone_for_psid(psid: str) -> str | None:
         return None
 
 
+import requests
+
+def send_messenger_text(page_access_token: str, psid: str, text: str):
+    """
+    Envía un mensaje de texto simple a un usuario de Messenger.
+    """
+    try:
+        url = "https://graph.facebook.com/v22.0/me/messages"
+        params = {"access_token": page_access_token}
+        payload = {
+            "recipient": {"id": psid},
+            "message": {"text": text}
+        }
+        r = requests.post(url, params=params, json=payload, timeout=10)
+        r.raise_for_status()
+        logger.info(f"[Messenger] Sent echo to {psid}: {text!r}")
+    except Exception:
+        logger.exception("[Messenger] Error sending message")
+
+
 @app.route('/webhook/messenger', methods=['POST'])
 def webhook_messenger():
     """
@@ -5021,7 +5041,7 @@ def webhook_messenger():
 
                 # 5) (Opcional) Responder algo si quieres (sólo si procede)
                 # if text:
-                #     send_messenger_text(page_token, psid, "Gracias por tu mensaje.")
+                    send_messenger_text(page_token, psid, "Gracias por tu mensaje.")
 
         return 'ok', 200
     except Exception:
