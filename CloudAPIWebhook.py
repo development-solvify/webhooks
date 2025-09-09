@@ -5467,7 +5467,6 @@ def create_messenger_portal_user(user_data: Dict, psid: str) -> Tuple[bool, str]
 # =================================================================================
 
 @app.route('/webhook/messenger', methods=['GET', 'POST'])
-@app.route('/webhook/messenger', methods=['GET', 'POST'])
 def webhook_messenger():
     """Webhook de Messenger con flujo conversacional para captura de datos"""
     
@@ -5587,7 +5586,26 @@ def webhook_messenger():
                                 response = "Por favor, introduce un nombre válido (mínimo 3 caracteres)"
                             else:
                                 # Guardar nombre y pedir email
-                                save_messenger_incoming_message(page_id, sender_id, f"NOMBRE: {nombre}", mid, None)
+                                # Guardar datos del usuario de forma directa en BD
+                                chat_id = f"messenger:{page_id}:{sender_id}"
+
+                                # Para guardar datos del usuario:
+                                db_manager.execute_query("""
+                                    INSERT INTO public.external_messages (
+                                        id, message, sender_phone, chat_id, chat_url, from_me, status, created_at, updated_at, is_deleted
+                                    ) VALUES (
+                                        gen_random_uuid(), %s, NULL, %s, %s, FALSE, 'messenger_data', NOW(), NOW(), FALSE
+                                    )
+                                """, [f"NOMBRE: {nombre}", chat_id, f"https://www.facebook.com/messages/t/{sender_id}"])
+
+                                # Para guardar respuesta del bot:
+                                db_manager.execute_query("""
+                                    INSERT INTO public.external_messages (
+                                        id, message, sender_phone, chat_id, chat_url, from_me, status, created_at, updated_at, is_deleted
+                                    ) VALUES (
+                                        gen_random_uuid(), %s, NULL, %s, %s, TRUE, 'messenger_sent', NOW(), NOW(), FALSE
+                                    )
+                                """, [response, chat_id, f"https://www.facebook.com/messages/t/{sender_id}"])                                                                
                                 response = f"Gracias {nombre.split()[0]}. ¿Podrías proporcionarme tu email?"
                         
                         elif "email" in last_message.lower():
@@ -5649,8 +5667,26 @@ def webhook_messenger():
                         # Enviar respuesta
                         send_messenger_text(page_token, sender_id, response)
                         
-                        # Guardar mensaje saliente
-                        save_messenger_incoming_message(page_id, sender_id, response, f"out_{mid}", None)
+
+                        chat_id = f"messenger:{page_id}:{sender_id}"
+
+                        # Para guardar datos del usuario:
+                        db_manager.execute_query("""
+                            INSERT INTO public.external_messages (
+                                id, message, sender_phone, chat_id, chat_url, from_me, status, created_at, updated_at, is_deleted
+                            ) VALUES (
+                                gen_random_uuid(), %s, NULL, %s, %s, FALSE, 'messenger_data', NOW(), NOW(), FALSE
+                            )
+                        """, [f"NOMBRE: {nombre}", chat_id, f"https://www.facebook.com/messages/t/{sender_id}"])
+
+                        # Para guardar respuesta del bot:
+                        db_manager.execute_query("""
+                            INSERT INTO public.external_messages (
+                                id, message, sender_phone, chat_id, chat_url, from_me, status, created_at, updated_at, is_deleted
+                            ) VALUES (
+                                gen_random_uuid(), %s, NULL, %s, %s, TRUE, 'messenger_sent', NOW(), NOW(), FALSE
+                            )
+                        """, [response, chat_id, f"https://www.facebook.com/messages/t/{sender_id}"])
 
                     except Exception as e:
                         logger.exception("[Messenger] Error en flujo conversacional")
