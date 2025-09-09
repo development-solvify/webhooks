@@ -4821,7 +4821,7 @@ def webhook():
 import json
 
 def save_messenger_incoming_message(page_id: str, psid: str, text: str|None, mid: str|None, ts: int|None):
-    phone = resolve_phone_for_psid(page_id, psid)
+    phone = resolve_phone_for_psid(page_id)
     
     # Solo guardar el texto del mensaje
     message_text = text or ""
