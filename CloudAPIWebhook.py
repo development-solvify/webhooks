@@ -4891,34 +4891,41 @@ def resolve_phone_for_psid(page_id: str, psid: str) -> str|None:
 
 def get_messenger_token_by_page(page_id: str) -> tuple[str|None, str|None]:
     try:
-        sql_company = """
-        SELECT c.id
-        FROM public.companies c
-        JOIN public.object_property_values opv
-          ON opv.object_reference_type = 'companies'
-         AND opv.object_reference_id = c.id
-        WHERE opv.property_name = 'MESSENGER_PAGE_ID'
-          AND opv.value = %s
-          AND COALESCE(c.is_deleted, false) = false
-        LIMIT 1
+        # Query optimizada que obtiene company_id y token en una sola consulta
+        sql_messenger = """
+        WITH company_id AS (
+            SELECT DISTINCT c.id
+            FROM public.companies c
+            JOIN public.object_property_values opv 
+                ON opv.object_reference_type = 'companies'
+                AND opv.object_reference_id = c.id
+            WHERE opv.property_name = 'MESSENGER_PAGE_ID'
+                AND opv.value = %s
+                AND COALESCE(c.is_deleted, false) = false
+            LIMIT 1
+        )
+        SELECT 
+            ci.id::text as company_id,
+            (SELECT opv.value
+             FROM public.object_property_values opv
+             WHERE opv.object_reference_type = 'companies'
+                AND opv.object_reference_id = ci.id
+                AND opv.property_name = 'MESSENGER_PAGE_ACCESS_TOKEN'
+                AND COALESCE(opv.is_deleted, false) = false
+             ORDER BY opv.created_at DESC
+             LIMIT 1) as token
+        FROM company_id ci
         """
-        row = db_manager.execute_query(sql_company, [page_id], fetch_one=True)
-        company_id = str(row[0]) if row else None
-        if not company_id:
-            return None, None
-
-        sql_token = """
-        SELECT value
-        FROM public.object_property_values
-        WHERE object_reference_type = 'companies'
-          AND object_reference_id = %s
-          AND property_name = 'MESSENGER_PAGE_ACCESS_TOKEN'
-          AND COALESCE(is_deleted, false) = false
-        LIMIT 1
-        """
-        row2 = db_manager.execute_query(sql_token, [company_id], fetch_one=True)
-        token = row2[0] if row2 else None
-        return company_id, token
+        row = db_manager.execute_query(sql_messenger, [page_id], fetch_one=True)
+        
+        if row and row[0]:
+            company_id, token = row[0], row[1]
+            logger.info(f"[Messenger] Found config for page_id={page_id}: company={company_id}")
+            return company_id, token
+        
+        logger.warning(f"[Messenger] No config found for page_id={page_id}")
+        return None, None
+        
     except Exception:
         logger.exception("[Messenger] Error resolving PAGE_ACCESS_TOKEN")
         return None, None
