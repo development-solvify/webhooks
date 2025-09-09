@@ -5487,6 +5487,8 @@ def create_messenger_portal_user(user_data: Dict, psid: str) -> Tuple[bool, str]
 # =================================================================================
 # REEMPLAZAR TU FUNCIÓN webhook_messenger EXISTENTE POR ESTA VERSIÓN
 # =================================================================================
+@app.route('/webhook/messenger', methods=['GET', 'POST'])
+
 def webhook_messenger():
     """Webhook de Messenger con flujo conversacional para captura de datos"""
     
