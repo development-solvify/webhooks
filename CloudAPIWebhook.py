@@ -5538,23 +5538,32 @@ def webhook_messenger():
                     logger.error(f"[Messenger] ❌ No hay token para page_id={page_id}")
                     continue
 
-                # Verificar si ya tenemos un lead para este PSID
+                # Verificar si ya tenemos un lead usando el teléfono
                 existing_lead = False
+                clean_phone = PhoneUtils.strip_34(resolve_phone_for_psid(page_id, sender_id) or '')
                 try:
                     sql = """
-                    SELECT l.id 
-                    FROM public.leads l
-                    JOIN public.object_property_values opv ON opv.object_reference_type = 'leads' 
-                        AND opv.object_reference_id = l.id
-                    JOIN public.properties p ON p.id = opv.property_id
-                    WHERE p.property_name = 'MESSENGER_PSID'
-                    AND opv.value = %s
-                    AND COALESCE(l.is_deleted, false) = false
+                    SELECT id 
+                    FROM public.leads 
+                    WHERE phone = %s
+                    AND COALESCE(is_deleted, false) = false
                     LIMIT 1
                     """
-                    row = db_manager.execute_query(sql, [sender_id], fetch_one=True)
+                    row = db_manager.execute_query(sql, [clean_phone], fetch_one=True)
                     existing_lead = bool(row)
-                    logger.info(f"[Messenger] Lead existente: {existing_lead}")
+                    
+                    if clean_phone:
+                        # Actualizar sender_phone en los mensajes existentes del chat
+                        update_sql = """
+                        UPDATE public.external_messages
+                        SET sender_phone = %s,
+                            updated_at = NOW()
+                        WHERE chat_id = %s
+                        AND sender_phone IS NULL
+                        """
+                        db_manager.execute_query(update_sql, [clean_phone, chat_id], fetch_one=False)
+                    
+                    logger.info(f"[Messenger] Lead existente: {existing_lead} (phone: {clean_phone})")
                 except Exception as e:
                     logger.exception("[Messenger] Error verificando lead existente")
 
