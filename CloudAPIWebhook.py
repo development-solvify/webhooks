@@ -1327,9 +1327,16 @@ class Config:
 
         # ---------- Base URL y API token ----------
         self.base_url = self.config.get('APP', 'BASE_URL', fallback='https://test.solvify.es/api')
-        self.api_token = self.config.get('APP', 'SOLVIFY_API_TOKEN', fallback=os.getenv('SOLVIFY_API_TOKEN'))
+        
+        # API Token - prioridad: 1) ENV, 2) Config, 3) Default token
+        self.api_token = os.getenv('SOLVIFY_API_TOKEN')
+        if not self.api_token:
+            self.api_token = self.config.get('APP', 'SOLVIFY_API_TOKEN', fallback=None)
         if not self.api_token:
             self.api_token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjEyMmZlYTI1LWQ1OWEtNGE2Zi04YzQ0LWIzZTVmZTExZTZmZSIsImVtYWlsIjoic2VydmljZUBzb2x2aWZ5LmVzIiwiZmlyc3RfbmFtZSI6IlNlcnZpY2UiLCJsYXN0X25hbWUiOiJTb2x2aWZ5IiwiaXNfYWN0aXZlIjp0cnVlLCJjcmVhdGVkX2F0IjoiMjAyNC0xMC0xN1QxNzowODozOC4xNjY3OTEiLCJjcmVhdGVkX2J5IjpudWxsLCJ1cGRhdGVkX2F0IjoiMjAyNC0xMC0xN1QxNTowODozOC45OCIsInVwZGF0ZWRfYnkiOm51bGwsImRlbGV0ZWRfYXQiOm51bGwsImRlbGV0ZWRfYnkiOm51bGwsImlzX2RlbGV0ZWQiOmZhbHNlLCJyb2xlX2lkIjoiODQ5ZmFiZTgtNDhjYi00ZWY4LWE0YWUtZTJiN2MzZjNlYTViIiwic3RyaXBlX2N1c3RvbWVyX2lkIjpudWxsLCJleHBvX3B1c2hfdG9rZW4iOm51bGwsInBob25lIjoiMCIsInJvbGVfbmFtZSI6IkFETUlOIiwicm9sZXMiOltdLCJpYXQiOjE3MjkxNzc4OTIsImV4cCI6Nzc3NzE3Nzg5Mn0.TJWtiOnLW8XyWjQDR_LAWvEiqrw50tWUmYiKXxo_5Wg'
+            logger.info(f"Using default API token (no token in env or config)")
+        else:
+            logger.info(f"Using API token from {'environment' if os.getenv('SOLVIFY_API_TOKEN') else 'config'}")
 
         # ---------- DB ----------
         desired_section = 'DB_TEST' if self.use_test else 'DB'
@@ -5446,21 +5453,72 @@ Mientras tanto, puedes escribirme cualquier consulta."""
             "Hubo un error procesando tus datos. Por favor, contacta con soporte.")
         return True
 
-def create_portal_user(data, source=None, config=None):
+def create_portal_user(data, source=None, config_obj=None):
     """
     Crea un usuario en el portal Solvify Leads.
     Args:
         data: dict con los campos requeridos.
         source: fuente del lead (opcional).
-        config: configuración adicional (opcional).
+        config_obj: configuración adicional (opcional).
     Returns:
         dict si éxito, None si error.
     """
-    category_id = "a9242a58-4f5d-494c-8a74-45f8cee150e6"  # LSO
+    try:
+        # Use global config if no config object provided
+        global config
+        if config_obj is None:
+            config_obj = config
 
-    print("Creating portal user with data:", data)
-   # url = f"https://api.solvify.es/api/leads/{category_id}/"
-    url = f"https://test.solvify.es/api/leads/{category_id}/"
+        if not config_obj or not hasattr(config_obj, 'api_token'):
+            logger.error("No valid config object with api_token found")
+            return None
+
+        category_id = "a9242a58-4f5d-494c-8a74-45f8cee150e6"  # LSO
+
+        print("Creating portal user with data:", data)
+        url = f"https://test.solvify.es/api/leads/{category_id}/"
+
+        # Extraer nombre y apellidos
+        first_name = data.get("first_name") or data.get("nombre_y_apellidos", "").split()[0]
+        last_name = data.get("last_name") or " ".join(data.get("nombre_y_apellidos", "").split()[1:])
+
+        # Email y teléfono
+        email = data.get("email") or data.get("correo_electrónico", "")
+        phone = data.get("phone_number") or data.get("número_de_teléfono", "")
+        phone = strip_country_code(phone)
+
+        # Campaña y formulario
+        campaign = data.get("campaign_name") or data.get("campaign") or (config.get("company_name") if config else "")
+        form_name = data.get("form_name") or "Messenger Conversation"
+
+        # Token de autenticación desde config
+        HEADERS = {
+            'Authorization': f'Bearer {config.api_token}',
+            'Content-Type': 'application/json'
+        }
+
+        payload = {
+            "first_name": first_name,
+            "last_name": last_name,
+            "email": email,
+            "phone": phone,
+            "channel": source or "Messenger",
+            "campaign": campaign,
+            "form_name": form_name
+        }
+        try:
+            response = requests.post(url, data=json.dumps(payload), headers=HEADERS)
+            if response.status_code in [200, 201]:
+                return response.json()
+            else:
+                logging.error("Error al crear el usuario en el portal: %s", response.text)
+                return None
+        except Exception as e:
+            logging.error("Excepción al crear el usuario en el portal: %s", str(e))
+            return None
+    except Exception as e:
+        logger.exception("Error in create_portal_user: %s", str(e))
+        return None
 
     # Extraer nombre y apellidos
     first_name = data.get("first_name") or data.get("nombre_y_apellidos", "").split()[0]
