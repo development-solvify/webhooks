@@ -1320,13 +1320,16 @@ class Config:
         if env_use_test is not None:
             self.use_test = env_use_test.strip().lower() in ('1', 'true', 'yes', 'y')
         else:
-            self.use_test = self.config.getboolean('APP', 'USE_TEST_CONFIG', fallback=False)
+            self.use_test = self.config.getboolean('APP', 'USE_TEST_CONFIG', fallback=True)  # Default to True
 
-        # En test, por defecto NO escribimos (puedes habilitar con WRITE_ENABLED=true en [APP])
-        self.write_enabled = self.config.getboolean('APP', 'WRITE_ENABLED', fallback=not self.use_test)
+        # En test, por defecto sí escribimos con WRITE_ENABLED=true en [APP]
+        self.write_enabled = self.config.getboolean('APP', 'WRITE_ENABLED', fallback=True)
 
-        # ---------- Base URL opcional de la app (no confundir con FLOW base_url) ----------
-        self.base_url = self.config.get('APP', 'BASE_URL', fallback=None)
+        # ---------- Base URL y API token ----------
+        self.base_url = self.config.get('APP', 'BASE_URL', fallback='https://test.solvify.es/api')
+        self.api_token = self.config.get('APP', 'SOLVIFY_API_TOKEN', fallback=os.getenv('SOLVIFY_API_TOKEN'))
+        if not self.api_token:
+            self.api_token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjEyMmZlYTI1LWQ1OWEtNGE2Zi04YzQ0LWIzZTVmZTExZTZmZSIsImVtYWlsIjoic2VydmljZUBzb2x2aWZ5LmVzIiwiZmlyc3RfbmFtZSI6IlNlcnZpY2UiLCJsYXN0X25hbWUiOiJTb2x2aWZ5IiwiaXNfYWN0aXZlIjp0cnVlLCJjcmVhdGVkX2F0IjoiMjAyNC0xMC0xN1QxNzowODozOC4xNjY3OTEiLCJjcmVhdGVkX2J5IjpudWxsLCJ1cGRhdGVkX2F0IjoiMjAyNC0xMC0xN1QxNTowODozOC45OCIsInVwZGF0ZWRfYnkiOm51bGwsImRlbGV0ZWRfYXQiOm51bGwsImRlbGV0ZWRfYnkiOm51bGwsImlzX2RlbGV0ZWQiOmZhbHNlLCJyb2xlX2lkIjoiODQ5ZmFiZTgtNDhjYi00ZWY4LWE0YWUtZTJiN2MzZjNlYTViIiwic3RyaXBlX2N1c3RvbWVyX2lkIjpudWxsLCJleHBvX3B1c2hfdG9rZW4iOm51bGwsInBob25lIjoiMCIsInJvbGVfbmFtZSI6IkFETUlOIiwicm9sZXMiOltdLCJpYXQiOjE3MjkxNzc4OTIsImV4cCI6Nzc3NzE3Nzg5Mn0.TJWtiOnLW8XyWjQDR_LAWvEiqrw50tWUmYiKXxo_5Wg'
 
         # ---------- DB ----------
         desired_section = 'DB_TEST' if self.use_test else 'DB'
@@ -5453,7 +5456,7 @@ def create_portal_user(data, source=None, config=None):
     Returns:
         dict si éxito, None si error.
     """
-    category_id = "bcb1ae3e-4c23-4461-9dae-30ed137d53e2"  # LSO
+    category_id = "a9242a58-4f5d-494c-8a74-45f8cee150e6"  # LSO
 
     print("Creating portal user with data:", data)
    # url = f"https://api.solvify.es/api/leads/{category_id}/"
@@ -5472,9 +5475,9 @@ def create_portal_user(data, source=None, config=None):
     campaign = data.get("campaign_name") or data.get("campaign") or (config.get("company_name") if config else "")
     form_name = data.get("form_name") or "Messenger Conversation"
 
-    # Token de autenticación (deberías definir TOKEN en tu config)
+    # Token de autenticación desde config
     HEADERS = {
-        'Authorization': f'Bearer {TOKEN}',
+        'Authorization': f'Bearer {config.api_token}',
         'Content-Type': 'application/json'
     }
 
