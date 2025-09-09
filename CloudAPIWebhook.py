@@ -4973,13 +4973,16 @@ def send_messenger_text(page_access_token: str, psid: str, text: str):
         logger.exception("[Messenger] Error sending message")
 
 
+from flask import request, jsonify  # por si no estaba ya importado
+import requests
+
 @app.route('/webhook/messenger', methods=['POST'])
 def webhook_messenger():
     """
-    Webhook de Messenger (Page). Controla:
-    - is_echo: no mapear PSID cuando es eco (sender.id = Page ID)
-    - Resolución de company + PAGE_ACCESS_TOKEN vía properties.property_name
-    - Mapeo PSID -> lead.phone vía properties.property_name
+    Webhook de Messenger (Page).
+    - Ignora ecos (is_echo) para evitar bucles.
+    - Resuelve company + PAGE_ACCESS_TOKEN por page_id.
+    - ECO: responde con el mismo texto recibido.
     """
     try:
         data = request.get_json(force=True)
@@ -4987,207 +4990,81 @@ def webhook_messenger():
             return 'ok', 200
 
         for entry in data.get('entry', []):
-            page_id = entry.get('id')  # Page ID que envía el evento
+            # entry.id suele ser el Page ID
+            entry_page_id = entry.get('id')
+
             for messaging in entry.get('messaging', []):
-                msg = messaging.get('message', {})
+                msg = messaging.get('message', {}) or {}
                 is_echo = bool(msg.get('is_echo'))
 
-                # Determinar page_id de forma robusta
-                # - En mensajes "normales": entry.id es el Page ID.
-                # - En eco: sender.id también es el Page ID.
-                if not page_id:
-                    page_id = messaging.get('sender', {}).get('id') if is_echo else messaging.get('recipient', {}).get('id')
+                # Page ID correcto según sea eco o no
+                # - NO eco (mensaje real de usuario): recipient.id = Page ID
+                # - Eco: sender.id = Page ID
+                page_id = (messaging.get('sender', {}).get('id') if is_echo
+                           else messaging.get('recipient', {}).get('id')) or entry_page_id
 
-                # 1) Resolver company + PAGE_ACCESS_TOKEN
+                # Resuelve company + PAGE_ACCESS_TOKEN
                 company_id, page_token = get_messenger_token_by_page(page_id)
                 if not company_id or not page_token:
                     logger.error(f"[Messenger] Falta company/token para page_id={page_id}")
                     continue
 
-                # Log básico
-                sender_id = messaging.get('sender', {}).get('id')
-                recipient_id = messaging.get('recipient', {}).get('id')
+                sender_id = messaging.get('sender', {}).get('id')        # PSID real si NO es eco
+                recipient_id = messaging.get('recipient', {}).get('id')  # Page ID si NO es eco
                 mid = msg.get('mid')
                 text = (msg.get('text') or '').strip()
-                logger.info(f"💬 [Messenger] page={page_id} psid_sender={sender_id} psid_recipient={recipient_id} mid={mid} text={text!r} echo={is_echo}")
 
-                # 2) Ignorar ECHOS (evitan bucles y no tienen PSID de usuario en sender.id)
+                logger.info(
+                    f"💬 [Messenger] page={page_id} psid_sender={sender_id} "
+                    f"psid_recipient={recipient_id} mid={mid} text={text!r} echo={is_echo}"
+                )
+
+                # Ignorar ecos (evita bucles y ruido)
                 if is_echo:
-                    logger.debug("[Messenger] Echo received; skipping PSID mapping and responses")
+                    logger.debug("[Messenger] Echo received; skipping response")
                     continue
 
-                # PSID real del usuario está en sender.id cuando NO es echo
+                # PSID del usuario (solo si NO es eco)
                 psid = sender_id
 
-                # 3) Intentar mapear PSID -> phone (lead)
+                # (Opcional) mapear PSID -> phone si lo necesitas para tus tablas
                 phone = resolve_phone_for_psid(psid)
 
-                # 4) Guarda el mensaje entrante en tu tabla externa (como haces en WhatsApp)
-                chat_id = str(psid)  # puedes normalizar a "messenger:{psid}" si prefieres
-                chat_url = f"https://www.facebook.com/messages/t/{psid}"
+                # Guarda el mensaje entrante (igual que haces con WhatsApp)
                 try:
+                    chat_id = str(psid)  # o "messenger:{psid}"
+                    chat_url = f"https://www.facebook.com/messages/t/{psid}"
                     sql_ins = """
-                    INSERT INTO public.external_messages (
-                        id, message, sender_phone, responsible_email, last_message_uid, last_message_timestamp,
-                        from_me, status, created_at, updated_at, is_deleted, chat_id, chat_url, assigned_to_id
-                    ) VALUES (
-                        gen_random_uuid(), %s, %s, NULL, %s, NOW(),
-                        FALSE, 'message_received', NOW(), NOW(), FALSE, %s, %s, NULL
-                    )
+                        INSERT INTO public.external_messages (
+                            id, message, sender_phone, responsible_email, last_message_uid, last_message_timestamp,
+                            from_me, status, created_at, updated_at, is_deleted, chat_id, chat_url, assigned_to_id
+                        ) VALUES (
+                            gen_random_uuid(), %s, %s, NULL, %s, NOW(),
+                            FALSE, 'message_received', NOW(), NOW(), FALSE, %s, %s, NULL
+                        )
                     """
                     db_manager.execute_query(sql_ins, [text or '', phone, mid or '', chat_id, chat_url], fetch_one=False)
                 except Exception:
                     logger.exception("[Messenger] Error inserting external_messages")
 
-                # 5) (Opcional) Responder algo si quieres (sólo si procede)
-                # if text:
-                    send_messenger_text(page_token, psid, "Gracias por tu mensaje.")
+                # 🔄 ECO: responder con el mismo texto (solo si hay texto)
+                if text:
+                    try:
+                        url = "https://graph.facebook.com/v22.0/me/messages"
+                        params = {"access_token": page_token}
+                        payload = {"recipient": {"id": psid}, "message": {"text": text}}
+                        r = requests.post(url, params=params, json=payload, timeout=10)
+                        r.raise_for_status()
+                        logger.info(f"[Messenger] Echo sent to {psid}: {text!r}")
+                    except Exception:
+                        logger.exception("[Messenger] Error sending echo")
 
         return 'ok', 200
+
     except Exception:
         logger.exception("[Messenger] Unhandled error")
         return 'ok', 200
 
-@app.route('/office_hours', methods=['GET'])
-def office_hours_status():
-    try:
-        madrid_time = now_madrid()
-        office_info = {
-            'is_office_hours': auto_reply_service.is_office_hours(madrid_time),
-            'current_time': madrid_time.isoformat(),
-            'office_schedule': 'Monday-Friday 8:00-22:00 (Europe/Madrid)',
-            'weekday': madrid_time.weekday(),
-            'hour': madrid_time.hour
-        }
-        return jsonify({'status': 'ok', 'office_hours': office_info}), 200
-    except Exception:
-        logger.exception('Error getting office hours status')
-        return jsonify({'status': 'error', 'message': 'Internal error'}), 500
-
-@app.route('/test_auto_reply', methods=['POST'])
-def test_auto_reply():
-    try:
-        data = request.get_json(force=True)
-        test_phone = data.get('phone', '999999999')
-        force_send = data.get('force', False)
-
-        if force_send:
-            clean_phone = PhoneUtils.strip_34(test_phone)
-            if clean_phone in auto_reply_service._last_auto_replies:
-                del auto_reply_service._last_auto_replies[clean_phone]
-
-        success, reply_info = auto_reply_service.send_auto_reply(test_phone, whatsapp_service, message_service)
-        
-        madrid_time = now_madrid()
-        office_info = {
-            'is_office_hours': auto_reply_service.is_office_hours(madrid_time),
-            'current_time': madrid_time.isoformat(),
-            'office_schedule': 'Monday-Friday 8:00-22:00 (Europe/Madrid)',
-            'weekday': madrid_time.weekday(),
-            'hour': madrid_time.hour
-        }
-
-        return jsonify({
-            'status': 'success',
-            'auto_reply': {
-                'sent': success,
-                'info': reply_info,
-                'test_phone': f'+34{PhoneUtils.strip_34(test_phone)}'
-            },
-            'office_hours': office_info
-        }), 200
-
-    except Exception:
-        logger.exception('Error testing auto-reply')
-        return jsonify({'status': 'error', 'message': 'Internal error'}), 500
-
-@app.route('/auto_reply_config', methods=['GET', 'POST'])
-def auto_reply_config():
-    if request.method == 'GET':
-        return jsonify({
-            'status': 'ok',
-            'config': {
-                'office_hours': 'Monday-Friday 8:00-22:00',
-                'timezone': 'Europe/Madrid',
-                'cache_duration_hours': auto_reply_service._cache_duration / 3600,
-                'enabled': True
-            },
-            'office_status': {
-                'is_office_hours': auto_reply_service.is_office_hours(),
-                'current_time': now_madrid().isoformat()
-            }
-        }), 200
-    else:
-        try:
-            data = request.get_json(force=True)
-            new_cache_hours = data.get('cache_duration_hours')
-            if new_cache_hours and isinstance(new_cache_hours, (int, float)) and new_cache_hours > 0:
-                auto_reply_service._cache_duration = int(new_cache_hours * 3600)
-                logger.info(f"Auto-reply cache duration updated to {new_cache_hours} hours")
-            return jsonify({'status': 'success', 'message': 'Configuration updated',
-                            'config': {'cache_duration_hours': auto_reply_service._cache_duration / 3600}}), 200
-        except Exception:
-            logger.exception('Error updating auto-reply config')
-            return jsonify({'status': 'error', 'message': 'Internal error'}), 500
-
-@app.route('/health', methods=['GET'])
-def health_check():
-    try:
-        result = db_manager.execute_query("SELECT NOW(), CURRENT_SETTING('timezone')", fetch_one=True)
-        if result:
-            db_status = "ok"
-            db_time = result[0]
-            db_timezone = result[1]
-        else:
-            db_status = "error"
-            db_time = None
-            db_timezone = None
-    except Exception as e:
-        db_status = "error"
-        db_time = None
-        db_timezone = None
-        logger.error(f"Health check DB error: {e}")
-
-    madrid_time = now_madrid()
-    madrid_naive = now_madrid_naive()
-
-    # Test ExtendedFileService
-    extended_service_status = "ok"
-    try:
-        fs = get_file_service()
-        support_info = fs.get_supported_types_info()
-        extended_service_status = "ok"
-    except Exception as e:
-        extended_service_status = f"error: {e}"
-        support_info = None
-
-    return jsonify({
-        'status': 'ok',
-        'version': '2.0-extended',
-        'app_timezone': 'Europe/Madrid',
-        'current_time': {
-            'madrid_with_tz': madrid_time.isoformat(),
-            'madrid_naive': madrid_naive.isoformat(),
-            'utc': datetime.now(timezone.utc).isoformat()
-        },
-        'database': {
-            'status': db_status,
-            'server_time': db_time.isoformat() if db_time else None,
-            'server_timezone': db_timezone
-        },
-        'whatsapp': {
-            'waba_id_configured': WABA_ID,
-            'phone_number_id': PHONE_NUMBER_ID,
-            'access_token_preview': f"{ACCESS_TOKEN[:20]}..." if ACCESS_TOKEN else "None"
-        },
-        'extended_file_service': {
-            'status': extended_service_status,
-            'mime_types_supported': support_info['total_mime_types_supported'] if support_info else 0,
-            'document_accepts_any_mime': support_info['document_accepts_any_mime'] if support_info else False
-        }
-    }), 200
-
-##
 
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
