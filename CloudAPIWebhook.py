@@ -4973,6 +4973,30 @@ def send_messenger_text(page_access_token: str, psid: str, text: str):
         logger.exception("[Messenger] Error sending message")
 
 
+def fetch_messenger_profile(page_access_token: str, psid: str) -> dict:
+    """
+    Pide a Graph API el perfil del usuario de Messenger.
+    Devuelve dict con first_name, last_name, profile_pic si existen.
+    """
+    try:
+        url = f"https://graph.facebook.com/v19.0/{psid}"
+        params = {
+            "fields": "first_name,last_name,profile_pic",
+            "access_token": page_access_token
+        }
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json() or {}
+        return {
+            "first_name": data.get("first_name") or "",
+            "last_name": data.get("last_name") or "",
+            "profile_pic": data.get("profile_pic") or ""
+        }
+    except Exception:
+        logger.exception("[Messenger] Error fetching profile from Graph")
+        return {"first_name": "", "last_name": "", "profile_pic": ""}
+
+
 from flask import request, jsonify  # por si no estaba ya importado
 import requests
 
@@ -5057,10 +5081,17 @@ def webhook_messenger():
                 psid = sender_id
                 logger.info(f"[Messenger] 👤 PSID identificado: {psid}")
 
-                # Persistir mensaje
+                # --- PERFIL DEL USUARIO (nombre y foto) ---
+                profile = fetch_messenger_profile(page_token, psid)
+                logger.info(f"[Messenger] 👤 Perfil -> {profile}")
+                first_name = profile.get("first_name", "")
+                last_name = profile.get("last_name", "")
+                profile_pic = profile.get("profile_pic", "")
+
+                # Persistir mensaje + devolver id
                 try:
                     logger.info("[Messenger] 💾 Guardando mensaje en BD")
-                    chat_id = str(psid)
+                    chat_id = f"messenger:{page_id}:{psid}"
                     chat_url = f"https://www.facebook.com/messages/t/{psid}"
                     sql_ins = """
                         INSERT INTO public.external_messages (
@@ -5070,11 +5101,43 @@ def webhook_messenger():
                             gen_random_uuid(), %s, %s, NULL, %s, NOW(),
                             FALSE, 'messenger_received', NOW(), NOW(), FALSE, %s, %s, NULL
                         )
+                        RETURNING id
                     """
-                    db_manager.execute_query(sql_ins, [text or '', None, mid or '', chat_id, chat_url], fetch_one=False)
-                    logger.info("[Messenger] ✅ Mensaje guardado correctamente")
-                except Exception as e:
-                    logger.exception(f"[Messenger] ❌ Error guardando mensaje: {str(e)}")
+                    row = db_manager.execute_query(
+                        sql_ins,
+                        [text or '', None, mid or f"messenger.{psid}", chat_id, chat_url],
+                        fetch_one=True
+                    )
+                    message_id_db = str(row[0]) if row and row[0] else None
+                    logger.info(f"[Messenger] ✅ Mensaje guardado correctamente (id={message_id_db})")
+
+                    # Guardar metadatos del perfil en OPV referenciando el mensaje
+                    # (object_reference_type='external_messages', object_reference_id=message_id_db)
+                    if message_id_db:
+                        try:
+                            sql_meta = """
+                                INSERT INTO public.object_property_values
+                                    (id, object_reference_type, object_reference_id, property_name, value, created_at)
+                                VALUES
+                                    (gen_random_uuid(), 'external_messages', %s, 'MESSENGER_PSID', %s, NOW()),
+                                    (gen_random_uuid(), 'external_messages', %s, 'MESSENGER_FIRST_NAME', %s, NOW()),
+                                    (gen_random_uuid(), 'external_messages', %s, 'MESSENGER_LAST_NAME', %s, NOW()),
+                                    (gen_random_uuid(), 'external_messages', %s, 'MESSENGER_PROFILE_PIC', %s, NOW()),
+                                    (gen_random_uuid(), 'external_messages', %s, 'MESSENGER_PAGE_ID', %s, NOW())
+                            """
+                            params_meta = [
+                                message_id_db, psid,
+                                message_id_db, first_name,
+                                message_id_db, last_name,
+                                message_id_db, profile_pic,
+                                message_id_db, page_id
+                            ]
+                            db_manager.execute_query(sql_meta, params_meta, fetch_one=False)
+                            logger.info("[Messenger] 🧩 Metadatos de perfil guardados en OPV (external_messages)")
+                        except Exception:
+                            logger.exception("[Messenger] ❌ Error guardando metadatos de perfil en OPV")
+                except Exception:
+                    logger.exception(f"[Messenger] ❌ Error guardando mensaje")
 
                 # Enviar eco
                 if text:
