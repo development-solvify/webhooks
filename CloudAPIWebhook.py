@@ -5585,15 +5585,29 @@ def webhook_messenger():
                 if not conversation_handled:
                     try:
                         logger.info("[Messenger] 🔄 Enviando eco (comportamiento por defecto)")
-                        success = send_messenger_text(page_token, psid, text)
                         
-                        if success:
-                            logger.info(f"[Messenger] ✅ Eco enviado correctamente a {psid}")
-                        else:
-                            logger.error(f"[Messenger] ❌ Error enviando eco a {psid}")
+                        # Usar tu función send_messenger_text existente o implementar aquí
+                        try:
+                            url = "https://graph.facebook.com/v22.0/me/messages"
+                            params = {"access_token": page_token}
+                            payload = {
+                                "messaging_type": "RESPONSE",
+                                "recipient": {"id": psid},
+                                "message": {"text": text}
+                            }
+                            
+                            response = requests.post(url, params=params, json=payload, timeout=10)
+                            response.raise_for_status()
+                            
+                            logger.info(f"[Messenger] ✅ Eco enviado correctamente a {psid}: '{text}'")
+                            
+                        except requests.exceptions.RequestException as e:
+                            logger.error(f"[Messenger] ❌ Error HTTP enviando eco a {psid}: {e}")
+                        except Exception as e:
+                            logger.error(f"[Messenger] ❌ Error general enviando eco a {psid}: {e}")
                             
                     except Exception as e:
-                        logger.exception(f"[Messenger] ❌ Error enviando eco: {str(e)}")
+                        logger.exception(f"[Messenger] ❌ Error procesando eco: {str(e)}")
 
         logger.info("[Messenger] ✅ Procesamiento de webhook completado")
         logger.info("=" * 80)
