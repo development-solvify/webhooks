@@ -4814,367 +4814,158 @@ def webhook():
     except Exception:
         logger.exception('❌ Error processing webhook')
         return 'error', 500
-        
-@app.route('/webhook1', methods=['GET', 'POST'])
-def webhook1():
-    # --- Verificación Webhook (GET) ---
+
+
+import json
+
+def save_messenger_incoming_message(page_id: str, psid: str, text: str|None, mid: str|None, ts: int|None):
+    phone = resolve_phone_for_psid(page_id, psid)
+
+    payload = {
+        "type": "text",
+        "text": {"body": text or ""},
+        "messenger": {"psid": psid, "page_id": page_id, "mid": mid, "timestamp": ts}
+    }
+
+    chat_id = f"messenger:{page_id}:{psid}"
+    chat_url = f"https://www.facebook.com/messages/t/{psid}"
+
+    # last_message_uid según tu instrucción:
+    last_uid = mid if phone else psid
+
+    db_manager.execute_query("""
+        INSERT INTO public.external_messages
+        ( id, message, sender_phone, responsible_email, last_message_uid, last_message_timestamp,
+          from_me, status, created_at, updated_at, is_deleted, chat_id, chat_url, assigned_to_id )
+        VALUES
+        ( gen_random_uuid(), %s, %s, NULL, %s, NOW(),
+          'false', 'message_received', NOW(), NOW(), FALSE, %s, %s, NULL )
+    """, [
+        json.dumps(payload, ensure_ascii=False),
+        phone,          # NULL si no hay phone
+        last_uid,       # mid si hay phone; PSID si no hay phone
+        chat_id,
+        chat_url
+    ], fetch_one=False)
+
+
+def resolve_phone_for_psid(page_id: str, psid: str) -> str|None:
+    # 1) (Opcional) mapeo en custom properties de leads
+    try:
+        sql_map = """
+        SELECT l.phone
+        FROM public.leads l
+        JOIN public.object_property_values opv
+          ON opv.object_reference_type = 'leads'
+         AND opv.object_reference_id = l.id
+        WHERE opv.property_name = 'MESSENGER_PSID'
+          AND opv.value = %s
+          AND COALESCE(l.is_deleted, false) = false
+        LIMIT 1
+        """
+        row = db_manager.execute_query(sql_map, [psid], fetch_one=True)
+        if row and row[0]:
+            return row[0]
+    except Exception:
+        logger.exception("[Messenger] Error checking lead mapping")
+
+    # 2) Mensajes previos con phone conocido
+    try:
+        sql_prev = """
+        SELECT sender_phone
+        FROM public.external_messages
+        WHERE chat_id = %s
+          AND sender_phone IS NOT NULL
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+        chat_id = f"messenger:{page_id}:{psid}"
+        row2 = db_manager.execute_query(sql_prev, [chat_id], fetch_one=True)
+        if row2 and row2[0]:
+            return row2[0]
+    except Exception:
+        logger.exception("[Messenger] Error checking previous messages")
+
+    return None  # no encontrado
+
+
+def get_messenger_token_by_page(page_id: str) -> tuple[str|None, str|None]:
+    try:
+        sql_company = """
+        SELECT c.id
+        FROM public.companies c
+        JOIN public.object_property_values opv
+          ON opv.object_reference_type = 'companies'
+         AND opv.object_reference_id = c.id
+        WHERE opv.property_name = 'MESSENGER_PAGE_ID'
+          AND opv.value = %s
+          AND COALESCE(c.is_deleted, false) = false
+        LIMIT 1
+        """
+        row = db_manager.execute_query(sql_company, [page_id], fetch_one=True)
+        company_id = str(row[0]) if row else None
+        if not company_id:
+            return None, None
+
+        sql_token = """
+        SELECT value
+        FROM public.object_property_values
+        WHERE object_reference_type = 'companies'
+          AND object_reference_id = %s
+          AND property_name = 'MESSENGER_PAGE_ACCESS_TOKEN'
+          AND COALESCE(is_deleted, false) = false
+        LIMIT 1
+        """
+        row2 = db_manager.execute_query(sql_token, [company_id], fetch_one=True)
+        token = row2[0] if row2 else None
+        return company_id, token
+    except Exception:
+        logger.exception("[Messenger] Error resolving PAGE_ACCESS_TOKEN")
+        return None, None
+
+
+@app.route('/webhook/messenger', methods=['GET','POST'])
+def messenger_webhook():
     if request.method == 'GET':
+        mode = request.args.get('hub.mode')
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
-        mode = request.args.get('hub.mode')
-
         if mode == 'subscribe' and token == VERIFY_TOKEN:
-            logger.info("Webhook verified successfully")
+            logger.info("[Messenger] Webhook verified")
             return challenge, 200
-        else:
-            logger.warning("Webhook verification failed")
-            return 'Verify token incorrect', 403
+        return 'Forbidden', 403
 
-    # --- Recepción de eventos (POST) ---
+    # POST
     try:
-        data = request.get_json(force=True)
-        if not data or 'entry' not in data:
+        data = request.get_json(force=True) or {}
+        if data.get('object') != 'page':
             return 'ok', 200
 
-        for entry in data['entry']:
-            for change in entry.get('changes', []):
-                value = change.get('value', {})
+        for entry in data.get('entry', []):
+            page_id = str(entry.get('id'))
+            company_id, page_token = get_messenger_token_by_page(page_id)
+            if not company_id or not page_token:
+                logger.error(f"[Messenger] Falta company/token para page_id={page_id}")
+                continue
 
-                # -------- MENSAJES ENTRANTES --------
-                if 'messages' in value:
-                    contacts = value.get('contacts', [])
-                    messages = value.get('messages', [])
+            for ev in entry.get('messaging', []):
+                psid = ev.get('sender', {}).get('id')
+                msg = ev.get('message', {}) or {}
+                if not psid or not msg:
+                    continue
+                text = msg.get('text')
+                mid  = msg.get('mid')
+                ts   = ev.get('timestamp')
 
-                    for idx, msg in enumerate(messages):
-                        contact = contacts[idx] if idx < len(contacts) else {}
-                        wa_id = contact.get('wa_id')
-                        sender_phone = PhoneUtils.strip_34(msg.get('from', ''))
-                        
-                        logger.info(f"📨 Processing message from {sender_phone}, type: {msg.get('type', 'unknown')}")
+                logger.info(f"💬 [Messenger] page={page_id} psid={psid} mid={mid} text={text!r}")
 
-                        # -------- MENSAJES DE TEXTO --------
-                        if msg.get('type') == 'text':
-                            log_received_message(msg, wa_id)
-                            message_service.save_incoming_message(msg, wa_id)
-
-                            # Flow EXIT logic
-                            try:
-                                context = msg.get('context') or {}
-                                context_id = context.get('id')
-                                madrid_ahora = now_madrid_naive()
-
-                                if not context_id:
-                                    query_last_template = """
-                                        SELECT last_message_uid
-                                        FROM public.external_messages
-                                        WHERE sender_phone = %s
-                                          AND from_me = 'true'
-                                          AND status = 'template_sent'
-                                          AND created_at > %s
-                                          AND last_message_uid IS NOT NULL
-                                        ORDER BY created_at DESC
-                                        LIMIT 1
-                                    """
-                                    umbral = madrid_ahora - timedelta(minutes=15)
-                                    row = db_manager.execute_query(
-                                        query_last_template, [sender_phone, umbral], fetch_one=True
-                                    )
-                                    if row and row[0]:
-                                        context_id = row[0]
-                                    else:
-                                        if not auto_reply_service.is_office_hours():
-                                            auto_reply_service.send_auto_reply(
-                                                sender_phone, whatsapp_service, message_service
-                                            )
-                                        continue
-
-                                if context_id:
-                                    chk_template = """
-                                        SELECT 1
-                                        FROM public.external_messages
-                                        WHERE last_message_uid = %s
-                                          AND status = 'template_sent'
-                                        LIMIT 1
-                                    """
-                                    ok_template = db_manager.execute_query(
-                                        chk_template, [context_id], fetch_one=True
-                                    )
-                                    if not ok_template:
-                                        if not auto_reply_service.is_office_hours():
-                                            auto_reply_service.send_auto_reply(
-                                                sender_phone, whatsapp_service, message_service
-                                            )
-                                        continue
-
-                                    chk_dedup = """
-                                        SELECT 1
-                                        FROM public.external_messages
-                                        WHERE last_message_uid = %s
-                                          AND sender_phone = %s
-                                          AND status = 'flow_exit_triggered'
-                                        LIMIT 1
-                                    """
-                                    ya_triggered = db_manager.execute_query(
-                                        chk_dedup, [context_id, sender_phone], fetch_one=True
-                                    )
-                                    if ya_triggered:
-                                        continue
-
-                                    lead = lead_service.get_lead_data_by_phone(sender_phone)
-                                    if not lead or not lead.get('lead_id'):
-                                        if not auto_reply_service.is_office_hours():
-                                            auto_reply_service.send_auto_reply(
-                                                sender_phone, whatsapp_service, message_service
-                                            )
-                                        continue
-                                    
-                                    lead_id = lead['lead_id']
-                                    ok = flow_exit_client.send_exit(lead_id)
-                                    if ok:
-                                        flow_name = "welcome_email_flow"
-                                        motivo = "Usuario quiere salir del flow"
-                                        exit_message = f"Exit Flow: {flow_name} por: {motivo}"
-
-                                        mark_sql = """
-                                            INSERT INTO public.external_messages (
-                                                id, message, sender_phone, responsible_email,
-                                                last_message_uid, last_message_timestamp,
-                                                from_me, status, created_at, updated_at, is_deleted,
-                                                chat_id, chat_url, assigned_to_id
-                                            ) VALUES (
-                                                %s, %s, %s, %s,
-                                                %s, %s,
-                                                %s, %s, NOW(), NOW(), FALSE,
-                                                %s, %s, %s
-                                            )
-                                        """
-                                        params = [
-                                            str(uuid4()),
-                                            json.dumps({'text': exit_message}, ensure_ascii=False),
-                                            sender_phone, '', context_id, madrid_ahora,
-                                            'true', 'flow_exit_triggered',
-                                            sender_phone, sender_phone, None
-                                        ]
-                                        db_manager.execute_query(mark_sql, params)
-
-                            except Exception:
-                                logger.exception("Error procesando disparo de flow exit")
-
-                            # Auto-reply si es fuera de horario
-                            if not auto_reply_service.is_office_hours():
-                                auto_reply_service.send_auto_reply(
-                                    sender_phone, whatsapp_service, message_service
-                                )
-
-                        # -------- MENSAJES CON ARCHIVOS MULTIMEDIA (EXTENDIDO) --------
-                        elif msg.get('type') in ['image', 'audio', 'video', 'document', 'sticker', 'voice']:
-                            media_type = msg.get('type')
-                            logger.info(f"📎 Received {media_type} from {sender_phone}")
-                            
-                            try:
-                                media_info = msg.get(media_type, {})
-                                media_id = media_info.get('id')
-                                original_filename = media_info.get('filename')
-                                caption = media_info.get('caption', '')
-                                
-                                if not media_id:
-                                    logger.error(f"No media ID found in {media_type} message")
-                                    message_service.save_incoming_message(msg, wa_id)
-                                    continue
-
-                                # Determinar objeto de referencia
-                                lead = lead_service.get_lead_data_by_phone(sender_phone)
-                                if lead:
-                                    object_ref_type = 'leads'
-                                    object_ref_id = lead['lead_id']
-                                else:
-                                    object_ref_type = 'external_messages'
-                                    object_ref_id = str(uuid4())
-
-                                # Procesar media con ExtendedFileService
-                                if file_service:
-                                    try:
-                                        # Usar el método extendido que soporta cualquier MIME type
-                                        # PASAR sender_phone para que get_whatsapp_media_url reciba el teléfono correcto
-                                        file_result = file_service.process_whatsapp_media_extended(
-                                            media_id, object_ref_type, object_ref_id, original_filename, sender_phone
-                                        )
-                                        
-                                        # 🔧 MEJORAR: Construir file_info más completo para el JSON
-                                        file_info = {
-                                            'document_id': file_result['document_id'],
-                                            'filename': file_result['filename'],
-                                            'original_filename': file_result.get('original_filename'),
-                                            'media_type': file_result['media_type'],
-                                            'whatsapp_type': file_result['whatsapp_type'],
-                                            'content_type': file_result['content_type'],
-                                            'file_size': file_result['file_size'],
-                                            'public_url': file_result.get('public_url'),
-                                            'supabase_path': file_result.get('supabase_path')  # Agregar path de Supabase
-                                        }
-                                        
-                                        # 🔧 IMPORTANTE: Guardar con formato JSON estructurado
-                                        message_service.save_media_message(msg, wa_id, file_info)
-                                        
-                                        file_size_mb = file_result['file_size'] / (1024 * 1024)
-                                        log_message = f"📎 {file_result['media_type'].title()}: {file_result['filename']} ({file_size_mb:.2f}MB)"
-                                        if file_result['content_type']:
-                                            log_message += f" [{file_result['content_type']}]"
-                                        if caption:
-                                            log_message += f" - Caption: {caption}"
-                                        
-                                        log_received_message({
-                                            'from': msg.get('from'),
-                                            'timestamp': msg.get('timestamp'),
-                                            'text': {'body': log_message},
-                                            'type': 'media_extended'
-                                        }, wa_id)
-                                        
-                                        logger.info(f"✅ Processed {file_result['whatsapp_type']} media: {file_result['filename']} (Extended MIME support)")
-                                        
-                                    except Exception as e:
-                                        logger.error(f"❌ Error processing media {media_id}: {e}")
-                                        # 🔧 MEJORAR: Guardar error también en formato JSON
-                                        error_info = {
-                                            'error': str(e),
-                                            'media_id': media_id,
-                                            'media_type': media_type,
-                                            'whatsapp_type': media_type,
-                                            'filename': f'error_{media_type}.bin',
-                                            'content_type': 'application/octet-stream',
-                                            'file_size': 0,
-                                            'public_url': '',
-                                            'note': 'Failed with extended MIME type support'
-                                        }
-                                        message_service.save_media_message(msg, wa_id, error_info)
-                                        
-                                else:
-                                    logger.warning("📎 ExtendedFileService not available")
-                                    # 🔧 MEJORAR: Aún así guardar en formato JSON básico
-                                    fallback_info = {
-                                        'error': 'ExtendedFileService not available',
-                                        'media_type': media_type,
-                                        'whatsapp_type': media_type,
-                                        'filename': f'unavailable_{media_type}.bin',
-                                        'content_type': 'application/octet-stream',
-                                        'file_size': 0,
-                                        'public_url': ''
-                                    }
-                                    message_service.save_media_message(msg, wa_id, fallback_info)
-
-                                # Auto-reply si es fuera de horario
-                                if not auto_reply_service.is_office_hours():
-                                    auto_reply_service.send_auto_reply(
-                                        sender_phone, whatsapp_service, message_service
-                                    )
-
-                            except Exception as e:
-                                logger.exception(f"❌ Error processing {media_type} message: {e}")
-                                try:
-                                    # 🔧 ÚLTIMA OPCIÓN: Guardar error como JSON
-                                    error_info = {
-                                        'error': str(e),
-                                        'media_type': media_type or 'unknown',
-                                        'whatsapp_type': media_type or 'unknown',
-                                        'filename': f'failed_{media_type or "unknown"}.bin',
-                                        'content_type': 'application/octet-stream',
-                                        'file_size': 0,
-                                        'public_url': ''
-                                    }
-                                    message_service.save_media_message(msg, wa_id, error_info)
-                                except Exception:
-                                    logger.exception("Failed to save fallback message")
-
-
-                        # -------- OTROS TIPOS DE MENSAJE --------
-                        else:
-                            logger.info(f"📱 Received unsupported message type '{msg.get('type')}' from {sender_phone}")
-                            generic_msg = {
-                                'from': msg.get('from'),
-                                'timestamp': msg.get('timestamp'),
-                                'type': 'text',
-                                'text': {
-                                    'body': f"📱 Mensaje de tipo '{msg.get('type')}' recibido"
-                                },
-                                'id': msg.get('id')
-                            }
-                            message_service.save_incoming_message(generic_msg, wa_id)
-
-                # -------- ESTADOS DE MENSAJE --------
-                elif 'statuses' in value:
-                    handle_message_statuses_webhook(value, db_manager)                         
-                # -------- MENSAJES CON ARCHIVOS MULTIMEDIA (EXTENDIDO) --------
-                elif msg.get('type') in ['image', 'audio', 'video', 'document', 'sticker', 'voice']:
-                    media_type = msg.get('type')
-                    logger.info(f"🎞️ Recibido media '{media_type}' de {sender_phone}")
-
-                    try:
-                        # 1) Obtener el media_id según el tipo
-                        if media_type in ['image', 'audio', 'video', 'document', 'voice']:
-                            media_id = (msg.get(media_type) or {}).get('id')
-                        elif media_type == 'sticker':
-                            media_id = (msg.get('sticker') or {}).get('id')
-                        else:
-                            media_id = None
-
-                        if not media_id:
-                            raise ValueError(f"No media id for type {media_type}")
-
-                        # 2) Procesar media con tu ExtendedFileService:
-                        #    Descarga desde WA -> valida -> sube a Supabase -> guarda metadata
-                        fs = get_file_service()
-                        if fs:
-                            # guardamos colgándolo de external_messages (mismo patrón que el envío)
-                            # PASAR sender_phone para que get_whatsapp_media_url reciba el teléfono correcto
-                            file_result = fs.process_whatsapp_media_extended(
-                                media_id=media_id,
-                                object_reference_type='external_messages',
-                                object_reference_id=msg.get('id'),  # el id del mensaje entrante como referencia cruzada
-                                original_filename=None,
-                                phone=sender_phone
-                            )
-
-                            # 3) Persistir un “mensaje” de entrada en tu tabla external_messages
-                            #    Reutilizamos tu servicio de mensajes para mantener consistencia
-                            message_service.save_media_message(msg, wa_id, {
-                                'stored': True,
-                                'document_id': file_result.get('document_id'),
-                                'file_path': file_result.get('file_path'),
-                                'public_url': file_result.get('public_url'),
-                                'filename': file_result.get('filename'),
-                                'mime_type': file_result.get('content_type'),
-                                'whatsapp_type': file_result.get('whatsapp_type'),
-                                'type': 'media_extended'
-                            })
-
-                            logger.info(f"✅ Media guardado ({file_result.get('whatsapp_type')}): {file_result.get('filename')} -> {file_result.get('public_url')}")
-                        else:
-                            logger.warning("📎 ExtendedFileService no disponible; guardo solo el evento")
-                            message_service.save_incoming_message(msg, wa_id)
-
-                        # 4) Auto-reply si fuera de horario (mismo criterio que texto)
-                        if not auto_reply_service.is_office_hours():
-                            auto_reply_service.send_auto_reply(
-                                sender_phone, whatsapp_service, message_service
-                            )
-
-                    except Exception as e:
-                        logger.exception(f"❌ Error procesando media '{media_type}': {e}")
-                        try:
-                            message_service.save_media_message(msg, wa_id, {
-                                'stored': False,
-                                'error': str(e),
-                                'type': 'media_extended_error'
-                            })
-                        except Exception:
-                            logger.exception("Fallo al persistir el fallback del media")
-
+                save_messenger_incoming_message(page_id, psid, text, mid, ts)
 
         return 'ok', 200
-
     except Exception:
-        logger.exception('❌ Error processing webhook')
+        logger.exception("[Messenger] Error processing webhook")
         return 'error', 500
+
 
 @app.route('/office_hours', methods=['GET'])
 def office_hours_status():
