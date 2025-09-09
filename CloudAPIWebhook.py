@@ -4893,28 +4893,24 @@ def get_messenger_token_by_page(page_id: str) -> tuple[str|None, str|None]:
     try:
         # Query optimizada que obtiene company_id y token en una sola consulta
         sql_messenger = """
-        WITH company_id AS (
-            SELECT DISTINCT c.id
-            FROM public.companies c
-            JOIN public.object_property_values opv 
-                ON opv.object_reference_type = 'companies'
-                AND opv.object_reference_id = c.id
-            WHERE opv.property_name = 'MESSENGER_PAGE_ID'
-                AND opv.value = %s
-                AND COALESCE(c.is_deleted, false) = false
-            LIMIT 1
-        )
         SELECT 
-            ci.id::text as company_id,
-            (SELECT opv.value
-             FROM public.object_property_values opv
-             WHERE opv.object_reference_type = 'companies'
-                AND opv.object_reference_id = ci.id
-                AND opv.property_name = 'MESSENGER_PAGE_ACCESS_TOKEN'
-                AND COALESCE(opv.is_deleted, false) = false
-             ORDER BY opv.created_at DESC
-             LIMIT 1) as token
-        FROM company_id ci
+            c.id::text as company_id,
+            page_token.value as token
+        FROM public.companies c
+        JOIN public.object_property_values page_id 
+            ON page_id.object_reference_type = 'companies'
+            AND page_id.object_reference_id = c.id
+            AND page_id.property_name = 'MESSENGER_PAGE_ID'
+            AND page_id.value = %s
+        LEFT JOIN public.object_property_values page_token
+            ON page_token.object_reference_type = 'companies'
+            AND page_token.object_reference_id = c.id
+            AND page_token.property_name = 'PAGE_ACCESS_TOKEN'
+        WHERE COALESCE(c.is_deleted, false) = false
+            AND COALESCE(page_id.is_deleted, false) = false
+            AND COALESCE(page_token.is_deleted, false) = false
+        ORDER BY page_token.created_at DESC
+        LIMIT 1
         """
         row = db_manager.execute_query(sql_messenger, [page_id], fetch_one=True)
         
