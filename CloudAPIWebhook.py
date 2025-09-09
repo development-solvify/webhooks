@@ -4997,6 +4997,9 @@ def webhook_messenger():
                 msg = messaging.get('message', {}) or {}
                 is_echo = bool(msg.get('is_echo'))
 
+                if is_echo:
+                    logger.debug("[Messenger] Echo received; skipping response")
+                    continue
                 # Page ID correcto según sea eco o no
                 # - NO eco (mensaje real de usuario): recipient.id = Page ID
                 # - Eco: sender.id = Page ID
@@ -5050,14 +5053,30 @@ def webhook_messenger():
                 # 🔄 ECO: responder con el mismo texto (solo si hay texto)
                 if text:
                     try:
-                        url = "https://graph.facebook.com/v22.0/me/messages"
+                        base_url = "https://graph.facebook.com/v22.0/me/messages"
                         params = {"access_token": page_token}
-                        payload = {"recipient": {"id": psid}, "message": {"text": text}}
-                        r = requests.post(url, params=params, json=payload, timeout=10)
-                        r.raise_for_status()
-                        logger.info(f"[Messenger] Echo sent to {psid}: {text!r}")
+
+                        # (opcional) marcar visto + escribiendo
+                        requests.post(base_url, params=params,
+                                    json={"recipient": {"id": psid}, "sender_action": "mark_seen"}, timeout=10)
+                        requests.post(base_url, params=params,
+                                    json={"recipient": {"id": psid}, "sender_action": "typing_on"}, timeout=10)
+
+                        payload = {
+                            "messaging_type": "RESPONSE",   # ← importante dentro de 24h
+                            "recipient": {"id": psid},
+                            "message": {"text": text}
+                        }
+                        r = requests.post(base_url, params=params, json=payload, timeout=10)
+
+                        if r.status_code != 200:
+                            logger.error(f"[Messenger] Send failed ({r.status_code}): {r.text}")
+                        else:
+                            logger.info(f"[Messenger] Echo sent to {psid}: {text!r} resp={r.text}")
+
                     except Exception:
                         logger.exception("[Messenger] Error sending echo")
+
 
         return 'ok', 200
 
