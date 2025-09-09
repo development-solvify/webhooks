@@ -5479,7 +5479,7 @@ def create_portal_user(data, source=None, config_obj=None):
         api_token = getattr(config_obj, "api_token", None)
 
         # Category IDs
-        category_id = "bcb1ae3e-4c23-4461-9dae-30ed137d53ee" if use_test else "a9242a58-4f5d-494c-8a74-45f8cee150e6"
+        category_id = "bcb1ae3e-4c23-4461-9dae-30ed137d53e2"
         url = f"{base_url}/leads/{category_id}/"
 
         print("Creating portal user with data:", data)
