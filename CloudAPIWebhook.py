@@ -5488,7 +5488,7 @@ def create_portal_user(data, source=None, config_obj=None):
         phone = strip_country_code(phone)
 
         # Campaña y formulario
-        campaign = data.get("campaign_name") or data.get("campaign") or (config.get("company_name") if config else "")
+        campaign = data.get("campaign_name") or data.get("campaign") or data.get("company_name") or "default"
         form_name = data.get("form_name") or "Messenger Conversation"
 
         # Token de autenticación desde config
