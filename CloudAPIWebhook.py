@@ -4887,44 +4887,46 @@ def resolve_phone_for_psid(page_id: str, psid: str) -> str|None:
         logger.exception("[Messenger] Error checking previous messages")
 
     return None  # no encontrado
-
-
-def get_messenger_token_by_page(page_id: str) -> tuple[str|None, str|None]:
+def get_messenger_token_by_page(page_id: str) -> tuple[str | None, str | None]:
     try:
-        # Query optimizada que obtiene company_id y token en una sola consulta
-        sql_messenger = """
-        SELECT 
-            c.id::text as company_id,
-            page_token.value as token
-        FROM public.companies c
-        JOIN public.object_property_values page_id 
-            ON page_id.object_reference_type = 'companies'
-            AND page_id.object_reference_id = c.id
-            AND page_id.property_name = 'MESSENGER_PAGE_ID'
-            AND page_id.value = %s
-        LEFT JOIN public.object_property_values page_token
-            ON page_token.object_reference_type = 'companies'
-            AND page_token.object_reference_id = c.id
-            AND page_token.property_name = 'PAGE_ACCESS_TOKEN'
-        WHERE COALESCE(c.is_deleted, false) = false
-            AND COALESCE(page_id.is_deleted, false) = false
-            AND COALESCE(page_token.is_deleted, false) = false
-        ORDER BY page_token.created_at DESC
-        LIMIT 1
+        sql = """
+        WITH comp AS (
+          SELECT opv.object_reference_id AS company_id
+          FROM public.object_property_values opv
+          JOIN public.properties p ON p.id = opv.property_id
+          WHERE opv.object_reference_type = 'companies'
+            AND p.property_name = 'MESSENGER_PAGE_ID'
+            AND trim(opv.value) = %s
+          ORDER BY opv.created_at DESC NULLS LAST
+          LIMIT 1
+        ),
+        tok AS (
+          SELECT opv.value AS token
+          FROM public.object_property_values opv
+          JOIN public.properties p ON p.id = opv.property_id
+          JOIN comp c ON c.company_id = opv.object_reference_id
+          WHERE opv.object_reference_type = 'companies'
+            AND p.property_name = 'PAGE_ACCESS_TOKEN'
+          ORDER BY opv.created_at DESC NULLS LAST
+          LIMIT 1
+        )
+        SELECT c.company_id::text, t.token
+        FROM comp c
+        LEFT JOIN tok t ON TRUE
+        LIMIT 1;
         """
-        row = db_manager.execute_query(sql_messenger, [page_id], fetch_one=True)
-        
-        if row and row[0]:
+        row = db_manager.execute_query(sql, [page_id], fetch_one=True)
+        if row:
             company_id, token = row[0], row[1]
-            logger.info(f"[Messenger] Found config for page_id={page_id}: company={company_id}")
-            return company_id, token
-        
+            if company_id and token:
+                logger.info(f"[Messenger] Found config for page_id={page_id}: company={company_id}")
+                return company_id, token
         logger.warning(f"[Messenger] No config found for page_id={page_id}")
         return None, None
-        
     except Exception:
         logger.exception("[Messenger] Error resolving PAGE_ACCESS_TOKEN")
         return None, None
+
 
 
 @app.route('/webhook/messenger', methods=['GET','POST'])
