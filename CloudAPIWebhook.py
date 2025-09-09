@@ -5001,7 +5001,81 @@ from flask import request, jsonify  # por si no estaba ya importado
 import requests
 
 
+def fetch_messenger_profile_simple(page_access_token: str, psid: str) -> dict:
+    try:
+        url = f"https://graph.facebook.com/v19.0/{psid}"
+        params = {
+            "fields": "first_name,last_name",
+            "access_token": page_access_token
+        }
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json() or {}
+        return {
+            "first_name": data.get("first_name") or "",
+            "last_name": data.get("last_name") or ""
+        }
+    except Exception:
+        # no rompas el flujo si falla
+        return {"first_name": "", "last_name": ""}
+
+def extract_phone_from_text(text: str | None) -> str | None:
+    """
+    Saca un teléfono si el usuario lo ha escrito en el mensaje.
+    Soporta formatos: 600123123, 600 123 123, +34600123123, 0034600123123, etc.
+    """
+    if not text:
+        return None
+
+    # 1) quitar separadores comunes
+    cleaned = re.sub(r"[().\-]", " ", text)
+
+    # 2) buscar candidatos con o sin prefijo internacional
+    #    - España: 9 dígitos empezando por 6/7/8/9
+    #    - con prefijo +34 o 0034
+    pat = re.compile(
+        r"(?:\+34|0034)?\s*([6789]\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d)",
+        flags=re.IGNORECASE
+    )
+    m = pat.search(cleaned)
+    if not m:
+        # plan B: números largos genéricos (8-13 dígitos) por si mandan otro país
+        m2 = re.search(r"(\+?\d[\d\s]{7,14}\d)", cleaned)
+        if not m2:
+            return None
+        cand = re.sub(r"\s+", "", m2.group(1))
+        return cand
+
+    # normalizar a sólo dígitos y prefijo +34 si procede
+    cand = re.sub(r"\s+", "", m.group(0))
+    # homogeneizar prefijos 0034 -> +34
+    cand = re.sub(r"^0034", "+34", cand)
+    if cand.startswith("+34"):
+        # quitar +34 para almacenar “limpio” y ya decidir luego
+        only_digits = re.sub(r"\D", "", cand)
+        # only_digits = 34XXXXXXXXX -> deja los 9 últimos
+        return only_digits[-9:]
+    else:
+        # sin prefijo -> deja sólo dígitos
+        return re.sub(r"\D", "", cand)
+
+def send_messenger_text_simple(page_access_token: str, psid: str, text: str) -> None:
+    try:
+        url = "https://graph.facebook.com/v22.0/me/messages"
+        params = {"access_token": page_access_token}
+        payload = {
+            "messaging_type": "RESPONSE",
+            "recipient": {"id": psid},
+            "message": {"text": text}
+        }
+        r = requests.post(url, params=params, json=payload, timeout=10)
+        # no frenamos el flujo por un 400, sólo lo dejamos en logs
+        print("[Messenger] send reply status:", r.status_code, r.text)
+    except Exception as e:
+        print("[Messenger] error sending reply:", e)
+
 @app.route('/webhook/messenger', methods=['GET', 'POST'])
+
 def webhook_messenger():
     logger.info("=" * 80)
     logger.info("[Messenger] 🔄 Nueva petición webhook recibida")
@@ -5082,11 +5156,22 @@ def webhook_messenger():
                 logger.info(f"[Messenger] 👤 PSID identificado: {psid}")
 
                 # --- PERFIL DEL USUARIO (nombre y foto) ---
-                profile = fetch_messenger_profile(page_token, psid)
-                logger.info(f"[Messenger] 👤 Perfil -> {profile}")
+                profile = fetch_messenger_profile_simple(page_token, psid)
                 first_name = profile.get("first_name", "")
                 last_name = profile.get("last_name", "")
-                profile_pic = profile.get("profile_pic", "")
+
+                phone_found = extract_phone_from_text(text)
+
+                if not phone_found:
+                    msg = (
+                        "¡Hola! Para poder ayudarte mejor, ¿me dices tu *nombre* y tu *teléfono*? "
+                        "Ejemplo: 'Soy Ana López, 600123123'."
+                    )
+                    send_messenger_text_simple(page_token, psid, msg)
+
+                # PRINTAR POR PANTALLA
+                print(f"[Messenger][INFO] Nombre: {first_name} {last_name}".strip())
+                print(f"[Messenger][INFO] Teléfono: {phone_found or '(no detectado)'}")
 
                 # Persistir mensaje + devolver id
                 try:
