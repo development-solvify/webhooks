@@ -30,7 +30,7 @@ import os
 from urllib.parse import urlparse
 from supabase import create_client, Client
 import hashlib
-
+import re
 class CompanyConfigCache:
     """Cache manager for company configurations"""
     def __init__(self):
