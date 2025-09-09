@@ -4976,66 +4976,58 @@ def send_messenger_text(page_access_token: str, psid: str, text: str):
 from flask import request, jsonify  # por si no estaba ya importado
 import requests
 
-@app.route('/webhook/messenger', methods=['POST'])
+
+@app.route('/webhook/messenger', methods=['GET', 'POST'])
 def webhook_messenger():
-    """
-    Webhook de Messenger (Page).
-    - Ignora ecos (is_echo) para evitar bucles.
-    - Resuelve company + PAGE_ACCESS_TOKEN por page_id.
-    - ECO: responde con el mismo texto recibido.
-    """
+    if request.method == 'GET':
+        # Verificación de webhook (Messenger)
+        mode = request.args.get('hub.mode')
+        token = request.args.get('hub.verify_token')
+        challenge = request.args.get('hub.challenge')
+
+        if mode == 'subscribe' and token == VERIFY_TOKEN:
+            logger.info(f"[Messenger] Webhook verified OK. challenge={challenge}")
+            return challenge, 200  # devolver el challenge tal cual (texto plano)
+        else:
+            logger.error(f"[Messenger] Webhook verify failed. mode={mode} token={token}")
+            return 'Forbidden', 403
+
+    # ---- A partir de aquí tu manejo POST existente (eco) ----
     try:
         data = request.get_json(force=True)
         if not data or 'entry' not in data:
             return 'ok', 200
 
         for entry in data.get('entry', []):
-            # entry.id suele ser el Page ID
             entry_page_id = entry.get('id')
-
             for messaging in entry.get('messaging', []):
                 msg = messaging.get('message', {}) or {}
                 is_echo = bool(msg.get('is_echo'))
 
-                if is_echo:
-                    logger.debug("[Messenger] Echo received; skipping response")
-                    continue
-                # Page ID correcto según sea eco o no
-                # - NO eco (mensaje real de usuario): recipient.id = Page ID
-                # - Eco: sender.id = Page ID
                 page_id = (messaging.get('sender', {}).get('id') if is_echo
                            else messaging.get('recipient', {}).get('id')) or entry_page_id
 
-                # Resuelve company + PAGE_ACCESS_TOKEN
                 company_id, page_token = get_messenger_token_by_page(page_id)
                 if not company_id or not page_token:
                     logger.error(f"[Messenger] Falta company/token para page_id={page_id}")
                     continue
 
-                sender_id = messaging.get('sender', {}).get('id')        # PSID real si NO es eco
-                recipient_id = messaging.get('recipient', {}).get('id')  # Page ID si NO es eco
+                sender_id = messaging.get('sender', {}).get('id')
+                recipient_id = messaging.get('recipient', {}).get('id')
                 mid = msg.get('mid')
                 text = (msg.get('text') or '').strip()
 
-                logger.info(
-                    f"💬 [Messenger] page={page_id} psid_sender={sender_id} "
-                    f"psid_recipient={recipient_id} mid={mid} text={text!r} echo={is_echo}"
-                )
+                logger.info(f"💬 [Messenger] page={page_id} psid_sender={sender_id} psid_recipient={recipient_id} mid={mid} text={text!r} echo={is_echo}")
 
-                # Ignorar ecos (evita bucles y ruido)
                 if is_echo:
                     logger.debug("[Messenger] Echo received; skipping response")
                     continue
 
-                # PSID del usuario (solo si NO es eco)
                 psid = sender_id
 
-                # (Opcional) mapear PSID -> phone si lo necesitas para tus tablas
-                phone = resolve_phone_for_psid(psid)
-
-                # Guarda el mensaje entrante (igual que haces con WhatsApp)
+                # (Opcional) persistir mensaje
                 try:
-                    chat_id = str(psid)  # o "messenger:{psid}"
+                    chat_id = str(psid)
                     chat_url = f"https://www.facebook.com/messages/t/{psid}"
                     sql_ins = """
                         INSERT INTO public.external_messages (
@@ -5046,44 +5038,32 @@ def webhook_messenger():
                             FALSE, 'message_received', NOW(), NOW(), FALSE, %s, %s, NULL
                         )
                     """
-                    db_manager.execute_query(sql_ins, [text or '', phone, mid or '', chat_id, chat_url], fetch_one=False)
+                    db_manager.execute_query(sql_ins, [text or '', None, mid or '', chat_id, chat_url], fetch_one=False)
                 except Exception:
                     logger.exception("[Messenger] Error inserting external_messages")
 
-                # 🔄 ECO: responder con el mismo texto (solo si hay texto)
+                # ECO: responder con el mismo texto (dentro de 24h)
                 if text:
                     try:
                         base_url = "https://graph.facebook.com/v22.0/me/messages"
                         params = {"access_token": page_token}
-
-                        # (opcional) marcar visto + escribiendo
-                        requests.post(base_url, params=params,
-                                    json={"recipient": {"id": psid}, "sender_action": "mark_seen"}, timeout=10)
-                        requests.post(base_url, params=params,
-                                    json={"recipient": {"id": psid}, "sender_action": "typing_on"}, timeout=10)
-
                         payload = {
-                            "messaging_type": "RESPONSE",   # ← importante dentro de 24h
+                            "messaging_type": "RESPONSE",
                             "recipient": {"id": psid},
                             "message": {"text": text}
                         }
                         r = requests.post(base_url, params=params, json=payload, timeout=10)
-
                         if r.status_code != 200:
                             logger.error(f"[Messenger] Send failed ({r.status_code}): {r.text}")
                         else:
                             logger.info(f"[Messenger] Echo sent to {psid}: {text!r} resp={r.text}")
-
                     except Exception:
                         logger.exception("[Messenger] Error sending echo")
 
-
         return 'ok', 200
-
     except Exception:
         logger.exception("[Messenger] Unhandled error")
         return 'ok', 200
-
 
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
