@@ -23,7 +23,8 @@ import pg8000
 import requests
 from requests.exceptions import HTTPError
 from werkzeug.utils import secure_filename
-
+from enum import Enum
+from typing import Dict, Optional, Tuple
 import requests
 import mimetypes
 import os
@@ -5075,11 +5076,16 @@ def send_messenger_text_simple(page_access_token: str, psid: str, text: str) -> 
     except Exception as e:
         print("[Messenger] error sending reply:", e)
 
-import json
-import re
+
+# =================================================================================
+# AÑADIR ESTAS IMPORTACIONES AL INICIO DE TU ARCHIVO (después de las existentes)
+# =================================================================================
 from enum import Enum
-from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple
+
+# =================================================================================
+# AÑADIR ESTAS CLASES Y CONFIGURACIÓN (después de tus imports, antes de las rutas)
+# =================================================================================
 
 # Estados del flujo conversacional
 class ConversationState(Enum):
@@ -5090,13 +5096,17 @@ class ConversationState(Enum):
     COMPLETED = "completed"
     ERROR = "error"
 
-# Configuración del flujo
-CONVERSATION_CONFIG = {
-    "enabled": True,  # Interruptor para activar/desactivar el flujo
-    "timeout_hours": 24,  # Tiempo límite para completar el flujo
-    "source": "Messenger",  # Fuente para create_portal_user
-    "company_name": "sheets"  # Nombre de empresa por defecto
+# Configuración del flujo (EDITABLE)
+MESSENGER_CONVERSATION_CONFIG = {
+    "enabled": True,  # Cambiar a False para desactivar el flujo
+    "timeout_hours": 24,
+    "source": "Messenger",
+    "company_name": "sheets"  # Cambiar según necesites
 }
+
+# =================================================================================
+# AÑADIR ESTAS FUNCIONES ANTES DE TUS RUTAS EXISTENTES
+# =================================================================================
 
 class MessengerConversationManager:
     """Maneja el estado y flujo de conversaciones de Messenger"""
@@ -5107,7 +5117,6 @@ class MessengerConversationManager:
     def get_conversation_state(self, psid: str, page_id: str) -> Tuple[ConversationState, Dict]:
         """Obtiene el estado actual de la conversación y datos recolectados"""
         try:
-            # Buscar el estado más reciente para este PSID
             query = """
                 SELECT message, created_at
                 FROM public.external_messages
@@ -5122,7 +5131,6 @@ class MessengerConversationManager:
             if not row:
                 return ConversationState.INITIAL, {}
             
-            # Parsear datos del estado
             try:
                 state_data = json.loads(row[0])
                 state = ConversationState(state_data.get('state', 'initial'))
@@ -5131,7 +5139,7 @@ class MessengerConversationManager:
                 
                 # Verificar timeout
                 if created_at and isinstance(created_at, datetime):
-                    if datetime.now() - created_at > timedelta(hours=CONVERSATION_CONFIG["timeout_hours"]):
+                    if datetime.now() - created_at > timedelta(hours=MESSENGER_CONVERSATION_CONFIG["timeout_hours"]):
                         logger.warning(f"[Messenger] Conversation timeout for {psid}")
                         return ConversationState.INITIAL, {}
                 
@@ -5155,7 +5163,6 @@ class MessengerConversationManager:
                 'updated_at': datetime.now().isoformat()
             }
             
-            # Guardar como mensaje especial
             query = """
                 INSERT INTO public.external_messages (
                     id, message, sender_phone, responsible_email, last_message_uid, last_message_timestamp,
@@ -5167,7 +5174,7 @@ class MessengerConversationManager:
             """
             self.db_manager.execute_query(query, [
                 json.dumps(state_data),
-                None,  # sender_phone null para mensajes de estado
+                None,
                 f"state_{psid}_{int(datetime.now().timestamp())}",
                 chat_id,
                 f"https://www.facebook.com/messages/t/{psid}"
@@ -5179,16 +5186,16 @@ class MessengerConversationManager:
             logger.exception(f"[Messenger] Error saving conversation state for {psid}")
 
 # Instancia global del manager
-conversation_manager = None
+messenger_conversation_manager = None
 
-def get_conversation_manager():
+def get_messenger_conversation_manager():
     """Obtiene la instancia del conversation manager"""
-    global conversation_manager
-    if conversation_manager is None:
-        conversation_manager = MessengerConversationManager(db_manager)
-    return conversation_manager
+    global messenger_conversation_manager
+    if messenger_conversation_manager is None:
+        messenger_conversation_manager = MessengerConversationManager(db_manager)
+    return messenger_conversation_manager
 
-def validate_name(name: str) -> Tuple[bool, str]:
+def validate_messenger_name(name: str) -> Tuple[bool, str]:
     """Valida que el nombre sea válido"""
     name = name.strip()
     if len(name) < 2:
@@ -5199,20 +5206,32 @@ def validate_name(name: str) -> Tuple[bool, str]:
         return False, "Por favor, introduce solo letras y espacios en el nombre."
     return True, ""
 
-def validate_phone(phone: str) -> Tuple[bool, str, str]:
-    # Limpia dejando solo dígitos
+def validate_messenger_phone(phone: str) -> Tuple[bool, str, str]:
+    """Valida y normaliza el teléfono español"""
+    # Limpiar el teléfono - solo dígitos
     clean_phone = re.sub(r'[^\d]', '', phone.strip())
     
-    # Si empieza con 34, lo quita (prefijo España)
-    if clean_phone.startswith('34') and len(clean_phone) == 11:
-        clean_phone = clean_phone[2:]
-    
-    # Valida: exactamente 9 dígitos, empieza por 6,7,8,9
-    if len(clean_phone) == 9 and clean_phone.isdigit() and clean_phone[0] in '6789':
+    try:
+        # Si empieza con 34, quitarlo
+        if clean_phone.startswith('34') and len(clean_phone) == 11:
+            clean_phone = clean_phone[2:]
+        
+        # Verificar que sea exactamente 9 dígitos
+        if len(clean_phone) != 9 or not clean_phone.isdigit():
+            return False, "Por favor, introduce un número de teléfono español válido (9 dígitos).", ""
+        
+        # Verificar que empiece con 6, 7, 8 o 9 (móviles y fijos españoles)
+        if not clean_phone.startswith(('6', '7', '8', '9')):
+            return False, "Por favor, introduce un número de teléfono español válido (debe empezar por 6, 7, 8 o 9).", ""
+        
+        logger.info(f"[Messenger] Teléfono validado correctamente: {phone} -> {clean_phone}")
         return True, "", clean_phone
-    else:
-        return False, "Mensaje de error", ""
-def validate_email(email: str) -> Tuple[bool, str]:
+        
+    except Exception as e:
+        logger.error(f"[Messenger] Error validando teléfono {phone}: {e}")
+        return False, "Por favor, introduce un número de teléfono válido.", ""
+
+def validate_messenger_email(email: str) -> Tuple[bool, str]:
     """Valida el email"""
     email = email.strip().lower()
     if len(email) < 5:
@@ -5225,32 +5244,32 @@ def validate_email(email: str) -> Tuple[bool, str]:
     
     return True, ""
 
-def process_conversation_flow(psid: str, page_id: str, user_message: str, page_token: str) -> bool:
+def process_messenger_conversation_flow(psid: str, page_id: str, user_message: str, page_token: str) -> bool:
     """
     Procesa el flujo conversacional de Messenger.
     Retorna True si manejó el mensaje, False si debe usar el comportamiento por defecto.
     """
-    if not CONVERSATION_CONFIG["enabled"]:
+    if not MESSENGER_CONVERSATION_CONFIG["enabled"]:
         return False
     
     try:
-        manager = get_conversation_manager()
+        manager = get_messenger_conversation_manager()
         current_state, user_data = manager.get_conversation_state(psid, page_id)
         
         logger.info(f"[Messenger Flow] PSID {psid} - State: {current_state.value}, Message: '{user_message[:50]}...'")
         
         # Procesar según el estado actual
         if current_state == ConversationState.INITIAL:
-            return handle_initial_state(psid, page_id, user_message, page_token, manager, user_data)
+            return handle_messenger_initial_state(psid, page_id, user_message, page_token, manager, user_data)
             
         elif current_state == ConversationState.WAITING_NAME:
-            return handle_waiting_name(psid, page_id, user_message, page_token, manager, user_data)
+            return handle_messenger_waiting_name(psid, page_id, user_message, page_token, manager, user_data)
             
         elif current_state == ConversationState.WAITING_PHONE:
-            return handle_waiting_phone(psid, page_id, user_message, page_token, manager, user_data)
+            return handle_messenger_waiting_phone(psid, page_id, user_message, page_token, manager, user_data)
             
         elif current_state == ConversationState.WAITING_EMAIL:
-            return handle_waiting_email(psid, page_id, user_message, page_token, manager, user_data)
+            return handle_messenger_waiting_email(psid, page_id, user_message, page_token, manager, user_data)
             
         elif current_state == ConversationState.COMPLETED:
             # Usuario ya completó el flujo, comportamiento normal
@@ -5259,15 +5278,15 @@ def process_conversation_flow(psid: str, page_id: str, user_message: str, page_t
         else:
             # Estado no reconocido, reiniciar
             logger.warning(f"[Messenger Flow] Unknown state {current_state}, resetting to INITIAL")
-            return handle_initial_state(psid, page_id, user_message, page_token, manager, {})
+            return handle_messenger_initial_state(psid, page_id, user_message, page_token, manager, {})
             
     except Exception as e:
         logger.exception(f"[Messenger Flow] Error processing conversation flow for {psid}")
-        send_messenger_message(page_token, psid, 
+        send_messenger_text(page_token, psid, 
             "¡Ups! Hubo un error temporal. Por favor, escribe cualquier mensaje para empezar de nuevo.")
         return True
 
-def handle_initial_state(psid: str, page_id: str, user_message: str, page_token: str, manager, user_data: Dict) -> bool:
+def handle_messenger_initial_state(psid: str, page_id: str, user_message: str, page_token: str, manager, user_data: Dict) -> bool:
     """Maneja el estado inicial - envía bienvenida y pide nombre"""
     try:
         welcome_message = """¡Hola! 👋 Bienvenido/a a nuestro servicio.
@@ -5276,7 +5295,7 @@ Para poder ayudarte mejor, necesito recopilar algunos datos básicos.
 
 Por favor, dime tu **nombre completo**:"""
         
-        send_messenger_message(page_token, psid, welcome_message)
+        send_messenger_text(page_token, psid, welcome_message)
         
         # Cambiar estado a esperar nombre
         manager.save_conversation_state(psid, page_id, ConversationState.WAITING_NAME, user_data)
@@ -5284,17 +5303,17 @@ Por favor, dime tu **nombre completo**:"""
         return True
         
     except Exception as e:
-        logger.exception(f"[Messenger Flow] Error in handle_initial_state for {psid}")
+        logger.exception(f"[Messenger Flow] Error in handle_messenger_initial_state for {psid}")
         return False
 
-def handle_waiting_name(psid: str, page_id: str, user_message: str, page_token: str, manager, user_data: Dict) -> bool:
+def handle_messenger_waiting_name(psid: str, page_id: str, user_message: str, page_token: str, manager, user_data: Dict) -> bool:
     """Maneja el estado esperando nombre"""
     try:
         # Validar nombre
-        is_valid, error_msg = validate_name(user_message)
+        is_valid, error_msg = validate_messenger_name(user_message)
         
         if not is_valid:
-            send_messenger_message(page_token, psid, error_msg)
+            send_messenger_text(page_token, psid, error_msg)
             return True
         
         # Guardar nombre y pedir teléfono
@@ -5305,7 +5324,7 @@ def handle_waiting_name(psid: str, page_id: str, user_message: str, page_token: 
 Ahora necesito tu **número de teléfono**.
 Por favor, escríbelo sin espacios (ejemplo: 612345678):"""
         
-        send_messenger_message(page_token, psid, phone_message)
+        send_messenger_text(page_token, psid, phone_message)
         
         # Cambiar estado
         manager.save_conversation_state(psid, page_id, ConversationState.WAITING_PHONE, user_data)
@@ -5313,21 +5332,21 @@ Por favor, escríbelo sin espacios (ejemplo: 612345678):"""
         return True
         
     except Exception as e:
-        logger.exception(f"[Messenger Flow] Error in handle_waiting_name for {psid}")
+        logger.exception(f"[Messenger Flow] Error in handle_messenger_waiting_name for {psid}")
         return False
 
-def handle_waiting_phone(psid: str, page_id: str, user_message: str, page_token: str, manager, user_data: Dict) -> bool:
+def handle_messenger_waiting_phone(psid: str, page_id: str, user_message: str, page_token: str, manager, user_data: Dict) -> bool:
     """Maneja el estado esperando teléfono"""
     try:
         # Validar teléfono
-        is_valid, error_msg, clean_phone = validate_phone(user_message)
+        is_valid, error_msg, clean_phone = validate_messenger_phone(user_message)
         
         if not is_valid:
             retry_message = f"""{error_msg}
 
 Recuerda: debe ser un número español de 9 dígitos.
 Ejemplo: 612345678 o +34612345678"""
-            send_messenger_message(page_token, psid, retry_message)
+            send_messenger_text(page_token, psid, retry_message)
             return True
         
         # Guardar teléfono y pedir email
@@ -5338,7 +5357,7 @@ Ejemplo: 612345678 o +34612345678"""
 Por último, necesito tu **correo electrónico**.
 Por favor, escríbelo completo (ejemplo: tu@email.com):"""
         
-        send_messenger_message(page_token, psid, email_message)
+        send_messenger_text(page_token, psid, email_message)
         
         # Cambiar estado
         manager.save_conversation_state(psid, page_id, ConversationState.WAITING_EMAIL, user_data)
@@ -5346,27 +5365,27 @@ Por favor, escríbelo completo (ejemplo: tu@email.com):"""
         return True
         
     except Exception as e:
-        logger.exception(f"[Messenger Flow] Error in handle_waiting_phone for {psid}")
+        logger.exception(f"[Messenger Flow] Error in handle_messenger_waiting_phone for {psid}")
         return False
 
-def handle_waiting_email(psid: str, page_id: str, user_message: str, page_token: str, manager, user_data: Dict) -> bool:
+def handle_messenger_waiting_email(psid: str, page_id: str, user_message: str, page_token: str, manager, user_data: Dict) -> bool:
     """Maneja el estado esperando email - último paso"""
     try:
         # Validar email
-        is_valid, error_msg = validate_email(user_message)
+        is_valid, error_msg = validate_messenger_email(user_message)
         
         if not is_valid:
             retry_message = f"""{error_msg}
 
 Ejemplo de formato correcto: nombre@dominio.com"""
-            send_messenger_message(page_token, psid, retry_message)
+            send_messenger_text(page_token, psid, retry_message)
             return True
         
         # Guardar email y crear usuario
         user_data['correo_electrónico'] = user_message.strip().lower()
         
-        # Intentar crear el usuario en el portal
-        success, result_message = create_portal_user_from_messenger(user_data, psid)
+        # Intentar crear el usuario en el portal usando TU función existente
+        success, result_message = create_messenger_portal_user(user_data, psid)
         
         if success:
             success_message = f"""🎉 ¡Perfecto! He registrado tus datos correctamente.
@@ -5378,7 +5397,7 @@ Ejemplo de formato correcto: nombre@dominio.com"""
 
 ¡Ya puedes escribirme cualquier consulta que tengas!"""
             
-            send_messenger_message(page_token, psid, success_message)
+            send_messenger_text(page_token, psid, success_message)
             
             # Marcar como completado
             manager.save_conversation_state(psid, page_id, ConversationState.COMPLETED, user_data)
@@ -5389,7 +5408,7 @@ Ejemplo de formato correcto: nombre@dominio.com"""
 Por favor, inténtalo de nuevo más tarde o contacta con nuestro soporte.
 Mientras tanto, puedes escribirme cualquier consulta."""
             
-            send_messenger_message(page_token, psid, error_message)
+            send_messenger_text(page_token, psid, error_message)
             
             # Marcar como completado aunque haya fallado (para no repetir el flujo)
             manager.save_conversation_state(psid, page_id, ConversationState.COMPLETED, user_data)
@@ -5397,20 +5416,20 @@ Mientras tanto, puedes escribirme cualquier consulta."""
         return True
         
     except Exception as e:
-        logger.exception(f"[Messenger Flow] Error in handle_waiting_email for {psid}")
-        send_messenger_message(page_token, psid, 
+        logger.exception(f"[Messenger Flow] Error in handle_messenger_waiting_email for {psid}")
+        send_messenger_text(page_token, psid, 
             "Hubo un error procesando tus datos. Por favor, contacta con soporte.")
         return True
 
-def create_portal_user_from_messenger(user_data: Dict, psid: str) -> Tuple[bool, str]:
+def create_messenger_portal_user(user_data: Dict, psid: str) -> Tuple[bool, str]:
     """
-    Crea un usuario en el portal usando los datos recolectados de Messenger.
+    Crea un usuario en el portal usando TU función create_portal_user existente.
     Retorna (success: bool, message: str)
     """
     try:
         logger.info(f"[Messenger] Creating portal user from conversation data: {user_data}")
         
-        # Preparar datos para create_portal_user
+        # Preparar datos en el formato que espera TU función create_portal_user
         portal_data = {
             'nombre_y_apellidos': user_data.get('nombre_y_apellidos', ''),
             'número_de_teléfono': user_data.get('número_de_teléfono', ''),
@@ -5422,13 +5441,13 @@ def create_portal_user_from_messenger(user_data: Dict, psid: str) -> Tuple[bool,
         
         # Usar la configuración específica para Messenger
         messenger_config = {
-            "company_name": CONVERSATION_CONFIG["company_name"]
+            "company_name": MESSENGER_CONVERSATION_CONFIG["company_name"]
         }
         
-        # Llamar a la función existente
+        # LLAMAR A TU FUNCIÓN EXISTENTE create_portal_user
         result = create_portal_user(
             data=portal_data, 
-            source=CONVERSATION_CONFIG["source"],
+            source=MESSENGER_CONVERSATION_CONFIG["source"],
             config=messenger_config
         )
         
@@ -5443,50 +5462,21 @@ def create_portal_user_from_messenger(user_data: Dict, psid: str) -> Tuple[bool,
         logger.exception(f"[Messenger] Exception creating portal user for PSID {psid}")
         return False, f"Error interno: {str(e)}"
 
-def send_messenger_message(page_token: str, psid: str, text: str):
-    """
-    Envía un mensaje de texto a un usuario de Messenger.
-    Versión mejorada con mejor manejo de errores.
-    """
-    try:
-        url = "https://graph.facebook.com/v22.0/me/messages"
-        params = {"access_token": page_token}
-        payload = {
-            "messaging_type": "RESPONSE",
-            "recipient": {"id": psid},
-            "message": {"text": text}
-        }
-        
-        logger.info(f"[Messenger] Sending message to {psid}: {text[:100]}...")
-        
-        response = requests.post(url, params=params, json=payload, timeout=10)
-        response.raise_for_status()
-        
-        logger.info(f"[Messenger] ✅ Message sent successfully to {psid}")
-        return True
-        
-    except requests.exceptions.RequestException as e:
-        logger.error(f"[Messenger] ❌ HTTP error sending message to {psid}: {e}")
-        return False
-    except Exception as e:
-        logger.exception(f"[Messenger] ❌ Unexpected error sending message to {psid}")
-        return False
-
 # =================================================================================
-# WEBHOOK DE MESSENGER MEJORADO - REEMPLAZA EL EXISTENTE
+# REEMPLAZAR TU FUNCIÓN webhook_messenger EXISTENTE POR ESTA VERSIÓN
 # =================================================================================
 
 @app.route('/webhook/messenger', methods=['GET', 'POST'])
-def webhook_messenger_improved():
+def webhook_messenger():
     """Webhook de Messenger mejorado con flujo conversacional"""
     
     logger.info("=" * 80)
     logger.info("[Messenger] 📄 Nueva petición webhook recibida")
     logger.info(f"[Messenger] Método: {request.method}")
-    logger.info(f"[Messenger] Flujo conversacional: {'ACTIVADO' if CONVERSATION_CONFIG['enabled'] else 'DESACTIVADO'}")
+    logger.info(f"[Messenger] Flujo conversacional: {'ACTIVADO' if MESSENGER_CONVERSATION_CONFIG['enabled'] else 'DESACTIVADO'}")
 
     if request.method == 'GET':
-        # Verificación de webhook (sin cambios)
+        # Verificación de webhook (SIN CAMBIOS - usa tu lógica existente)
         mode = request.args.get('hub.mode')
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
@@ -5503,7 +5493,7 @@ def webhook_messenger_improved():
             logger.error(f"[Messenger] ❌ Verificación webhook fallida")
             return 'Forbidden', 403
 
-    # Manejo de POST - MEJORADO
+    # Manejo de POST - MEJORADO PERO MANTIENE TU LÓGICA
     try:
         logger.info("[Messenger] 🔥 Procesando webhook POST")
         data = request.get_json(force=True)
@@ -5524,12 +5514,12 @@ def webhook_messenger_improved():
                 is_echo = bool(msg.get('is_echo'))
                 logger.info(f"[Messenger] - Is echo? {is_echo}")
 
-                # Determinar page_id
+                # Determinar page_id (TU LÓGICA EXISTENTE)
                 page_id = (messaging.get('sender', {}).get('id') if is_echo
                            else messaging.get('recipient', {}).get('id')) or entry_page_id
                 logger.info(f"[Messenger] 🏗 Page ID determinado: {page_id}")
 
-                # Obtener credenciales
+                # Obtener credenciales (TU FUNCIÓN EXISTENTE)
                 company_id, page_token = get_messenger_token_by_page(page_id)
                 logger.info(f"[Messenger] 🔐 Credenciales obtenidas:")
                 logger.info(f"[Messenger] - Company ID: {company_id}")
@@ -5559,7 +5549,7 @@ def webhook_messenger_improved():
 
                 psid = sender_id
 
-                # 1. PERSISTIR MENSAJE ENTRANTE (mantenemos funcionalidad existente)
+                # 1. PERSISTIR MENSAJE ENTRANTE (TU LÓGICA EXISTENTE - SIN CAMBIOS)
                 try:
                     logger.info("[Messenger] 💾 Guardando mensaje entrante en BD")
                     chat_id = str(psid)
@@ -5582,21 +5572,20 @@ def webhook_messenger_improved():
 
                 # 2. PROCESAR FLUJO CONVERSACIONAL (NUEVA FUNCIONALIDAD)
                 conversation_handled = False
-                if CONVERSATION_CONFIG["enabled"]:
+                if MESSENGER_CONVERSATION_CONFIG["enabled"]:
                     try:
                         logger.info("[Messenger] 🤖 Iniciando procesamiento del flujo conversacional")
-                        conversation_handled = process_conversation_flow(psid, page_id, text, page_token)
+                        conversation_handled = process_messenger_conversation_flow(psid, page_id, text, page_token)
                         logger.info(f"[Messenger] Flujo conversacional manejado: {conversation_handled}")
                         
                     except Exception as e:
                         logger.exception(f"[Messenger] ❌ Error en flujo conversacional: {str(e)}")
-                        # En caso de error, continuamos con el comportamiento por defecto
 
-                # 3. COMPORTAMIENTO POR DEFECTO (si el flujo no manejó el mensaje)
+                # 3. COMPORTAMIENTO POR DEFECTO (TU LÓGICA EXISTENTE - si el flujo no manejó el mensaje)
                 if not conversation_handled:
                     try:
                         logger.info("[Messenger] 🔄 Enviando eco (comportamiento por defecto)")
-                        success = send_messenger_message(page_token, psid, text)
+                        success = send_messenger_text(page_token, psid, text)
                         
                         if success:
                             logger.info(f"[Messenger] ✅ Eco enviado correctamente a {psid}")
@@ -5616,18 +5605,18 @@ def webhook_messenger_improved():
         return 'ok', 200
 
 # =================================================================================
-# ENDPOINTS DE ADMINISTRACIÓN Y DEBUG
+# OPCIONAL: ENDPOINTS DE ADMINISTRACIÓN (añadir al final de tu archivo)
 # =================================================================================
 
 @app.route('/messenger/config', methods=['GET', 'POST'])
-def messenger_config():
+def messenger_config_admin():
     """Endpoint para ver/modificar la configuración del flujo conversacional"""
-    global CONVERSATION_CONFIG
+    global MESSENGER_CONVERSATION_CONFIG
     
     if request.method == 'GET':
         return jsonify({
             'status': 'success',
-            'current_config': CONVERSATION_CONFIG,
+            'current_config': MESSENGER_CONVERSATION_CONFIG,
             'conversation_states': [state.value for state in ConversationState]
         }), 200
     
@@ -5635,22 +5624,21 @@ def messenger_config():
         try:
             data = request.get_json(force=True)
             
-            # Actualizar configuración
             if 'enabled' in data:
-                CONVERSATION_CONFIG['enabled'] = bool(data['enabled'])
+                MESSENGER_CONVERSATION_CONFIG['enabled'] = bool(data['enabled'])
             if 'timeout_hours' in data:
-                CONVERSATION_CONFIG['timeout_hours'] = max(1, int(data['timeout_hours']))
+                MESSENGER_CONVERSATION_CONFIG['timeout_hours'] = max(1, int(data['timeout_hours']))
             if 'source' in data:
-                CONVERSATION_CONFIG['source'] = str(data['source'])
+                MESSENGER_CONVERSATION_CONFIG['source'] = str(data['source'])
             if 'company_name' in data:
-                CONVERSATION_CONFIG['company_name'] = str(data['company_name'])
+                MESSENGER_CONVERSATION_CONFIG['company_name'] = str(data['company_name'])
             
-            logger.info(f"[Messenger Config] Configuration updated: {CONVERSATION_CONFIG}")
+            logger.info(f"[Messenger Config] Configuration updated: {MESSENGER_CONVERSATION_CONFIG}")
             
             return jsonify({
                 'status': 'success',
                 'message': 'Configuration updated successfully',
-                'new_config': CONVERSATION_CONFIG
+                'new_config': MESSENGER_CONVERSATION_CONFIG
             }), 200
             
         except Exception as e:
@@ -5660,57 +5648,12 @@ def messenger_config():
                 'message': f'Error updating configuration: {str(e)}'
             }), 500
 
-@app.route('/messenger/conversations/<psid>', methods=['GET'])
-def get_conversation_debug(psid):
-    """Endpoint para debuggear el estado de una conversación específica"""
-    try:
-        page_id = request.args.get('page_id', 'unknown')
-        manager = get_conversation_manager()
-        state, user_data = manager.get_conversation_state(psid, page_id)
-        
-        # Obtener historial de mensajes
-        chat_id = f"messenger:{page_id}:{psid}"
-        history_query = """
-            SELECT message, from_me, status, created_at
-            FROM public.external_messages
-            WHERE chat_id = %s
-            ORDER BY created_at DESC
-            LIMIT 20
-        """
-        messages = db_manager.execute_query(history_query, [chat_id], fetch_all=True)
-        
-        message_history = []
-        for msg in messages:
-            message_history.append({
-                'content': msg[0],
-                'from_me': msg[1],
-                'status': msg[2],
-                'timestamp': msg[3].isoformat() if msg[3] else None
-            })
-        
-        return jsonify({
-            'status': 'success',
-            'psid': psid,
-            'page_id': page_id,
-            'current_state': state.value,
-            'user_data': user_data,
-            'message_history': message_history,
-            'config': CONVERSATION_CONFIG
-        }), 200
-        
-    except Exception as e:
-        logger.exception(f"[Messenger Debug] Error getting conversation debug for {psid}")
-        return jsonify({
-            'status': 'error',
-            'message': f'Error: {str(e)}'
-        }), 500
-
 @app.route('/messenger/reset/<psid>', methods=['POST'])
-def reset_conversation(psid):
+def reset_messenger_conversation(psid):
     """Endpoint para resetear una conversación (útil para testing)"""
     try:
         page_id = request.json.get('page_id', 'unknown') if request.json else 'unknown'
-        manager = get_conversation_manager()
+        manager = get_messenger_conversation_manager()
         
         # Resetear a estado inicial
         manager.save_conversation_state(psid, page_id, ConversationState.INITIAL, {})
@@ -5729,6 +5672,7 @@ def reset_conversation(psid):
             'status': 'error',
             'message': f'Error resetting conversation: {str(e)}'
         }), 500
+
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
