@@ -4930,11 +4930,12 @@ def get_messenger_token_by_page(page_id: str) -> tuple[str | None, str | None]:
         return None, None
 
 
-def resolve_phone_for_psid(psid: str) -> str | None:
+def resolve_phone_for_psid(page_id: str, psid: str) -> str | None:
     """
     Mapea PSID -> phone del lead desde object_property_values + properties.
     """
     try:
+        # 1) Primero intentar mapeo directo por PSID
         sql = """
         SELECT l.phone
         FROM public.leads l
@@ -4949,9 +4950,30 @@ def resolve_phone_for_psid(psid: str) -> str | None:
         LIMIT 1;
         """
         row = db_manager.execute_query(sql, [psid], fetch_one=True)
-        return row[0] if row else None
+        if row and row[0]:
+            logger.info(f"[Messenger] Found phone {row[0]} for PSID {psid} via direct mapping")
+            return row[0]
+
+        # 2) Si no hay mapeo, buscar en mensajes previos
+        chat_id = f"messenger:{page_id}:{psid}"
+        sql_prev = """
+        SELECT sender_phone
+        FROM public.external_messages
+        WHERE chat_id = %s
+          AND sender_phone IS NOT NULL
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+        row2 = db_manager.execute_query(sql_prev, [chat_id], fetch_one=True)
+        if row2 and row2[0]:
+            logger.info(f"[Messenger] Found phone {row2[0]} for PSID {psid} via previous messages")
+            return row2[0]
+
+        logger.warning(f"[Messenger] No phone found for PSID {psid}")
+        return None
+
     except Exception:
-        logger.exception("[Messenger] Error checking lead mapping (PSID -> phone)")
+        logger.exception(f"[Messenger] Error resolving phone for PSID {psid}")
         return None
 
 
