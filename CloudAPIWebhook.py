@@ -5200,20 +5200,18 @@ def validate_name(name: str) -> Tuple[bool, str]:
     return True, ""
 
 def validate_phone(phone: str) -> Tuple[bool, str, str]:
-    """Valida y normaliza el teléfono"""
-    # Limpiar el teléfono
-    clean_phone = re.sub(r'[^\d+]', '', phone.strip())
+    # Limpia dejando solo dígitos
+    clean_phone = re.sub(r'[^\d]', '', phone.strip())
     
-    # Aplicar la función existente strip_country_code
-    try:
-        normalized_phone = strip_country_code(clean_phone)
-        if len(normalized_phone) == 9 and normalized_phone.isdigit():
-            return True, "", normalized_phone
-        else:
-            return False, "Por favor, introduce un número de teléfono español válido (9 dígitos).", ""
-    except:
-        return False, "Por favor, introduce un número de teléfono válido.", ""
-
+    # Si empieza con 34, lo quita (prefijo España)
+    if clean_phone.startswith('34') and len(clean_phone) == 11:
+        clean_phone = clean_phone[2:]
+    
+    # Valida: exactamente 9 dígitos, empieza por 6,7,8,9
+    if len(clean_phone) == 9 and clean_phone.isdigit() and clean_phone[0] in '6789':
+        return True, "", clean_phone
+    else:
+        return False, "Mensaje de error", ""
 def validate_email(email: str) -> Tuple[bool, str]:
     """Valida el email"""
     email = email.strip().lower()
