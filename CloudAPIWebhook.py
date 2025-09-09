@@ -4894,11 +4894,11 @@ def get_messenger_token_by_page(page_id: str) -> tuple[str|None, str|None]:
         sql_company = """
         SELECT c.id
         FROM public.companies c
-        JOIN public.object_property_values opv
-          ON opv.object_reference_type = 'companies'
-         AND opv.object_reference_id = c.id
-        WHERE opv.property_name = 'MESSENGER_PAGE_ID'
-          AND opv.value = %s
+        JOIN public.custom_property_values cpv
+          ON cpv.reference_type = 'companies'
+         AND cpv.reference_id = c.id
+        WHERE cpv.name = 'MESSENGER_PAGE_ID'
+          AND cpv.value = %s
           AND COALESCE(c.is_deleted, false) = false
         LIMIT 1
         """
@@ -4909,10 +4909,10 @@ def get_messenger_token_by_page(page_id: str) -> tuple[str|None, str|None]:
 
         sql_token = """
         SELECT value
-        FROM public.object_property_values
-        WHERE object_reference_type = 'companies'
-          AND object_reference_id = %s
-          AND property_name = 'MESSENGER_PAGE_ACCESS_TOKEN'
+        FROM public.custom_property_values
+        WHERE reference_type = 'companies'
+          AND reference_id = %s
+          AND name = 'MESSENGER_PAGE_ACCESS_TOKEN'
           AND COALESCE(is_deleted, false) = false
         LIMIT 1
         """
