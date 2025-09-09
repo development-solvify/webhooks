@@ -4979,37 +4979,64 @@ import requests
 
 @app.route('/webhook/messenger', methods=['GET', 'POST'])
 def webhook_messenger():
+    logger.info("=" * 80)
+    logger.info("[Messenger] 🔄 Nueva petición webhook recibida")
+    logger.info(f"[Messenger] Método: {request.method}")
+    logger.info(f"[Messenger] Headers: {dict(request.headers)}")
+
     if request.method == 'GET':
         # Verificación de webhook (Messenger)
         mode = request.args.get('hub.mode')
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
+        
+        logger.info(f"[Messenger] 🔍 Verificación webhook:")
+        logger.info(f"[Messenger] - Mode: {mode}")
+        logger.info(f"[Messenger] - Token recibido: {token}")
+        logger.info(f"[Messenger] - Token esperado: {VERIFY_TOKEN}")
+        logger.info(f"[Messenger] - Challenge: {challenge}")
 
         if mode == 'subscribe' and token == VERIFY_TOKEN:
-            logger.info(f"[Messenger] Webhook verified OK. challenge={challenge}")
-            return challenge, 200  # devolver el challenge tal cual (texto plano)
+            logger.info(f"[Messenger] ✅ Webhook verificado correctamente")
+            return challenge, 200
         else:
-            logger.error(f"[Messenger] Webhook verify failed. mode={mode} token={token}")
+            logger.error(f"[Messenger] ❌ Verificación webhook fallida")
             return 'Forbidden', 403
 
-    # ---- A partir de aquí tu manejo POST existente (eco) ----
+    # Manejo de POST
     try:
+        logger.info("[Messenger] 📥 Procesando webhook POST")
         data = request.get_json(force=True)
+        logger.info(f"[Messenger] Payload recibido: {json.dumps(data, indent=2)}")
+
         if not data or 'entry' not in data:
+            logger.warning("[Messenger] ⚠️ Payload vacío o sin 'entry'")
             return 'ok', 200
 
         for entry in data.get('entry', []):
             entry_page_id = entry.get('id')
+            logger.info(f"[Messenger] 📑 Procesando entry para page_id={entry_page_id}")
+
             for messaging in entry.get('messaging', []):
+                logger.info(f"[Messenger] 💬 Procesando messaging: {json.dumps(messaging, indent=2)}")
+                
                 msg = messaging.get('message', {}) or {}
                 is_echo = bool(msg.get('is_echo'))
+                logger.info(f"[Messenger] - Is echo? {is_echo}")
 
+                # Determinar page_id
                 page_id = (messaging.get('sender', {}).get('id') if is_echo
                            else messaging.get('recipient', {}).get('id')) or entry_page_id
+                logger.info(f"[Messenger] 🔍 Page ID determinado: {page_id}")
 
+                # Obtener credenciales
                 company_id, page_token = get_messenger_token_by_page(page_id)
+                logger.info(f"[Messenger] 🔑 Credenciales obtenidas:")
+                logger.info(f"[Messenger] - Company ID: {company_id}")
+                logger.info(f"[Messenger] - Page token: {page_token[:20]}..." if page_token else "- Page token: None")
+
                 if not company_id or not page_token:
-                    logger.error(f"[Messenger] Falta company/token para page_id={page_id}")
+                    logger.error(f"[Messenger] ❌ Faltan credenciales para page_id={page_id}")
                     continue
 
                 sender_id = messaging.get('sender', {}).get('id')
@@ -5017,16 +5044,22 @@ def webhook_messenger():
                 mid = msg.get('mid')
                 text = (msg.get('text') or '').strip()
 
-                logger.info(f"💬 [Messenger] page={page_id} psid_sender={sender_id} psid_recipient={recipient_id} mid={mid} text={text!r} echo={is_echo}")
+                logger.info(f"[Messenger] 📝 Detalles del mensaje:")
+                logger.info(f"[Messenger] - Sender ID: {sender_id}")
+                logger.info(f"[Messenger] - Recipient ID: {recipient_id}")
+                logger.info(f"[Messenger] - Message ID: {mid}")
+                logger.info(f"[Messenger] - Texto: {text}")
 
                 if is_echo:
-                    logger.debug("[Messenger] Echo received; skipping response")
+                    logger.info("[Messenger] 🔁 Echo recibido - omitiendo respuesta")
                     continue
 
                 psid = sender_id
+                logger.info(f"[Messenger] 👤 PSID identificado: {psid}")
 
-                # (Opcional) persistir mensaje
+                # Persistir mensaje
                 try:
+                    logger.info("[Messenger] 💾 Guardando mensaje en BD")
                     chat_id = str(psid)
                     chat_url = f"https://www.facebook.com/messages/t/{psid}"
                     sql_ins = """
@@ -5035,16 +5068,18 @@ def webhook_messenger():
                             from_me, status, created_at, updated_at, is_deleted, chat_id, chat_url, assigned_to_id
                         ) VALUES (
                             gen_random_uuid(), %s, %s, NULL, %s, NOW(),
-                            FALSE, 'message_received', NOW(), NOW(), FALSE, %s, %s, NULL
+                            FALSE, 'messenger_received', NOW(), NOW(), FALSE, %s, %s, NULL
                         )
                     """
                     db_manager.execute_query(sql_ins, [text or '', None, mid or '', chat_id, chat_url], fetch_one=False)
-                except Exception:
-                    logger.exception("[Messenger] Error inserting external_messages")
+                    logger.info("[Messenger] ✅ Mensaje guardado correctamente")
+                except Exception as e:
+                    logger.exception(f"[Messenger] ❌ Error guardando mensaje: {str(e)}")
 
-                # ECO: responder con el mismo texto (dentro de 24h)
+                # Enviar eco
                 if text:
                     try:
+                        logger.info("[Messenger] 📤 Enviando eco")
                         base_url = "https://graph.facebook.com/v22.0/me/messages"
                         params = {"access_token": page_token}
                         payload = {
@@ -5052,17 +5087,33 @@ def webhook_messenger():
                             "recipient": {"id": psid},
                             "message": {"text": text}
                         }
+                        
+                        logger.info(f"[Messenger] Request de eco:")
+                        logger.info(f"[Messenger] - URL: {base_url}")
+                        logger.info(f"[Messenger] - Params: {params}")
+                        logger.info(f"[Messenger] - Payload: {payload}")
+                        
                         r = requests.post(base_url, params=params, json=payload, timeout=10)
+                        
+                        logger.info(f"[Messenger] Respuesta de eco:")
+                        logger.info(f"[Messenger] - Status: {r.status_code}")
+                        logger.info(f"[Messenger] - Response: {r.text}")
+                        
                         if r.status_code != 200:
-                            logger.error(f"[Messenger] Send failed ({r.status_code}): {r.text}")
+                            logger.error(f"[Messenger] ❌ Error enviando eco ({r.status_code}): {r.text}")
                         else:
-                            logger.info(f"[Messenger] Echo sent to {psid}: {text!r} resp={r.text}")
-                    except Exception:
-                        logger.exception("[Messenger] Error sending echo")
+                            logger.info(f"[Messenger] ✅ Eco enviado correctamente a {psid}: {text!r}")
+                            
+                    except Exception as e:
+                        logger.exception(f"[Messenger] ❌ Error enviando eco: {str(e)}")
 
+        logger.info("[Messenger] ✅ Procesamiento de webhook completado")
+        logger.info("=" * 80)
         return 'ok', 200
-    except Exception:
-        logger.exception("[Messenger] Unhandled error")
+        
+    except Exception as e:
+        logger.exception(f"[Messenger] 💥 Error no manejado: {str(e)}")
+        logger.info("=" * 80)
         return 'ok', 200
 
 from datetime import datetime, timedelta
