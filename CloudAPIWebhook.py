@@ -5719,7 +5719,6 @@ def save_lead_property(lead_id, property_name, property_value):
             logger.error(f"[Messenger] Property {property_name} no encontrada")
     except Exception as e:
         logger.exception(f"[Messenger] Error guardando propiedad {property_name}")
-
 # =================================================================================
 # OPCIONAL: ENDPOINTS DE ADMINISTRACIÓN (añadir al final de tu archivo)
 # =================================================================================
