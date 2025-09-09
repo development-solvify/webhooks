@@ -4887,7 +4887,12 @@ def resolve_phone_for_psid(page_id: str, psid: str) -> str|None:
         logger.exception("[Messenger] Error checking previous messages")
 
     return None  # no encontrado
+
 def get_messenger_token_by_page(page_id: str) -> tuple[str | None, str | None]:
+    """
+    Devuelve (company_id, PAGE_ACCESS_TOKEN) para un MESSENGER_PAGE_ID dado.
+    Usa properties.property_name en lugar de opv.property_name.
+    """
     try:
         sql = """
         WITH comp AS (
@@ -4899,26 +4904,22 @@ def get_messenger_token_by_page(page_id: str) -> tuple[str | None, str | None]:
             AND trim(opv.value) = %s
           ORDER BY opv.created_at DESC NULLS LAST
           LIMIT 1
-        ),
-        tok AS (
-          SELECT opv.value AS token
-          FROM public.object_property_values opv
-          JOIN public.properties p ON p.id = opv.property_id
-          JOIN comp c ON c.company_id = opv.object_reference_id
-          WHERE opv.object_reference_type = 'companies'
-            AND p.property_name = 'PAGE_ACCESS_TOKEN'
-          ORDER BY opv.created_at DESC NULLS LAST
-          LIMIT 1
         )
-        SELECT c.company_id::text, t.token
+        SELECT c.company_id::text,
+               opv.value AS page_access_token
         FROM comp c
-        LEFT JOIN tok t ON TRUE
+        JOIN public.object_property_values opv
+          ON opv.object_reference_type = 'companies'
+         AND opv.object_reference_id   = c.company_id
+        JOIN public.properties p ON p.id = opv.property_id
+        WHERE p.property_name = 'PAGE_ACCESS_TOKEN'
+        ORDER BY opv.created_at DESC NULLS LAST
         LIMIT 1;
         """
         row = db_manager.execute_query(sql, [page_id], fetch_one=True)
-        if row:
+        if row and row[0]:
             company_id, token = row[0], row[1]
-            if company_id and token:
+            if token:
                 logger.info(f"[Messenger] Found config for page_id={page_id}: company={company_id}")
                 return company_id, token
         logger.warning(f"[Messenger] No config found for page_id={page_id}")
@@ -4928,49 +4929,105 @@ def get_messenger_token_by_page(page_id: str) -> tuple[str | None, str | None]:
         return None, None
 
 
-
-@app.route('/webhook/messenger', methods=['GET','POST'])
-def messenger_webhook():
-    if request.method == 'GET':
-        mode = request.args.get('hub.mode')
-        token = request.args.get('hub.verify_token')
-        challenge = request.args.get('hub.challenge')
-        if mode == 'subscribe' and token == VERIFY_TOKEN:
-            logger.info("[Messenger] Webhook verified")
-            return challenge, 200
-        return 'Forbidden', 403
-
-    # POST
+def resolve_phone_for_psid(psid: str) -> str | None:
+    """
+    Mapea PSID -> phone del lead desde object_property_values + properties.
+    """
     try:
-        data = request.get_json(force=True) or {}
-        if data.get('object') != 'page':
+        sql = """
+        SELECT l.phone
+        FROM public.leads l
+        JOIN public.object_property_values opv
+          ON opv.object_reference_type = 'leads'
+         AND opv.object_reference_id   = l.id
+        JOIN public.properties p ON p.id = opv.property_id
+        WHERE p.property_name = 'MESSENGER_PSID'
+          AND trim(opv.value) = %s
+          AND COALESCE(l.is_deleted, false) = false
+        ORDER BY opv.created_at DESC NULLS LAST
+        LIMIT 1;
+        """
+        row = db_manager.execute_query(sql, [psid], fetch_one=True)
+        return row[0] if row else None
+    except Exception:
+        logger.exception("[Messenger] Error checking lead mapping (PSID -> phone)")
+        return None
+
+
+@app.route('/webhook/messenger', methods=['POST'])
+def webhook_messenger():
+    """
+    Webhook de Messenger (Page). Controla:
+    - is_echo: no mapear PSID cuando es eco (sender.id = Page ID)
+    - Resolución de company + PAGE_ACCESS_TOKEN vía properties.property_name
+    - Mapeo PSID -> lead.phone vía properties.property_name
+    """
+    try:
+        data = request.get_json(force=True)
+        if not data or 'entry' not in data:
             return 'ok', 200
 
         for entry in data.get('entry', []):
-            page_id = str(entry.get('id'))
-            company_id, page_token = get_messenger_token_by_page(page_id)
-            if not company_id or not page_token:
-                logger.error(f"[Messenger] Falta company/token para page_id={page_id}")
-                continue
+            page_id = entry.get('id')  # Page ID que envía el evento
+            for messaging in entry.get('messaging', []):
+                msg = messaging.get('message', {})
+                is_echo = bool(msg.get('is_echo'))
 
-            for ev in entry.get('messaging', []):
-                psid = ev.get('sender', {}).get('id')
-                msg = ev.get('message', {}) or {}
-                if not psid or not msg:
+                # Determinar page_id de forma robusta
+                # - En mensajes "normales": entry.id es el Page ID.
+                # - En eco: sender.id también es el Page ID.
+                if not page_id:
+                    page_id = messaging.get('sender', {}).get('id') if is_echo else messaging.get('recipient', {}).get('id')
+
+                # 1) Resolver company + PAGE_ACCESS_TOKEN
+                company_id, page_token = get_messenger_token_by_page(page_id)
+                if not company_id or not page_token:
+                    logger.error(f"[Messenger] Falta company/token para page_id={page_id}")
                     continue
-                text = msg.get('text')
-                mid  = msg.get('mid')
-                ts   = ev.get('timestamp')
 
-                logger.info(f"💬 [Messenger] page={page_id} psid={psid} mid={mid} text={text!r}")
+                # Log básico
+                sender_id = messaging.get('sender', {}).get('id')
+                recipient_id = messaging.get('recipient', {}).get('id')
+                mid = msg.get('mid')
+                text = (msg.get('text') or '').strip()
+                logger.info(f"💬 [Messenger] page={page_id} psid_sender={sender_id} psid_recipient={recipient_id} mid={mid} text={text!r} echo={is_echo}")
 
-                save_messenger_incoming_message(page_id, psid, text, mid, ts)
+                # 2) Ignorar ECHOS (evitan bucles y no tienen PSID de usuario en sender.id)
+                if is_echo:
+                    logger.debug("[Messenger] Echo received; skipping PSID mapping and responses")
+                    continue
+
+                # PSID real del usuario está en sender.id cuando NO es echo
+                psid = sender_id
+
+                # 3) Intentar mapear PSID -> phone (lead)
+                phone = resolve_phone_for_psid(psid)
+
+                # 4) Guarda el mensaje entrante en tu tabla externa (como haces en WhatsApp)
+                chat_id = str(psid)  # puedes normalizar a "messenger:{psid}" si prefieres
+                chat_url = f"https://www.facebook.com/messages/t/{psid}"
+                try:
+                    sql_ins = """
+                    INSERT INTO public.external_messages (
+                        id, message, sender_phone, responsible_email, last_message_uid, last_message_timestamp,
+                        from_me, status, created_at, updated_at, is_deleted, chat_id, chat_url, assigned_to_id
+                    ) VALUES (
+                        gen_random_uuid(), %s, %s, NULL, %s, NOW(),
+                        FALSE, 'message_received', NOW(), NOW(), FALSE, %s, %s, NULL
+                    )
+                    """
+                    db_manager.execute_query(sql_ins, [text or '', phone, mid or '', chat_id, chat_url], fetch_one=False)
+                except Exception:
+                    logger.exception("[Messenger] Error inserting external_messages")
+
+                # 5) (Opcional) Responder algo si quieres (sólo si procede)
+                # if text:
+                #     send_messenger_text(page_token, psid, "Gracias por tu mensaje.")
 
         return 'ok', 200
     except Exception:
-        logger.exception("[Messenger] Error processing webhook")
-        return 'error', 500
-
+        logger.exception("[Messenger] Unhandled error")
+        return 'ok', 200
 
 @app.route('/office_hours', methods=['GET'])
 def office_hours_status():
