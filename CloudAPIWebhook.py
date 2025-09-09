@@ -5473,10 +5473,16 @@ def create_portal_user(data, source=None, config_obj=None):
             logger.error("No valid config object with api_token found")
             return None
 
-        category_id = "a9242a58-4f5d-494c-8a74-45f8cee150e6"  # LSO
+        # Determinar category_id y base_url según config file [APP]
+        use_test = getattr(config_obj, "use_test", None)
+        base_url = getattr(config_obj, "base_url", None)
+        api_token = getattr(config_obj, "api_token", None)
+
+        # Category IDs
+        category_id = "bcb1ae3e-4c23-4461-9dae-30ed137d53ee" if use_test else "a9242a58-4f5d-494c-8a74-45f8cee150e6"
+        url = f"{base_url}/leads/{category_id}/"
 
         print("Creating portal user with data:", data)
-        url = f"https://test.solvify.es/api/leads/{category_id}/"
 
         # Extraer nombre y apellidos
         first_name = data.get("first_name") or data.get("nombre_y_apellidos", "").split()[0]
@@ -5488,7 +5494,7 @@ def create_portal_user(data, source=None, config_obj=None):
         phone = strip_country_code(phone)
 
         # Campaña y formulario
-        campaign = data.get("campaign_name") or data.get("campaign") or data.get("company_name") or "default"
+        campaign = data.get("campaign_name") or data.get("campaign") or data.get("company_name") or "Default"
         form_name = data.get("form_name") or "Messenger Conversation"
 
         # Token de autenticación desde config
