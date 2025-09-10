@@ -2544,8 +2544,12 @@ class MessageService:
             return False
 
     def save_outgoing_message(self, customer_phone: str, message_text: str, message_id: str,
-                              email: str = None, assigned_to_id: str = None) -> bool:
+                              email: str = None, assigned_to_id: str = None, is_failed: bool = False) -> bool:
         try:
+            if not message_id:
+                logger.warning("❌ Attempted to save outgoing message without wamid")
+                return False
+                
             clean_phone = PhoneUtils.strip_34(customer_phone)
             lead = self.lead_service.get_lead_data_by_phone(clean_phone)
             derived_email = lead.get('responsible_email') if lead else None
