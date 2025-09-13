@@ -674,6 +674,8 @@ def create_portal_user(data, source, config=None):
             company_name = 'sheets'                 # <-- lo que pides
         elif source == 'FBLexCorner':
             company_name = 'Lex Corner'
+        elif source == 'despcaldero':
+            company_name = 'Despacho Calero'            
         else:
             company_name = source
     
