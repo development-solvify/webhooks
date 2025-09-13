@@ -586,6 +586,19 @@ class ExtendedFileService:
             Ahora acepta phone opcional para resolver token/company específico.
             """
             try:
+                # Get company-specific credentials if phone provided
+                if phone:
+                    creds = get_whatsapp_credentials_for_phone(phone)
+                    # Log detailed credential info
+                    logger.info("=" * 80)
+                    logger.info(f"🔐 Processing media {media_id} with credentials for phone {phone}:")
+                    logger.info(f"📱 Company: {creds.get('company_name', 'Default')}")
+                    logger.info(f"🆔 Company ID: {creds.get('company_id', 'Default')}")
+                    logger.info(f"🔑 Token: {creds.get('access_token', '')[:20]}...")
+                    logger.info(f"📞 Phone Number ID: {creds.get('phone_number_id', '')}")
+                    logger.info(f"💼 Business ID: {creds.get('business_id', '')}")
+                    logger.info("=" * 80)
+
                 # 1. Obtener URL del media (usa token adecuado si phone provisto)
                 media_url = self.get_whatsapp_media_url(media_id, phone)
                 if not media_url:
@@ -1763,6 +1776,21 @@ class WhatsAppService:
             if not PhoneUtils.validate_spanish_phone(clean_phone):
                 raise ValueError(f"Número de teléfono inválido: {to_phone}")
 
+            # Get company-specific credentials first
+            creds = get_whatsapp_credentials_for_phone(clean_phone)
+            
+            # Log detailed credential info
+            logger.info("=" * 80)
+            logger.info(f"🔐 Sending template '{template_name}' with credentials for phone {clean_phone}:")
+            logger.info(f"📱 Company: {creds.get('company_name', 'Default')}")
+            logger.info(f"🆔 Company ID: {creds.get('company_id', 'Default')}")
+            logger.info(f"🔑 Token: {creds.get('access_token', '')[:20]}...")
+            logger.info(f"📞 Phone Number ID: {creds.get('phone_number_id', '')}")
+            logger.info(f"🌐 Base URL: {creds.get('base_url', '')}")
+            logger.info(f"💼 Business ID: {creds.get('business_id', '')}")
+            logger.info(f"📋 Template Data: {template_data}")
+            logger.info("=" * 80)
+
             # 1. Obtener información de la compañía y su configuración
             query = """
                 SELECT l.id as lead_id, d.company_id, c.name as company_name, 
@@ -1848,6 +1876,25 @@ class WhatsAppService:
             clean_phone = PhoneUtils.strip_34(to_phone)
             if not PhoneUtils.validate_spanish_phone(clean_phone):
                 raise ValueError(f"Número de teléfono inválido: {to_phone}")
+
+            # Get company-specific WhatsApp credentials
+            creds = get_whatsapp_credentials_for_phone(clean_phone)
+            headers = creds.get('headers', self.headers)
+            base_url = creds.get('base_url', self.base_url)
+            
+            # Log detailed credential info
+            logger.info("=" * 80)
+            logger.info(f"🔐 Sending text message with credentials for phone {clean_phone}:")
+            logger.info(f"📱 Company: {creds.get('company_name', 'Default')}")
+            logger.info(f"🆔 Company ID: {creds.get('company_id', 'Default')}")
+            logger.info(f"🔑 Token: {creds.get('access_token', '')[:20]}...")
+            logger.info(f"📞 Phone Number ID: {creds.get('phone_number_id', '')}")
+            logger.info(f"🌐 Base URL: {base_url}")
+            logger.info(f"💼 Business ID: {creds.get('business_id', '')}")
+            logger.info("=" * 80)
+
+            logger.debug(f"Using credentials - base_url: {base_url}")
+            logger.debug(f"Using credentials - headers: {headers}")
 
             # 1. Obtener información de la compañía y su configuración
             query = """
