@@ -666,19 +666,28 @@ def create_portal_user(data, source, config=None):
 
     cat_id = 'bcb1ae3e-4c23-4461-9dae-30ed137d53e2'
     
-    # 3️⃣ Determinar company_name desde config o fallback
+    app.logger.debug(f"Categoría de PortalUser para {full}: {cat_id}")    # 3️⃣ Determinar company_name desde config o fallback
     company_name = config.get("company_name") if config else None
+    app.logger.debug(f"=== COMPANY NAME DEBUG ===")
+    app.logger.debug(f"config.get('company_name'): '{company_name}'")
+    app.logger.debug(f"source recibido: '{source}'")
 
     if not company_name:
         if source in ('Backup_FB', 'Alianza_FB', 'MARTIN'):
-            company_name = 'sheets'                 # <-- lo que pides
+            company_name = 'sheets'
+            app.logger.debug("Company name asignado: 'sheets'")
         elif source == 'FBLexCorner':
             company_name = 'Lex Corner'
+            app.logger.debug("Company name asignado: 'Lex Corner'")
         elif source == 'despcaldero':
-            company_name = 'Despacho Calero'            
+            company_name = 'Despacho Calero'
+            app.logger.debug("Company name asignado: 'Despacho Calero'")
         else:
             company_name = source
+            app.logger.debug(f"Company name asignado desde source: '{company_name}'")
     
+    app.logger.debug(f"Company name final antes de DB lookup: '{company_name}'")
+
     # 4️⃣ Lookup dinámico de company_id
     company_id = None
     try:
