@@ -684,7 +684,7 @@ def create_portal_user(data, source, config=None):
     try:
         conn = get_supabase_connection()
         cur = conn.cursor()
-        cur.execute("SELECT id FROM companies WHERE name = %s LIMIT 1", (company_name,))
+        cur.execute("SELECT id FROM companies WHERE LOWER(name) = %s LIMIT 1", (company_name,))
         row = cur.fetchone()
         company_id = str(row[0]) if row else None
         if company_id:
@@ -1061,7 +1061,7 @@ def receive_b2b_lead():
     alias_map = {
         "despacho calero": "DespCaldero",
         "despcaldero": "DespCaldero",
-        "despcalero": "DespCaldero",
+        "despcalero": "DespCaldero"
     }
     src_in = (raw.get("source") or raw.get("Source") or "").strip()
     src_norm_l = src_in.lower()
