@@ -693,7 +693,7 @@ def create_portal_user(data, source, config=None):
     try:
         conn = get_supabase_connection()
         cur = conn.cursor()
-        cur.execute("SELECT id FROM companies WHERE LOWER(name) = %s LIMIT 1", (company_name,))
+        cur.execute("SELECT id FROM companies WHERE LOWER(name) = LOWER(%s) LIMIT 1", (company_name,))
         row = cur.fetchone()
         company_id = str(row[0]) if row else None
         if company_id:
