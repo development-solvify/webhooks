@@ -1150,6 +1150,13 @@ def receive_b2b_lead():
         app.logger.debug(f"  '{key}': '{value}' (tipo: {type(value)})")
 
     # --- Blindaje Despacho calero: completar campos críticos desde RAW si faltan ---
+
+    app.logger.debug(f"=== BLINDAJE DEBUG: source='{source}', src_norm='{src_norm}' ===")
+    app.logger.debug(f"¿src_norm en lista?: {src_norm in ('despacho calero', 'despcaldero', 'despcalero')}")
+
+    if src_norm in ("despacho calero", "despcaldero", "despcalero"):
+        app.logger.debug("ENTRANDO EN BLINDAJE DESPCALDERO")
+
     src_norm = (source or "").strip().lower()
     if src_norm in ("despacho calero", "despcaldero", "despcalero"):
         # Deuda
