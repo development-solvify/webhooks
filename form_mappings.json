@@ -114,7 +114,7 @@
         "check_debt_amount": true,
         "rejected_amounts": ["menos_de_8000€", "sin_deudas"]
       }
-    }    
+    },
     "Backup_FB": {
       "description": "Sheet mapping backup",
       "fields": {
