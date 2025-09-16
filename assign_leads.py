@@ -57,50 +57,20 @@ def safe_json_load(x):
         return None
 
 def get_company_id_for_lead(lead_id: str, conn):
-    """Primero intenta getcompanyidbyphone(lead_id). Si no, intenta get_lead_data y/o deals."""
-    with conn.cursor() as cur:
-        try:
-            cur.execute("SELECT getcompanyidbyphone(%s)", (lead_id,))
-            row = cur.fetchone()
-            if row and row[0]:
-                cid = str(row[0])
-                logging.info(f"[lead_id={lead_id}] company_id via getcompanyidbyphone => {cid}")
-                return cid
-            logging.warning(f"[lead_id={lead_id}] getcompanyidbyphone devolvió NULL")
-        except Exception as e:
-            logging.warning(f"[lead_id={lead_id}] getcompanyidbyphone no disponible: {e}")
-
-    # Fallback: get_lead_data
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT get_lead_data(%s)", (lead_id,))
-            r = cur.fetchone()
-        data = safe_json_load(r[0]) if r else None
-        if data and (data.get("deals") or []):
-            deals = [d for d in data["deals"] if not d.get("is_deleted", False)]
-            deals.sort(key=lambda d: d.get("created_at",""), reverse=True)
-            if deals and deals[0].get("company_id"):
-                cid = deals[0]["company_id"]
-                logging.info(f"[lead_id={lead_id}] company_id via get_lead_data => {cid}")
-                return cid
-    except Exception as e:
-        logging.warning(f"[lead_id={lead_id}] Fallback get_lead_data falló: {e}")
-
-    # Último: direct deals
+    """Obtiene company_id directamente desde deals usando lead_id."""
     with conn.cursor() as cur:
         cur.execute("""
             SELECT company_id
             FROM deals
-            WHERE lead_id = %s AND is_deleted = false
-            ORDER BY created_at DESC
+            WHERE lead_id = %s
             LIMIT 1
         """, (lead_id,))
-        r2 = cur.fetchone()
-    if r2 and r2[0]:
-        cid = str(r2[0])
+        row = cur.fetchone()
+    if row and row[0]:
+        cid = str(row[0])
         logging.info(f"[lead_id={lead_id}] company_id via deals => {cid}")
         return cid
-
+    logging.warning(f"[lead_id={lead_id}] No se encontró company_id en deals")
     return None
 
 def get_candidates_from_conf(company_id: str, category_id: str, conn):
@@ -293,6 +263,36 @@ def webhook_assign_lead():
 
         # 3) asignar con bloqueo
         deal_id, result = assign_deal_locked(lead_id, owner_id, conn)
+        logging.info(f"[lead_id={lead_id}] asignación result={result} deal_id={deal_id} owner_id={owner_id} strategy={strategy}")
+
+        if not deal_id:
+            return jsonify({"status":"error","error":result}), 500
+
+        # Si fue idempotente, dejamos constancia
+        final_strategy = "idempotent" if result == "idempotent" else strategy
+
+        return jsonify({
+            "status": "ok",
+            "lead_id": lead_id,
+            "company_id": company_id,
+            "categoria": categoria,
+            "deal_id": deal_id,
+            "assigned_user_id": owner_id,
+            "strategy": final_strategy
+        }), 200
+
+    except Exception as e:
+        logging.exception(f"[lead_id={lead_id}] internal_error")
+        return jsonify({"status":"error","error":"internal_error"}), 500
+    finally:
+        try:
+            if conn: conn.close()
+        except Exception:
+            pass
+
+if __name__ == "__main__":
+    logging.info("Iniciando servicio Flask en 0.0.0.0:5020 /assign_lead")
+    app.run(host="0.0.0.0", port=5020, debug=False)
         logging.info(f"[lead_id={lead_id}] asignación result={result} deal_id={deal_id} owner_id={owner_id} strategy={strategy}")
 
         if not deal_id:
