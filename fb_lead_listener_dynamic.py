@@ -184,6 +184,23 @@ class FormMappingManager:
                         "check_debt_questions": False,
                         "required_fields": ["Nombre", "Mail", "Teléfono"]
                     }
+                },
+                "Piqueras": {
+                    "description": "Mapping para Piqueras Borisova desde N8N",
+                    "company_name": "Piqueras Borisova",
+                    "company_id": "47ab24c3-b918-46ac-b3c4-975095b001ca",
+                    "fields": {
+                        "Fecha": "created_time",
+                        "Nombre": "nombre_y_apellidos",
+                        "Teléfono": "número_de_teléfono",
+                        "Mail": "correo_electrónico",
+                        "Deuda": "monto_total_deudas",
+                        "Cantidad de deudas": "cantidad_acreedores"
+                    },
+                    "validations": {
+                        "check_debt_questions": False,
+                        "required_fields": ["Nombre", "Mail", "Teléfono"]
+                    }
                 }                
             }
         }
@@ -428,29 +445,12 @@ def build_info_lead_content(data: dict, source: str = None):
     question_mappings = {
         # Campos estándar que pueden venir de diferentes formularios
         '¿dispone_de_más_de_un_acreedor?': "Tiene dos o más deudas",
-        '¿tienes_más_de_1_acreedor?': "Tiene dos o más deudas",
-        'tienes_más_de_1_acreedor?': "Tiene dos o más deudas",
-        
         '¿tienes_más_de_8.000€_en_deudas?': "Tiene más de 8.000€ de deuda",
-        '¿tienes_más_de_8000€_en_deudas?': "Tiene más de 8.000€ de deuda",
-        'tienes_más_de_8000€_en_deudas?': "Tiene más de 8.000€ de deuda",
-        
-        '¿tienes_más_de_6.000 €_en_deuda?': "Tiene más de 6.000€ de deuda privada",
         '¿tienes_más_de_6000€_en_deuda_privada?': "Tiene más de 6.000€ de deuda privada",
-        'tienes_más_de_6000€_en_deuda_privada?': "Tiene más de 6.000€ de deuda privada",
-        
-        '¿ingresa_más_de_1.000 €_al_mes?': "Tiene ingresos mensuales superiores a 1.000€",
         '¿tienes_ingresos_superiores_a_1000€?': "Tiene ingresos mensuales superiores a 1.000€",
-        'tienes_ingresos_superiores_a_1000€?': "Tiene ingresos mensuales superiores a 1.000€",
-        
         '¿tienes_ingresos_superiores_a_600€?': "Tiene ingresos mensuales superiores a 600€",
-        'tienes_ingresos_superiores_a_600€?': "Tiene ingresos mensuales superiores a 600€",
-        
         '¿tienes_bienes?': "Tiene bienes",
-        'tienes_bienes?': "Tiene bienes",
-        
         '¿tienes_hipoteca_en_alguno_de_sus_bienes?': "Tiene hipoteca en alguno de sus bienes",
-        'tienes_hipoteca_en_alguno_de_sus_bienes': "Tiene hipoteca en alguno de sus bienes",
         
         # Campos específicos de FBLexCorner
         'monto_total_deudas': "Monto total de deudas",
@@ -782,11 +782,9 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
     try:
         conn = get_supabase_connection()
         cur = conn.cursor()
+        cur.execute("SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
+                    "WHERE {cond} ORDER BY d.created_at DESC LIMIT 1")
         phone = strip_country_code(data.get('número_de_teléfono','') or '')
-        query = (
-            "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
-            "WHERE {cond} ORDER BY d.created_at DESC LIMIT 1"
-        )
         if phone:
             cond = "TRIM(REPLACE(REPLACE(l.phone,'+34',''),' ',''))=%s AND l.is_deleted=FALSE AND d.is_deleted=FALSE"
             cur.execute(query.format(cond=cond), (phone,))
@@ -1070,7 +1068,8 @@ def receive_b2b_lead():
     alias_map = {
         "despacho calero": "DespCaldero",
         "despcaldero": "DespCaldero",
-        "despcalero": "DespCaldero"
+        "despcalero": "DespCaldero",
+        "piqueras": "Piqueras"  # <-- Añadido alias para Piqueras Borisova
     }
     src_in = (raw.get("source") or raw.get("Source") or "").strip()
     src_norm_l = src_in.lower()
@@ -1123,7 +1122,7 @@ def receive_b2b_lead():
         if not current_value:
             app.logger.debug(f"FALLBACK: Buscando '{target_field}' (actual: '{current_value}')")
             for possible_source in possible_sources:
-                raw_value_original = raw.get(possible_source, '')
+                raw_value_original = raw.get(posible_source, '')
                 raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''
                 if raw_value:
                     data[target_field] = raw_value

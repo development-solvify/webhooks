@@ -94,6 +94,27 @@
         "rejected_amounts": ["menos_de_8000€", "sin_deudas"]
       }
     },
+    "piqueras": {
+      "description": "Mapping para Despacho Piqueras",
+      "company_name": "Piqueras Borisova",
+      "fields": {
+        "Fecha": "created_time",
+        "Nombre": "nombre_y_apellidos",
+        "Correo electrónico": "correo_electrónico",
+        "Teléfono": "número_de_teléfono",
+        "¿A cuánto asciende el conjunto de tus deudas?": "monto_total_deudas",
+        "¿En qué situación laboral te encuentras?": "situacion_laboral",
+        "Campaña": "campaign_name",
+        "Audiencia": "audiencia", 
+        "Anuncio": "anuncio",
+        "Formulario": "form_name",
+        "Leadgen Id": "leadgen_id"
+      },
+      "validations": {
+        "check_debt_amount": true,
+        "rejected_amounts": ["menos_de_8000€", "sin_deudas"]
+      }
+    }    
     "Backup_FB": {
       "description": "Sheet mapping backup",
       "fields": {
