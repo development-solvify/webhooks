@@ -95,7 +95,7 @@
       }
     },
     "piqueras": {
-      "description": "Mapping para Despacho Piqueras",
+      "description": "Mapping para Despacho Piqueras Borisova",
       "company_name": "Piqueras Borisova",
       "fields": {
         "Fecha": "created_time",
