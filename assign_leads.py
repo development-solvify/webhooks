@@ -1,3 +1,49 @@
+# -*- coding: utf-8 -*-
+"""
+Servicio Webhook para Asignación Automática de Propietarios de Deals.
+
+DESCRIPCIÓN:
+Este servicio Flask recibe peticiones POST para asignar automáticamente un propietario (usuario) a un deal basado en un lead_id.
+La asignación se hace de manera inteligente, priorizando configuraciones específicas por compañía y categoría, y usando fallbacks si no hay configuración.
+
+ENDPOINT PRINCIPAL:
+  POST /assign_lead
+
+PAYLOAD ESPERADO (JSON):
+  {
+    "lead_id": "string",       // Requerido: ID del lead a procesar.
+    "categoria": "string",     // Requerido: ID de la categoría del deal.
+    "propietario": "string",   // Opcional: ID de usuario sugerido como fallback.
+    "telefono": "string"       // Opcional: Teléfono para resolver la compañía.
+  }
+
+LÓGICA DE FUNCIONAMIENTO:
+1. RESOLVER COMPAÑÍA:
+   - Primero intenta por teléfono usando variantes (+34, 34, etc.).
+   - Si no, usa el lead_id para buscar en deals.
+
+2. SELECCIONAR PROPIETARIO:
+   - Busca configuración en 'conf_user_assignees' para la compañía y categoría.
+   - Si hay uno solo: lo asigna directamente.
+   - Si hay varios: distribuye por peso y carga actual, asignando al que tenga mayor déficit.
+   - Fallbacks: usa 'propietario' del payload o el usuario con menos carga en la compañía.
+
+3. ASIGNACIÓN:
+   - Actualiza el deal en la base de datos con bloqueo para evitar conflictos.
+   - Es idempotente: si ya está asignado correctamente, no cambia nada.
+
+RESPUESTA:
+- 200 OK: Asignación exitosa (o idempotente).
+- Errores 4xx/5xx: Payload inválido, compañía no encontrada, sin candidatos, etc.
+
+CONFIGURACIÓN:
+- Lee 'scripts.conf' para conexión a DB.
+- Logs rotativos en 'assign_leads.log'.
+- Puerto: 5020, host: 0.0.0.0.
+
+EJEMPLO DE USO:
+curl -X POST http://localhost:5020/assign_lead -H "Content-Type: application/json" -d '{"lead_id": "123", "categoria": "abc"}'
+"""
 import os
 import sys
 import json
@@ -38,7 +84,7 @@ config.read("scripts.conf")
 
 def get_db_connection():
     db = config["DB"]
-    logging.info(f"[DB] Conectando a {db['DB_HOST']}:{db.get('DB_PORT','5432')} DB={db['DB_NAME']} USER={db['DB_USER']}")
+    logging.info(f"Base de Datos: Conectando a {db['DB_HOST']}:{db.get('DB_PORT','5432')} (Base: {db['DB_NAME']}, Usuario: {db['DB_USER']})")
     return pg8000.connect(
         user=db["DB_USER"],
         password=db["DB_PASS"],
@@ -102,10 +148,10 @@ def resolve_company_id(telefono: str, lead_id: str, conn):
         row = cur.fetchone()
     if row and row[0]:
         cid = str(row[0])
-        logging.info(f"[lead_id={lead_id}] company_id via deals => {cid}")
+        logging.info(f"Lead {lead_id}: Compañía resuelta a '{cid}' usando deals.")
         return cid
 
-    logging.warning(f"[lead_id={lead_id}] No se pudo resolver company_id (teléfono/deals).")
+    logging.warning(f"Lead {lead_id}: No se pudo resolver la compañía (teléfono o deals).")
     return None
 
 def get_candidates_from_conf(company_id: str, category_id: str, conn):
@@ -218,12 +264,12 @@ def root_post():
 @app.post("/assign_lead")
 def webhook_assign_lead():
     raw = request.data.decode("utf-8", errors="ignore")
-    logging.info(f"[WEBHOOK] POST /assign_lead len={len(raw)} body={raw}")
+    logging.info(f"Webhook: Petición POST recibida en /assign_lead (longitud: {len(raw)}). Cuerpo: {raw}")
 
     try:
         data = json.loads(raw)
     except Exception:
-        logging.exception("[WEBHOOK] JSON inválido")
+        logging.exception("Webhook: Error al decodificar el JSON del payload.")
         return jsonify({"status":"error","error":"invalid_json"}), 400
 
     lead_id    = (data or {}).get("lead_id")
@@ -232,10 +278,10 @@ def webhook_assign_lead():
     telefono   = (data or {}).get("telefono")
 
     if not lead_id:
-        logging.error("[WEBHOOK] Falta lead_id")
+        logging.error("Webhook: Petición inválida. Falta el campo 'lead_id'.")
         return jsonify({"status":"error","error":"missing_lead_id"}), 400
     if not categoria:
-        logging.error(f"[lead_id={lead_id}] Falta categoria")
+        logging.error(f"Lead {lead_id}: Petición inválida. Falta el campo 'categoria'.")
         return jsonify({"status":"error","error":"missing_categoria"}), 400
 
     conn = None
@@ -245,14 +291,14 @@ def webhook_assign_lead():
         # 1) company_id: primero por teléfono, luego por deals(lead_id)
         company_id = resolve_company_id(telefono, lead_id, conn)
         if not company_id:
-            logging.error(f"[lead_id={lead_id}] No se pudo resolver company_id")
+            logging.error(f"Lead {lead_id}: No se pudo resolver la compañía. Abortando proceso.")
             return jsonify({"status":"error","error":"company_not_found"}), 404
 
-        logging.info(f"[lead_id={lead_id}] company_id={company_id} categoria={categoria}")
+        logging.info(f"Lead {lead_id}: Procesando para Compañía '{company_id}', Categoría '{categoria}'.")
 
         # 2) candidatos desde conf_user_assignees
         candidates = get_candidates_from_conf(company_id, categoria, conn)
-        logging.info(f"[lead_id={lead_id} company_id={company_id}] candidatos={candidates}")
+        logging.info(f"Lead {lead_id}: Candidatos encontrados por configuración: {candidates}")
 
         strategy = None
         owner_id = None
@@ -261,17 +307,20 @@ def webhook_assign_lead():
             if len(candidates) == 1:
                 owner_id = candidates[0]["user_id"]
                 strategy = "single_conf_user_assignees"
+                logging.info(f"Lead {lead_id}: Estrategia '{strategy}' - Propietario único asignado: {owner_id}.")
             else:
                 candidate_ids = [c["user_id"] for c in candidates]
                 counts = get_live_distribution(company_id, categoria, candidate_ids, conn)
-                logging.info(f"[company_id={company_id} categoria={categoria}] dist={counts}")
+                logging.info(f"Lead {lead_id}: Distribución de carga actual entre candidatos: {counts}")
                 owner_id, strategy = choose_owner_by_weight_quota(candidates, counts)
+                logging.info(f"Lead {lead_id}: Estrategia '{strategy}' - Propietario elegido por cuota: {owner_id}.")
         else:
             # Fallbacks
+            logging.warning(f"Lead {lead_id}: No hay configuración específica. Usando estrategias de respaldo.")
             if propietario_hint:
                 owner_id = propietario_hint
                 strategy = "fallback_propietario"
-                logging.warning(f"[lead_id={lead_id}] Sin conf_user_assignees. Usando propietario={owner_id}")
+                logging.info(f"Lead {lead_id}: Estrategia '{strategy}' - Usando propietario del payload: {owner_id}.")
             else:
                 # least load por compañía (sin filtrar categoría)
                 with conn.cursor() as cur:
@@ -290,21 +339,22 @@ def webhook_assign_lead():
                 if r and r[0]:
                     owner_id = r[0]
                     strategy = "fallback_least_load_company"
-                    logging.warning(f"[lead_id={lead_id}] Sin conf ni propietario. least_load => {owner_id}")
+                    logging.info(f"Lead {lead_id}: Estrategia '{strategy}' - Propietario con menor carga en la compañía: {owner_id}.")
                 else:
-                    logging.error(f"[lead_id={lead_id}] No hay candidatos")
+                    logging.error(f"Lead {lead_id}: No se encontraron candidatos por ninguna estrategia.")
                     return jsonify({"status":"error","error":"no_candidates"}), 409
 
         # 3) asignar con bloqueo
         deal_id, result = assign_deal_locked(lead_id, owner_id, conn)
-        logging.info(f"[lead_id={lead_id}] asignación result={result} deal_id={deal_id} owner_id={owner_id} strategy={strategy}")
+        logging.info(f"Lead {lead_id}: Resultado de asignación: '{result}'. Deal ID: {deal_id}, Propietario: {owner_id}.")
 
         if not deal_id:
+            logging.error(f"Lead {lead_id}: Falló la asignación en la base de datos. Razón: {result}.")
             return jsonify({"status":"error","error":result}), 500
 
         final_strategy = "idempotent" if result == "idempotent" else strategy
 
-        return jsonify({
+        response_data = {
             "status": "ok",
             "lead_id": lead_id,
             "company_id": company_id,
@@ -312,10 +362,12 @@ def webhook_assign_lead():
             "deal_id": deal_id,
             "assigned_user_id": owner_id,
             "strategy": final_strategy
-        }), 200
+        }
+        logging.info(f"Lead {lead_id}: Proceso completado exitosamente. Respuesta enviada: {response_data}")
+        return jsonify(response_data), 200
 
     except Exception:
-        logging.exception(f"[lead_id={lead_id}] internal_error")
+        logging.exception(f"Lead {lead_id}: Error interno inesperado durante el procesamiento.")
         return jsonify({"status":"error","error":"internal_error"}), 500
     finally:
         try:
@@ -324,5 +376,5 @@ def webhook_assign_lead():
             pass
 
 if __name__ == "__main__":
-    logging.info("Iniciando servicio Flask en 0.0.0.0:5020 /assign_lead")
+    logging.info("Servicio de Asignación de Leads: Iniciando en http://0.0.0.0:5020")
     app.run(host="0.0.0.0", port=5020, debug=False)
