@@ -904,7 +904,7 @@ def receive_lead():
         if not current_value:
             app.logger.debug(f"FALLBACK: Buscando '{target_field}' (actual: '{current_value}')")
             for possible_source in possible_sources:
-                raw_value_original = raw.get(posible_source, '')
+                raw_value_original = raw.get(possible_source, '')
                 raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''  # ← SEGURO: convertir a str
                 if raw_value:
                     data[target_field] = raw_value
@@ -1031,7 +1031,7 @@ def receive_alianza_lead():
         if not current_value:
             app.logger.debug(f"FALLBACK: Buscando '{target_field}' (actual: '{current_value}')")
             for possible_source in possible_sources:
-                raw_value_original = raw.get(posible_source, '')
+                raw_value_original = raw.get(possible_source, '')
                 raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''
                 if raw_value:
                     data[target_field] = raw_value
