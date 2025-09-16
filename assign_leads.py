@@ -89,25 +89,6 @@ def resolve_company_id(telefono: str, lead_id: str, conn):
     1) Intenta getcompanyidbyphone(telefono) probando variantes (+34/34/raw).
     2) Si no hay match, intenta por deals (lead_id) el más reciente no borrado.
     """
-    # 1) Por teléfono (función)
-    tried = []
-    try:
-        variants = phone_variants_for_lookup(telefono)
-        if not variants and telefono:
-            variants = [telefono]
-        for v in variants:
-            tried.append(v)
-            with conn.cursor() as cur:
-                cur.execute("SELECT getcompanyidbyphone(%s)", (v,))
-                row = cur.fetchone()
-            if row and row[0]:
-                cid = str(row[0])
-                logging.info(f"[lead_id={lead_id}] company_id via getcompanyidbyphone('{v}') => {cid}")
-                return cid
-        logging.warning(f"[lead_id={lead_id}] getcompanyidbyphone sin match. Intentos: {tried}")
-    except Exception as e:
-        logging.warning(f"[lead_id={lead_id}] getcompanyidbyphone error: {e}. Intentos: {tried}")
-
     # 2) Fallback por deals (más reciente no borrado)
     with conn.cursor() as cur:
         cur.execute("""
