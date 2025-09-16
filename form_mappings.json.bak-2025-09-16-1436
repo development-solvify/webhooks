@@ -1,0 +1,158 @@
+{
+  "default_fb": {
+    "description": "Mapping por defecto para formularios FB",
+    "fields": {
+      "full name": "nombre_y_apellidos",
+      "email": "correo_electrónico", 
+      "phone_number": "número_de_teléfono"
+    },
+    "validations": {
+      "check_debt_questions": true,
+      "min_debt_amount": null
+    }
+  },
+  "fb_extended": {
+    "description": "Mapping extendido FB con preguntas adicionales",
+    "inherits_from": "default_fb",
+    "fields": {
+      "¿tienes_dos_o_más_deudas?": "tienes_más_de_1_acreedor?",
+      "¿tienes_más_de_12.000_euros_en_deudas?": "tienes_más_de_8000€_en_deudas?",
+      "¿de_estas_deudas_tienes_más_de_6.000€_de_deuda_privada_esto_es_con_bancos,_financieras,_procedentes_de_tarjetas_de_crédito?": "tienes_más_de_6000€_en_deuda_privada?",
+      "¿entran_en_casa_unos_ingresos_mensuales_superiores_a_600€?": "tienes_ingresos_superiores_a_600€?",
+      "¿tienes_algún_bien_como_una_casa,_parking,_terreno_o_local_en_propiedad?": "tienes_bienes?",
+      "¿has_pedido_algún_préstamo_desde_tu_empresa_(sociedad)_y_ahora_te_lo_están_reclamando_personalmente?": "has_pedido_algún_préstamo_desde_tu_empresa...?"
+    }
+  },
+  "form_specific": {
+    "1326789255723601": {
+      "description": "Formulario específico con campos Raw",
+      "inherits_from": "default_fb",
+      "fields": {
+        "Full Name": "nombre_y_apellidos",
+        "Email": "correo_electrónico",
+        "Phone Number": "número_de_teléfono", 
+        "Tienes Mas De 6 000 € En Deuda": "¿tienes_más_de_6000€_en_deuda_privada?",
+        "Dispone De Mas De Un Acreedor": "¿tienes_más_de_1_acreedor?",
+        "Ingresa Mas De 1 000 € Al Mes": "¿tienes_ingresos_superiores_a_1000€?",
+        "Raw Full Name": "nombre_y_apellidos",
+        "Raw Email": "correo_electrónico",
+        "Raw Phone Number": "número_de_teléfono",
+        "Raw Tienes Mas De 6 000 € En Deuda": "¿tienes_más_de_6000€_en_deuda_privada?",
+        "Raw Dispone De Mas De Un Acreedor": "¿tienes_más_de_1_acreedor?",
+        "Raw Ingresa Mas De 1 000 € Al Mes": "¿tienes_ingresos_superiores_a_1000€?",
+        "Form Id": "form_id",
+        "Form Name": "form_name",
+        "Campaign Name": "campaign_name",
+        "Ad Name": "ad_name",
+        "Leadgen Id": "leadgen_id"
+      },
+      "validations": {
+        "check_debt_questions": true,
+        "required_fields": ["nombre_y_apellidos", "correo_electrónico", "número_de_teléfono"]
+      }
+    }
+  },
+  "sources": {
+"DespCaldero": {
+  "description": "Mapping para leads de Google Sheets (Despacho calero)",
+  "company_name": "Despacho calero",
+  "fields": {
+    "Fecha": "created_time",
+    "Nombre": "nombre_y_apellidos",
+    "Lead ID": "lead_id",
+    "Teléfono": "número_de_teléfono",
+    "Mail": "correo_electrónico",
+    "Deuda": "monto_total_deudas",
+    "Cantidad deudas": "cantidad_acreedores",
+    "Dispuesto": "dispuesto",
+    "AssignedCustomer": "assigned_customer",
+    "AssignedHistory": "assigned_history"
+  },
+  "validations": {
+    "check_debt_questions": false,
+    "required_fields": ["correo_electrónico", "número_de_teléfono"]
+  }
+},
+    "FBLexCorner": {
+      "description": "Mapping para FBLexCorner",
+      "company_name": "Lex Corner",
+      "fields": {
+        "Fecha": "created_time",
+        "Nombre": "nombre_y_apellidos",
+        "Correo electrónico": "correo_electrónico",
+        "Teléfono": "número_de_teléfono",
+        "¿A cuánto asciende el conjunto de tus deudas?": "monto_total_deudas",
+        "¿En qué situación laboral te encuentras?": "situacion_laboral",
+        "Campaña": "campaign_name",
+        "Audiencia": "audiencia", 
+        "Anuncio": "anuncio",
+        "Formulario": "form_name",
+        "Leadgen Id": "leadgen_id"
+      },
+      "validations": {
+        "check_debt_amount": true,
+        "rejected_amounts": ["menos_de_8000€", "sin_deudas"]
+      }
+    },
+    "Backup_FB": {
+      "description": "Sheet mapping backup",
+      "fields": {
+        "Fecha": "created_time",
+        "Nombre": "nombre_y_apellidos", 
+        "Teléfono": "número_de_teléfono",
+        "Mail": "correo_electrónico",
+        "Más de 8k": "tienes_más_de_8000€_en_deudas?",
+        "Más de 1 acreedor": "tienes_más_de_1_acreedor?",
+        "Bienes": "tienes_bienes?",
+        "Vivienda": "tipo_de_vivienda?",
+        "Estado Civil": "estado_civil?",
+        "Provincia": "provincia?"
+      }
+    },
+    "Alianza_FB": {
+      "description": "Sheet mapping alianza",
+      "fields": {
+        "Fecha": "created_time",
+        "Nombre": "nombre_y_apellidos",
+        "Teléfono": "número_de_teléfono", 
+        "Mail": "correo_electrónico",
+        "Mas de 8k": "tienes_más_de_8000€_en_deudas?",
+        "Estado civil": "estado_civil?",
+        "Bienes": "tienes_bienes?",
+        "Más de 1 acreedor": "tienes_más_de_1_acreedor?"
+      }
+    },
+    "Alianza": {
+      "description": "Mapping para endpoint Alianza desde n8n",
+      "company_name": "Alianza",
+      "fields": {
+        "Fecha": "created_time",
+        "Nombre": "nombre_y_apellidos",
+        "Lead ID": "lead_id",
+        "Teléfono": "número_de_teléfono",
+        "Mail": "correo_electrónico",
+        "Deuda": "monto_total_deudas",
+        "Cantidad deudas": "cantidad_acreedores"
+      },
+      "validations": {
+        "check_debt_questions": false,
+        "required_fields": ["nombre_y_apellidos", "correo_electrónico", "número_de_teléfono"]
+      }
+    },
+    "MARTIN": {
+      "description": "Mapping para MARTIN",
+      "company_name": "sheets",
+      "fields": {
+        "Lead ID": "lead_id",
+        "Nombre ": "nombre_y_apellidos",
+        "Mas de 8k": "tienes_más_de_8000€_en_deudas?",
+        "Mail": "correo_electrónico",
+        "Teléfono": "número_de_teléfono"
+      },
+      "validations": {
+        "check_debt_questions": false,
+        "required_fields": ["nombre_y_apellidos", "correo_electrónico", "número_de_teléfono"]
+      }
+    }
+  }
+}
