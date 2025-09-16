@@ -56,13 +56,66 @@ def safe_json_load(x):
     except Exception:
         return None
 
-def get_company_id_for_lead(lead_id: str, conn):
-    """Obtiene company_id directamente desde deals usando lead_id."""
+def phone_variants_for_lookup(phone: str):
+    """
+    Genera variantes comunes del teléfono para la función getcompanyidbyphone:
+    - solo dígitos
+    - con '34' delante
+    - con '+34' delante
+    Evita duplicados preservando orden.
+    """
+    if not phone:
+        return []
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    variants = []
+    if digits:
+        variants.append(digits)
+        if not digits.startswith("34"):
+            variants.append("34" + digits)
+            variants.append("+34" + digits)
+        else:
+            variants.append("+" + digits)
+    # quitar duplicados preservando orden
+    seen = set()
+    ordered = []
+    for v in variants:
+        if v not in seen:
+            seen.add(v)
+            ordered.append(v)
+    return ordered
+
+def resolve_company_id(telefono: str, lead_id: str, conn):
+    """
+    1) Intenta getcompanyidbyphone(telefono) probando variantes (+34/34/raw).
+    2) Si no hay match, intenta por deals (lead_id) el más reciente no borrado.
+    """
+    # 1) Por teléfono (función)
+    tried = []
+    try:
+        variants = phone_variants_for_lookup(telefono)
+        if not variants and telefono:
+            variants = [telefono]
+        for v in variants:
+            tried.append(v)
+            with conn.cursor() as cur:
+                cur.execute("SELECT getcompanyidbyphone(%s)", (v,))
+                row = cur.fetchone()
+            if row and row[0]:
+                cid = str(row[0])
+                logging.info(f"[lead_id={lead_id}] company_id via getcompanyidbyphone('{v}') => {cid}")
+                return cid
+        logging.warning(f"[lead_id={lead_id}] getcompanyidbyphone sin match. Intentos: {tried}")
+    except Exception as e:
+        logging.warning(f"[lead_id={lead_id}] getcompanyidbyphone error: {e}. Intentos: {tried}")
+
+    # 2) Fallback por deals (más reciente no borrado)
     with conn.cursor() as cur:
         cur.execute("""
             SELECT company_id
             FROM deals
             WHERE lead_id = %s
+              AND is_deleted = false
+            ORDER BY created_at DESC
             LIMIT 1
         """, (lead_id,))
         row = cur.fetchone()
@@ -70,7 +123,8 @@ def get_company_id_for_lead(lead_id: str, conn):
         cid = str(row[0])
         logging.info(f"[lead_id={lead_id}] company_id via deals => {cid}")
         return cid
-    logging.warning(f"[lead_id={lead_id}] No se encontró company_id en deals")
+
+    logging.warning(f"[lead_id={lead_id}] No se pudo resolver company_id (teléfono/deals).")
     return None
 
 def get_candidates_from_conf(company_id: str, category_id: str, conn):
@@ -116,16 +170,14 @@ def get_live_distribution(company_id: str, category_id: str, candidate_ids, conn
 
 def choose_owner_by_weight_quota(candidates, counts):
     """
-    Regla: normaliza pesos → objetivos por usuario; elige mayor déficit (actual - objetivo) más negativo.
+    Normaliza pesos → objetivos; elige el mayor déficit (pct_actual - pct_obj) más negativo.
     """
-    # Normaliza pesos
     total_w = sum(max(c["weight"], 0.0) for c in candidates) or 1.0
     for c in candidates:
         c["pct_obj"] = (max(c["weight"], 0.0) / total_w)
 
     total_assigned = sum(counts.values())
     if total_assigned == 0:
-        # si no hay historial, primer candidato
         return candidates[0]["user_id"], "quota_first"
 
     best_user, best_delta = None, None
@@ -189,13 +241,14 @@ def webhook_assign_lead():
 
     try:
         data = json.loads(raw)
-    except Exception as e:
+    except Exception:
         logging.exception("[WEBHOOK] JSON inválido")
         return jsonify({"status":"error","error":"invalid_json"}), 400
 
-    lead_id   = (data or {}).get("lead_id")
-    categoria = (data or {}).get("categoria")
+    lead_id    = (data or {}).get("lead_id")
+    categoria  = (data or {}).get("categoria")
     propietario_hint = (data or {}).get("propietario")
+    telefono   = (data or {}).get("telefono")
 
     if not lead_id:
         logging.error("[WEBHOOK] Falta lead_id")
@@ -208,8 +261,8 @@ def webhook_assign_lead():
     try:
         conn = get_db_connection()
 
-        # 1) company_id
-        company_id = get_company_id_for_lead(lead_id, conn)
+        # 1) company_id: primero por teléfono, luego por deals(lead_id)
+        company_id = resolve_company_id(telefono, lead_id, conn)
         if not company_id:
             logging.error(f"[lead_id={lead_id}] No se pudo resolver company_id")
             return jsonify({"status":"error","error":"company_not_found"}), 404
@@ -268,7 +321,6 @@ def webhook_assign_lead():
         if not deal_id:
             return jsonify({"status":"error","error":result}), 500
 
-        # Si fue idempotente, dejamos constancia
         final_strategy = "idempotent" if result == "idempotent" else strategy
 
         return jsonify({
@@ -281,37 +333,7 @@ def webhook_assign_lead():
             "strategy": final_strategy
         }), 200
 
-    except Exception as e:
-        logging.exception(f"[lead_id={lead_id}] internal_error")
-        return jsonify({"status":"error","error":"internal_error"}), 500
-    finally:
-        try:
-            if conn: conn.close()
-        except Exception:
-            pass
-
-if __name__ == "__main__":
-    logging.info("Iniciando servicio Flask en 0.0.0.0:5020 /assign_lead")
-    app.run(host="0.0.0.0", port=5020, debug=False)
-        logging.info(f"[lead_id={lead_id}] asignación result={result} deal_id={deal_id} owner_id={owner_id} strategy={strategy}")
-
-        if not deal_id:
-            return jsonify({"status":"error","error":result}), 500
-
-        # Si fue idempotente, dejamos constancia
-        final_strategy = "idempotent" if result == "idempotent" else strategy
-
-        return jsonify({
-            "status": "ok",
-            "lead_id": lead_id,
-            "company_id": company_id,
-            "categoria": categoria,
-            "deal_id": deal_id,
-            "assigned_user_id": owner_id,
-            "strategy": final_strategy
-        }), 200
-
-    except Exception as e:
+    except Exception:
         logging.exception(f"[lead_id={lead_id}] internal_error")
         return jsonify({"status":"error","error":"internal_error"}), 500
     finally:
