@@ -782,15 +782,22 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
     try:
         conn = get_supabase_connection()
         cur = conn.cursor()
-        cur.execute("SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
-                    "WHERE {cond} ORDER BY d.created_at DESC LIMIT 1")
         phone = strip_country_code(data.get('número_de_teléfono','') or '')
         if phone:
-            cond = "TRIM(REPLACE(REPLACE(l.phone,'+34',''),' ',''))=%s AND l.is_deleted=FALSE AND d.is_deleted=FALSE"
-            cur.execute(query.format(cond=cond), (phone,))
+            query = (
+                "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
+                "WHERE TRIM(REPLACE(REPLACE(l.phone,'+34',''),' ',''))=%s "
+                "AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
+                "ORDER BY d.created_at DESC LIMIT 1"
+            )
+            cur.execute(query, (phone,))
         else:
-            cond = "l.email=%s AND l.is_deleted=FALSE AND d.is_deleted=FALSE"
-            cur.execute(query.format(cond=cond), (data.get('correo_electrónico',''),))
+            query = (
+                "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
+                "WHERE l.email=%s AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
+                "ORDER BY d.created_at DESC LIMIT 1"
+            )
+            cur.execute(query, (data.get('correo_electrónico',''),))
         row = cur.fetchone()
         deal_id = str(row[0]) if row else None
         if deal_id:
@@ -897,7 +904,7 @@ def receive_lead():
         if not current_value:
             app.logger.debug(f"FALLBACK: Buscando '{target_field}' (actual: '{current_value}')")
             for possible_source in possible_sources:
-                raw_value_original = raw.get(possible_source, '')
+                raw_value_original = raw.get(posible_source, '')
                 raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''  # ← SEGURO: convertir a str
                 if raw_value:
                     data[target_field] = raw_value
@@ -935,22 +942,27 @@ def receive_lead():
         conn = get_supabase_connection()
         cur = conn.cursor()
         phone = strip_country_code(data.get('número_de_teléfono','') or '')
-        query = (
-            "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
-            "WHERE {cond} ORDER BY d.created_at DESC LIMIT 1"
-        )
         if phone:
-            cond = "TRIM(REPLACE(REPLACE(l.phone,'+34',''),' ',''))=%s AND l.is_deleted=FALSE AND d.is_deleted=FALSE"
-            cur.execute(query.format(cond=cond), (phone,))
+            query = (
+                "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
+                "WHERE TRIM(REPLACE(REPLACE(l.phone,'+34',''),' ',''))=%s "
+                "AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
+                "ORDER BY d.created_at DESC LIMIT 1"
+            )
+            cur.execute(query, (phone,))
         else:
-            cond = "l.email=%s AND l.is_deleted=FALSE AND d.is_deleted=FALSE"
-            cur.execute(query.format(cond=cond), (data.get('correo_electrónico',''),))
+            query = (
+                "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
+                "WHERE l.email=%s AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
+                "ORDER BY d.created_at DESC LIMIT 1"
+            )
+            cur.execute(query, (data.get('correo_electrónico',''),))
         row = cur.fetchone()
         deal_id = str(row[0]) if row else None
     except Exception as e:
         full = data.get('nombre_y_apellidos','').strip()
         phone = strip_country_code(data.get('número_de_teléfono','') or '')
-        app.logger.error(f"RECHAZADO InfoLead: {full} | TEL={phone} | MOTIVO=Error buscando deal_id: {e}", exc_info=True)
+        app.logger.error(f"RECHAZADO InfoLead {source}: {full} | TEL={phone} | MOTIVO=Error buscando deal_id: {e}", exc_info=True)
     finally:
         try:
             cur.close()
@@ -1019,7 +1031,7 @@ def receive_alianza_lead():
         if not current_value:
             app.logger.debug(f"FALLBACK: Buscando '{target_field}' (actual: '{current_value}')")
             for possible_source in possible_sources:
-                raw_value_original = raw.get(possible_source, '')
+                raw_value_original = raw.get(posible_source, '')
                 raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''
                 if raw_value:
                     data[target_field] = raw_value
@@ -1122,14 +1134,11 @@ def receive_b2b_lead():
         if not current_value:
             app.logger.debug(f"FALLBACK: Buscando '{target_field}' (actual: '{current_value}')")
             for possible_source in possible_sources:
-                raw_value_original = raw.get(possible_source, '')
+                raw_value_original = raw.get(posible_source, '')
                 raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''
                 if raw_value:
                     data[target_field] = raw_value
-                    app.logger.debug(
-                        f"FALLBACK MAPEADO: '{possible_source}' → '{target_field}' = '{raw_value}' "
-                        f"(tipo original: {type(raw_value_original)})"
-                    )
+                    app.logger.debug(f"FALLBACK MAPEADO: '{possible_source}' → '{target_field}' = '{raw_value}' (tipo original: {type(raw_value_original)})")
                     break
                 else:
                     app.logger.debug(f"FALLBACK: '{possible_source}' no encontrado o vacío")
