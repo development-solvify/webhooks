@@ -1069,7 +1069,7 @@ def receive_b2b_lead():
         "despacho calero": "DespCaldero",
         "despcaldero": "DespCaldero",
         "despcalero": "DespCaldero",
-        "piqueras": "Piqueras"  # <-- Añadido alias para Piqueras Borisova
+        "piqueras": "piqueras"  # <-- Añadido alias para Piqueras Borisova
     }
     src_in = (raw.get("source") or raw.get("Source") or "").strip()
     src_norm_l = src_in.lower()
