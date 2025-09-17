@@ -2240,7 +2240,7 @@ class AutoReplyService:
             return (
                 "¡Gracias por tu mensaje! 📞\n\n"
                 "En este momento estamos fuera de oficina. "
-                "Nuestro horario de atención es de lunes a viernes de 8:00 a 22:00h.\n\n"
+                "Nuestro horario de atención es de lunes a viernes de 9:00 a 19:00h.\n\n"
                 "Te responderemos lo antes posible durante nuestro horario de oficina."
             )
 
