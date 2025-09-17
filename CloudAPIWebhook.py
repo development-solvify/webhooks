@@ -2218,22 +2218,22 @@ class AutoReplyService:
             return (
                 "¡Gracias por tu mensaje! 😊\n\n"
                 "En este momento estamos fuera de oficina ya que es fin de semana. "
-                "Nuestro horario de atención es de lunes a viernes de 8:00 a 22:00h.\n\n"
+                "Nuestro horario de atención es de lunes a viernes de 9:00 a 19:00h.\n\n"
                 "Te responderemos el próximo día laborable. "
                 "¡Que tengas un buen fin de semana!"
             )
-        elif hour < 8:
+        elif hour < 9:
             return (
                 "¡Gracias por tu mensaje! 🌅\n\n"
                 "En este momento estamos fuera de oficina. "
-                "Nuestro horario de atención es de lunes a viernes de 8:00 a 22:00h.\n\n"
-                "Abrimos a las 8:00h. Te responderemos lo antes posible durante nuestro horario de oficina."
+                "Nuestro horario de atención es de lunes a viernes de 9:00 a 19:00h.\n\n"
+                "Abrimos a las 9:00h. Te responderemos lo antes posible durante nuestro horario de oficina."
             )
-        elif hour >= 22:
+        elif hour >= 19:
             return (
                 "¡Gracias por tu mensaje! 🌙\n\n"
                 "En este momento estamos fuera de oficina. "
-                "Nuestro horario de atención es de lunes a viernes de 8:00 a 22:00h.\n\n"
+                "Nuestro horario de atención es de lunes a viernes de 9:00 a 19:00h.\n\n"
                 "Te responderemos mañana durante nuestro horario de oficina. ¡Que tengas una buena noche!"
             )
         else:
