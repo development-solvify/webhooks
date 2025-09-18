@@ -938,30 +938,30 @@ def webhook_twilio():
         return "Processed with errors", 200
     
 if __name__ == '__main__':
-# Configuración para ejecutar el servidor Flask directamente
-import ssl
+    # Configuración para ejecutar el servidor Flask directamente
+    import ssl
 
-# Obtener configuración del puerto desde el objeto config
-http_port = getattr(config, 'http_port', 5041)
-https_port = getattr(config, 'webhook_port', 5042)
-host = getattr(config, 'webhook_host', '0.0.0.0')
+    # Obtener configuración del puerto desde el objeto config
+    http_port = getattr(config, 'http_port', 5041)
+    https_port = getattr(config, 'webhook_port', 5042)
+    host = getattr(config, 'webhook_host', '0.0.0.0')
 
-# Certificados SSL
-ssl_cert = getattr(config, 'ssl_cert_path', None)
-ssl_key = getattr(config, 'ssl_key_path', None)
+    # Certificados SSL
+    ssl_cert = getattr(config, 'ssl_cert_path', None)
+    ssl_key = getattr(config, 'ssl_key_path', None)
 
-logger.info(f"🚀 Iniciando servidor Twilio Webhook Adapter")
-logger.info(f"   • Endpoint disponible en: /webhookT")
-logger.info(f"   • Puerto HTTP: {http_port}")
-logger.info(f"   • Puerto HTTPS: {https_port}")
+    logger.info(f"🚀 Iniciando servidor Twilio Webhook Adapter")
+    logger.info(f"   • Endpoint disponible en: /webhookT")
+    logger.info(f"   • Puerto HTTP: {http_port}")
+    logger.info(f"   • Puerto HTTPS: {https_port}")
 
-# Decidir si usar HTTPS o HTTP
-if ssl_cert and ssl_key and os.path.exists(ssl_cert) and os.path.exists(ssl_key):
-    logger.info(f"🔒 Iniciando servidor HTTPS en puerto {https_port}")
-    context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
-    context.load_cert_chain(ssl_cert, ssl_key)
-    app.run(host=host, port=https_port, ssl_context=context, debug=False)
-else:
-    logger.warning("⚠️ Certificados SSL no encontrados, usando HTTP")
-    logger.info(f"🌐 Iniciando servidor HTTP en puerto {http_port}")
-    app.run(host=host, port=http_port, debug=False)
+    # Decidir si usar HTTPS o HTTP
+    if ssl_cert and ssl_key and os.path.exists(ssl_cert) and os.path.exists(ssl_key):
+        logger.info(f"🔒 Iniciando servidor HTTPS en puerto {https_port}")
+        context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+        context.load_cert_chain(ssl_cert, ssl_key)
+        app.run(host=host, port=https_port, ssl_context=context, debug=False)
+    else:
+        logger.warning("⚠️ Certificados SSL no encontrados, usando HTTP")
+        logger.info(f"🌐 Iniciando servidor HTTP en puerto {http_port}")
+        app.run(host=host, port=http_port, debug=False)
