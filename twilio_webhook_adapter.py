@@ -942,7 +942,7 @@ if __name__ == '__main__':
     import ssl
 
     # Obtener configuración del puerto desde el objeto config
-    http_port = getattr(config, 'http_port', 5041) + 1
+    http_port = getattr(config, 'http_port', 5041) + 2
     # El puerto HTTPS siempre será el puerto HTTP + 2
     https_port = http_port + 2
     host = getattr(config, 'webhook_host', '0.0.0.0')
@@ -954,7 +954,7 @@ if __name__ == '__main__':
     logger.info(f"🚀 Iniciando servidor Twilio Webhook Adapter")
     logger.info(f"   • Endpoint disponible en: /webhookT")
     logger.info(f"   • Puerto HTTP: {http_port}")
-    logger.info(f"   • Puerto HTTPS: {https_port} (HTTP + 2)")
+    logger.info(f"   • Puerto HTTPS: {https_port} ")
     
     # Registrar información de los certificados SSL para diagnóstico
     logger.info(f"   • Certificado SSL: {ssl_cert}")
