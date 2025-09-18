@@ -942,8 +942,9 @@ if __name__ == '__main__':
     import ssl
 
     # Obtener configuración del puerto desde el objeto config
-    http_port = getattr(config, 'http_port', 5041)
-    https_port = getattr(config, 'webhook_port', 5042)
+    http_port = getattr(config, 'http_port', 5041) + 1
+    # El puerto HTTPS siempre será el puerto HTTP + 2
+    https_port = http_port + 2
     host = getattr(config, 'webhook_host', '0.0.0.0')
 
     # Certificados SSL
@@ -953,15 +954,37 @@ if __name__ == '__main__':
     logger.info(f"🚀 Iniciando servidor Twilio Webhook Adapter")
     logger.info(f"   • Endpoint disponible en: /webhookT")
     logger.info(f"   • Puerto HTTP: {http_port}")
-    logger.info(f"   • Puerto HTTPS: {https_port}")
+    logger.info(f"   • Puerto HTTPS: {https_port} (HTTP + 2)")
+    
+    # Registrar información de los certificados SSL para diagnóstico
+    logger.info(f"   • Certificado SSL: {ssl_cert}")
+    logger.info(f"   • Clave SSL: {ssl_key}")
 
     # Decidir si usar HTTPS o HTTP
     if ssl_cert and ssl_key and os.path.exists(ssl_cert) and os.path.exists(ssl_key):
-        logger.info(f"🔒 Iniciando servidor HTTPS en puerto {https_port}")
-        context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
-        context.load_cert_chain(ssl_cert, ssl_key)
-        app.run(host=host, port=https_port, ssl_context=context, debug=False)
+        try:
+            logger.info(f"🔒 Iniciando servidor HTTPS en puerto {https_port}")
+            context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+            logger.info(f"   • Contexto SSL creado correctamente")
+            context.load_cert_chain(ssl_cert, ssl_key)
+            logger.info(f"   • Certificados cargados correctamente")
+            app.run(host=host, port=https_port, ssl_context=context, debug=False)
+        except Exception as e:
+            logger.error(f"❌ Error al iniciar el servidor HTTPS: {e}")
+            logger.error(traceback.format_exc())
+            logger.warning("⚠️ Intentando iniciar en modo HTTP como fallback")
+            app.run(host=host, port=http_port, debug=False)
     else:
-        logger.warning("⚠️ Certificados SSL no encontrados, usando HTTP")
+        # Explicar por qué no se usa HTTPS
+        if not ssl_cert:
+            logger.warning("⚠️ No se encontró la ruta del certificado SSL (ssl_cert_path)")
+        elif not ssl_key:
+            logger.warning("⚠️ No se encontró la ruta de la clave SSL (ssl_key_path)")
+        elif not os.path.exists(ssl_cert):
+            logger.warning(f"⚠️ El archivo de certificado no existe en la ruta: {ssl_cert}")
+        elif not os.path.exists(ssl_key):
+            logger.warning(f"⚠️ El archivo de clave no existe en la ruta: {ssl_key}")
+        
+        logger.warning("⚠️ Certificados SSL no encontrados o no válidos, usando HTTP")
         logger.info(f"🌐 Iniciando servidor HTTP en puerto {http_port}")
         app.run(host=host, port=http_port, debug=False)
