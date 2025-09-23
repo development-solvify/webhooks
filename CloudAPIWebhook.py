@@ -1288,6 +1288,7 @@ class Config:
                 'BUSINESS_HOURS_START_TIME',
                 'BUSINESS_HOURS_END_TIME',
                 'BUSINESS_HOURS_WEEKDAYS',
+                'COVER_WB'
             ]
             # Primero loguea todo lo que hay en fichero
             for var in override_vars:
@@ -1985,11 +1986,14 @@ class WhatsAppService:
     def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str) -> dict:
 
         """Construye el JSON esperado por WABA"""
+    # 🔧 CAMBIO: Obtener cover dinámicamente según el teléfono de destino
+        cover_url = get_cover_wb_for_phone(to_phone)
+        
         common_header = {
             "type": "header",
             "parameters": [{
                 "type": "image",
-                "image": {"link": "https://app.solvify.es/cover-whats.jpg"}
+                "image": {"link": cover_url}
             }]
         }
         template_name = template_name.strip()
@@ -4382,7 +4386,41 @@ def handle_template():
         return jsonify({'status': 'error', 'message': 'Internal error'}), 500
 
 
-# ...existing code...
+
+def get_cover_wb_for_phone(phone: str) -> str:
+    """
+    Devuelve la URL de COVER_WB según el teléfono/company_id.
+    Si no encuentra configuración específica, usa la URL por defecto.
+    """
+    # URL por defecto (fallback)
+    default_cover = "https://app.solvify.es/cover-whats.jpg"
+    
+    try:
+        if not phone:
+            return default_cover
+
+        clean_phone = PhoneUtils.strip_34(phone)
+        # Usar el caché existente para obtener la configuración de la compañía
+        custom_props, company_name, company_id = company_cache.get_config_by_phone(clean_phone, db_manager)
+
+        if not custom_props:
+            logger.debug(f"[COVER_WB] No company config for phone {phone}, using default cover")
+            return default_cover
+
+        # Buscar COVER_WB en las custom properties
+        cover_wb = custom_props.get('COVER_WB')
+        
+        if cover_wb:
+            logger.info(f"[COVER_WB] Using company cover for company_id={company_id}, phone={phone}: {cover_wb}")
+            return cover_wb
+
+        logger.debug(f"[COVER_WB] No COVER_WB config for company {company_id}, using default")
+        return default_cover
+
+    except Exception:
+        logger.exception(f"[COVER_WB] Error resolving cover for phone {phone}")
+        return default_cover
+    
 def get_whatsapp_credentials_for_phone(phone: str) -> dict:
     """
     Devuelve las credenciales a usar para llamadas a la API de WhatsApp según el teléfono.
@@ -6425,12 +6463,14 @@ def _build_template_payload_direct(template_name: str, template_data: dict, to_p
     Construye payload de template para envío directo sin depender de BD.
     Solo templates básicos configurados en código.
     """
-    # Header común para templates con imagen
+    # 🔧 CAMBIO: Obtener cover dinámicamente según el teléfono de destino
+    cover_url = get_cover_wb_for_phone(to_phone)
+    
     common_header = {
         "type": "header",
         "parameters": [{
             "type": "image",
-            "image": {"link": "https://app.solvify.es/cover-whats.jpg"}
+            "image": {"link": cover_url}
         }]
     }
     
