@@ -201,7 +201,8 @@ class FormMappingManager:
                         "check_debt_questions": False,
                         "required_fields": ["Nombre", "Mail", "Teléfono"]
                     }
-                }                
+                },
+                                
             }
         }
     
@@ -676,12 +677,6 @@ def create_portal_user(data, source, config=None):
         if source in ('Backup_FB', 'Alianza_FB', 'MARTIN'):
             company_name = 'sheets'
             app.logger.debug("Company name asignado: 'sheets'")
-        elif source == 'FBLexCorner':
-            company_name = 'Lex Corner'
-            app.logger.debug("Company name asignado: 'Lex Corner'")
-        elif source == 'despcaldero':
-            company_name = 'Despacho Calero'
-            app.logger.debug("Company name asignado: 'Despacho Calero'")
         else:
             company_name = source
             app.logger.debug(f"Company name asignado desde source: '{company_name}'")
@@ -1081,7 +1076,9 @@ def receive_b2b_lead():
         "despacho calero": "DespCaldero",
         "despcaldero": "DespCaldero",
         "despcalero": "DespCaldero",
-        "piqueras": "piqueras"  # <-- Añadido alias para Piqueras Borisova
+        "economis": "economis",  
+        "lexcorner": "lexcorner",  # Nuevo
+        "buenalex": "buenalex",  
     }
     src_in = (raw.get("source") or raw.get("Source") or "").strip()
     src_norm_l = src_in.lower()

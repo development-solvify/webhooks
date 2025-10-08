@@ -73,9 +73,30 @@
     "required_fields": ["correo_electrónico", "número_de_teléfono"]
   }
 },
-    "FBLexCorner": {
+    "lexcorner": {
       "description": "Mapping para FBLexCorner",
       "company_name": "Lex Corner",
+      "fields": {
+        "Fecha": "created_time",
+        "Nombre": "nombre_y_apellidos",
+        "Correo electrónico": "correo_electrónico",
+        "Teléfono": "número_de_teléfono",
+        "¿A cuánto asciende el conjunto de tus deudas?": "monto_total_deudas",
+        "¿En qué situación laboral te encuentras?": "situacion_laboral",
+        "Campaña": "campaign_name",
+        "Audiencia": "audiencia", 
+        "Anuncio": "anuncio",
+        "Formulario": "form_name",
+        "Leadgen Id": "leadgen_id"
+      },
+      "validations": {
+        "check_debt_amount": true,
+        "rejected_amounts": ["menos_de_8000€", "sin_deudas"]
+      }
+    },
+    "buenalex": {
+      "description": "Mapping para Despacho BuenaLex",
+      "company_name": "BuenaLex",
       "fields": {
         "Fecha": "created_time",
         "Nombre": "nombre_y_apellidos",
@@ -115,6 +136,27 @@
         "rejected_amounts": ["menos_de_8000€", "sin_deudas"]
       }
     },
+    "economis": {
+      "description": "Mapping para Asesoria Economis",
+      "company_name": "Asesoria Economis",
+      "fields": {
+        "Fecha": "created_time",
+        "Nombre": "nombre_y_apellidos",
+        "Correo electrónico": "correo_electrónico",
+        "Teléfono": "número_de_teléfono",
+        "¿A cuánto asciende el conjunto de tus deudas?": "monto_total_deudas",
+        "¿En qué situación laboral te encuentras?": "situacion_laboral",
+        "Campaña": "campaign_name",
+        "Audiencia": "audiencia", 
+        "Anuncio": "anuncio",
+        "Formulario": "form_name",
+        "Leadgen Id": "leadgen_id"
+      },
+      "validations": {
+        "check_debt_amount": true,
+        "rejected_amounts": ["menos_de_8000€", "sin_deudas"]
+      }
+    },        
     "Backup_FB": {
       "description": "Sheet mapping backup",
       "fields": {
