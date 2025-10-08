@@ -137,20 +137,25 @@
       }
     },
     "Asesoria Economis": {
-      "description": "Mapping para Asesoria Economis",
+      "description": "Mapping para Asesoria Economis (n8n → Solvify)",
       "company_name": "Asesoria Economis",
       "fields": {
         "Fecha": "created_time",
         "Nombre": "nombre_y_apellidos",
-        "Correo electrónico": "correo_electrónico",
+        "Mail": "correo_electrónico",
         "Teléfono": "número_de_teléfono",
-        "¿A cuánto asciende el conjunto de tus deudas?": "monto_total_deudas",
-        "¿En qué situación laboral te encuentras?": "situacion_laboral",
+
+        "Deuda": "monto_total_deudas",
+        "Cantidad deudas": "cantidad_acreedores",
+        "Dispuesto": "dispuesto",
+
+        "leadgen_id": "leadgen_id",
+        "Leadgen Id": "leadgen_id",
+
         "Campaña": "campaign_name",
-        "Audiencia": "audiencia", 
+        "Audiencia": "audiencia",
         "Anuncio": "anuncio",
-        "Formulario": "form_name",
-        "Leadgen Id": "leadgen_id"
+        "Formulario": "form_name"
       },
       "validations": {
         "check_debt_amount": true,
