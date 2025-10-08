@@ -136,7 +136,7 @@
         "rejected_amounts": ["menos_de_8000€", "sin_deudas"]
       }
     },
-    "economis": {
+    "Asesoria Economis": {
       "description": "Mapping para Asesoria Economis",
       "company_name": "Asesoria Economis",
       "fields": {
