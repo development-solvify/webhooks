@@ -1062,6 +1062,93 @@ def receive_alianza_lead():
 @app.route('/B2B', methods=['POST'])
 def receive_b2b_lead():
     """
+    Endpoint B2B simplificado:
+    - source == company_name (mismo literal que en la tabla companies.name)
+    - mapping cargado desde form_mappings.json usando FormMappingManager
+    - mapeo directo raw -> data según mapping["fields"]
+    - fallback mínimo para nombre/email/teléfono
+    - flujo común con process_lead_common()
+    """
+    # 0) Carga del payload
+    raw = request.json or {}
+    if isinstance(raw, list):
+        if not raw:
+            return jsonify({"error": "lista vacía"}), 400
+        raw = raw[0]
+
+    app.logger.debug("=" * 60)
+    app.logger.debug("RAW B2B LEAD:")
+    for k, v in raw.items():
+        app.logger.debug(f"  {k!r}: {v!r}")
+    app.logger.debug("=" * 60)
+
+    # 1) source obligatorio (coincide con company_name)
+    source = (raw.get("source") or raw.get("Source") or "").strip()
+    if not source:
+        return jsonify({"error": "Falta 'source'/'Source' en el payload"}), 400
+
+    app.logger.debug(f"[B2B] source recibido: '{source}'")
+
+    # 2) Cargar mapping para el source
+    config = form_mapping_manager.get_mapping_for_form(source=source)
+    mapping = config.get("fields", {}) or {}
+    if not mapping:
+        app.logger.warning(f"[B2B] No hay mapping para source='{source}'. Se usará mapping vacío.")
+    app.logger.debug(f"[B2B] Mapping de '{source}': {len(mapping)} campos")
+
+    # 3) Mapear campos según mapping (raw_key -> normalized_key)
+    data = {}
+    for original_key, mapped_key in mapping.items():
+        # Permitimos variantes con '¿' inicial (formularios con preguntas)
+        val = raw.get(original_key)
+        if val is None and isinstance(original_key, str) and original_key.startswith('¿'):
+            val = raw.get(original_key.lstrip('¿'))
+        if val is not None:
+            data[mapped_key] = val if isinstance(val, str) else str(val)
+            app.logger.debug(f"MAP: '{original_key}' → '{mapped_key}' = {val!r}")
+
+    # 4) Fallback mínimo para críticos si no vienen en el mapping
+    critical_fallbacks = {
+        'nombre_y_apellidos': ['Nombre', 'Full Name', 'full_name', 'fullname', 'name', 'Nombre '],
+        'correo_electrónico': ['Mail', 'Email', 'email', 'correo', 'e-mail'],
+        'número_de_teléfono': ['Teléfono', 'Phone Number', 'phone_number', 'telefono', 'teléfono', 'tel', 'mobile'],
+    }
+    for target, aliases in critical_fallbacks.items():
+        cur = str(data.get(target, '')).strip()
+        if not cur:
+            for alias in aliases:
+                raw_value_original = raw.get(alias, '')
+                raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''
+                if raw_value:
+                    data[target] = raw_value
+                    app.logger.debug(f"FALLBACK: '{alias}' → '{target}' = {raw_value!r}")
+                    break
+
+    # 5) No copiamos 'source' a data (solo datos del lead). Campos no mapeados: no se añaden.
+    #    (Si quisieras conservar TODOS los no mapeados, podrías agregarlos aquí, pero nos ceñimos al mapping.)
+
+    # 6) Log final de los datos mapeados
+    app.logger.debug(f"[B2B] DATOS MAPEADOS ({source}):")
+    for k, v in data.items():
+        app.logger.debug(f"  {k!r}: {v!r}")
+
+    # 7) Flujo común: crea portal user -> busca deal_id -> crea tarea Info Lead
+    result = process_lead_common(source, data, raw, config)
+
+    # 8) Respuesta
+    return jsonify({
+        "message": f"Lead de {source} procesado",
+        "source": source,
+        "portal_user_created": result["portal_user_created"],
+        "info_lead_created": result["info_lead_created"],
+        "deal_id": result["deal_id"],
+        "task": result["task"],
+    }), 200
+
+
+@app.route('/B2B1', methods=['POST'])
+def receive_b2b_lead1():
+    """
     Endpoint genérico para recibir leads B2B desde n8n
     Acepta 'source' y usa lógica común: crear PortalUser -> (si OK) deal_id -> tarea Info lead
     """
