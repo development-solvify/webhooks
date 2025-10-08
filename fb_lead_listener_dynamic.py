@@ -48,9 +48,16 @@ class FormMappingManager:
     def _load_mappings(self):
         """Carga mappings desde archivo JSON"""
         try:
-            if Path(self.config_file).exists():
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            p = Path(self.config_file)
+            app.logger.debug(f"[Mappings] Intentando leer: {p.resolve()}")
+            if p.exists():
+                with open(p, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                # debug: keys de primer nivel y de sources
+                app.logger.debug(f"[Mappings] Top-level keys: {list(data.keys())}")
+                srcs = list((data.get("sources") or {}).keys())
+                app.logger.debug(f"[Mappings] Sources disponibles: {srcs}")
+                return data
             else:
                 # Crear archivo inicial con mappings existentes
                 initial_config = self._create_initial_config()
@@ -219,41 +226,45 @@ class FormMappingManager:
         }
     
     def get_mapping_for_form(self, form_id=None, source=None):
-        """
-        Obtiene el mapping apropiado para un form_id específico o source
-        
-        Args:
-            form_id: ID del formulario FB
-            source: Origen del lead (FBLexCorner, Backup_FB, etc.)
-            
-        Returns:
-            dict: Mapping de campos y configuración
-        """
         try:
-            # 1. Buscar mapping específico por form_id
+            # 1) por form_id
             if form_id and str(form_id) in self.mappings.get("form_specific", {}):
                 config = self.mappings["form_specific"][str(form_id)]
                 app.logger.debug(f"Usando mapping específico para form_id: {form_id}")
                 return self._resolve_mapping(config)
-            
-            # 2. Buscar mapping por source
-            if source and source in self.mappings.get("sources", {}):
-                config = self.mappings["sources"][source]
-                app.logger.debug(f"Usando mapping para source: {source}")
-                return self._resolve_mapping(config)
-            
-            # 3. Fallback a mapping por defecto
+
+            # 2) por source (normalizado)
+            if source:
+                src_norm = str(source).strip().casefold()
+                sources = self.mappings.get("sources", {}) or {}
+
+                # construir índice normalizado -> config
+                index = {}
+                for k, v in sources.items():
+                    k_norm = str(k).strip().casefold()
+                    index[k_norm] = v
+
+                if src_norm in index:
+                    config = index[src_norm]
+                    app.logger.debug(f"Usando mapping para source: {source} (match normalizado)")
+                    return self._resolve_mapping(config)
+
+                # debug: keys disponibles
+                app.logger.warning(
+                    f"Mapping para source='{source}' no encontrado. "
+                    f"Sources disponibles: {list(sources.keys())}"
+                )
+
+            # 3) por defecto
             if "default_fb" in self.mappings:
                 config = self.mappings["default_fb"]
                 app.logger.debug("Usando mapping por defecto")
                 return self._resolve_mapping(config)
-                
-            # 4. Último recurso
+
             app.logger.warning("Usando mapping de emergencia")
             return {"fields": self._get_fallback_mappings()["default_fb"]["fields"]}
-            
         except Exception as e:
-            app.logger.error(f"Error obteniendo mapping: {e}")
+            app.logger.error(f"Error obteniendo mapping: {e}", exc_info=True)
             return {"fields": {}}
     
     def _resolve_mapping(self, config):
