@@ -575,17 +575,11 @@ def build_info_lead_content_from_mapping(data_norm: dict, raw_payload: dict, map
             continue
 
         # Caso especial: etiquetas bonitas para Calero
-        if is_calero:
-            if norm_key == 'monto_total_deudas':
-                q = "Deuda"
-                content.append({"question": q, "answer": _pretty_txt(val)})
-                questions_added.add(q)
-                continue
-            if norm_key == 'cantidad_acreedores':
-                q = "Cantidad de deudas"
-                content.append({"question": q, "answer": _pretty_txt(val)})
-                questions_added.add(q)
-                continue
+        # extra: normaliza etiquetas genéricas aunque no sea Calero
+        if norm_key == 'cantidad_acreedores' and 'Cantidad de deudas' not in questions_added:
+            content.append({"question": "Cantidad de deudas", "answer": _pretty_txt(val)})
+            questions_added.add("Cantidad de deudas")
+            continue
 
         # Etiqueta por defecto
         q = _pretty_txt(label)
@@ -832,11 +826,19 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
             "task": None,
         }
 
-    # 3) Crear tarea Info lead (dinámico para DespCaldero)
-    if (source or "").strip().lower() in ("despacho calero", "despcaldero", "despcalero"):
+    # 3) Crear tarea Info lead
+    # Si hay mapping (config con fields), usa SIEMPRE el builder dinámico.
+    # Si no, fallback al builder estático.
+    try:
+        has_mapping = bool(config and (config.get("fields") or {}))
+    except Exception:
+        has_mapping = False
+
+    if has_mapping:
         info_content = build_info_lead_content_from_mapping(data, raw_payload, config, source)
     else:
         info_content = build_info_lead_content(data)
+
 
     task = create_info_lead_task(deal_id, data, content=info_content)
 
