@@ -2191,7 +2191,25 @@ class WhatsAppService:
                         }
                     ]
                 }
-            }        
+            }
+        elif template_name in ['contacto_recordatorio_pago']:
+            # Template sin parámetros - solo cuerpo estático
+            return {
+                "messaging_product": "whatsapp",
+                "to": to_phone,
+                "type": "template",
+                "template": {
+                    "name": template_name,
+                    "language": {"code": "es_ES"},
+                    "components": [
+                        # SIN HEADER - solo body sin parámetros
+                        {
+                            "type": "body"
+                            # No parameters - el texto está definido en WhatsApp
+                        }
+                    ]
+                }
+            }
         else:
             raise ValueError(f"Template '{template_name}' no configurado")
 
@@ -6621,6 +6639,25 @@ def _build_template_payload_direct(template_name: str, template_data: dict, to_p
                             {"type": "text", "text": signer},
                             {"type": "text", "text": company_name}
                         ]
+                    }
+                ]
+            }
+        }
+    
+    elif template_name == 'contacto_recordatorio_pago':
+        # Template sin parámetros - solo cuerpo estático
+        return {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "template",
+            "template": {
+                "name": "contacto_recordatorio_pago",
+                "language": {"code": "es_ES"},
+                "components": [
+                    # SIN HEADER - solo body sin parámetros
+                    {
+                        "type": "body"
+                        # No parameters - el texto está definido en WhatsApp
                     }
                 ]
             }
