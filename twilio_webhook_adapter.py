@@ -755,104 +755,24 @@ from CloudAPIWebhook import app, db_manager, logger
 import traceback
 
 # We need to create a wrapper for the Meta webhook handling since there's no direct function
+from flask import has_request_context
 
 def handle_meta_webhook_payload(payload: Dict) -> bool:
-    """
-    Process a Meta-format webhook payload
-    
-    This function simulates a direct POST to the Meta webhook endpoint
-    by creating a request-like object and calling the webhook handler directly.
-    
-    Args:
-        payload: The Meta Cloud API format payload
-        
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    # Generate a unique ID for this request
-    request_id = f"meta-fwd-{int(time.time())}-{hash(str(payload))}"
-    
     try:
-        # Log the forwarding attempt
-        logger.info(f"[{request_id}] Forwarding normalized payload to Meta webhook handler")
-        
-        # Import the webhook handler function from CloudAPIWebhook
-        from CloudAPIWebhook import webhook
-        
-        # Create a mock request object with our payload
-        class MockRequest:
-            def __init__(self, json_data):
-                self._json_data = json_data
-                self.headers = {}  # Add empty headers for compatibility
-                
-            def get_json(self, force=False):
-                return self._json_data
-        
-        # Create a mock context for the webhook function
-        import flask
-        from flask import _request_ctx_stack
-        
-        if _request_ctx_stack.top is None:
-            # If there's no request context, we create one
-            logger.debug(f"[{request_id}] Creating new request context")
-            with app.test_request_context():
-                # Save the original request
-                old_request = flask.request
-                
-                try:
-                    # Replace the request with our mock
-                    flask.request = MockRequest(payload)
-                    
-                    # Call the webhook function
-                    logger.debug(f"[{request_id}] Calling webhook handler in new context")
-                    response = webhook()
-                    
-                    # Check if successful
-                    success = isinstance(response, tuple) and len(response) > 1 and response[1] == 200
-                    if success:
-                        logger.info(f"[{request_id}] Meta webhook handler processed successfully with status 200")
-                    else:
-                        status = response[1] if isinstance(response, tuple) and len(response) > 1 else "unknown"
-                        logger.warning(f"[{request_id}] Meta webhook handler returned non-200 status: {status}")
-                    
-                    return success
-                except Exception as e:
-                    tb = log_and_capture_exception(f"[{request_id}] Error in webhook call (new context): {e}")
-                    return False
-                finally:
-                    # Restore the original request
-                    flask.request = old_request
-        else:
-            # If there's already a request context, we just replace the request
-            logger.debug(f"[{request_id}] Using existing request context")
-            old_request = flask.request
-            
-            try:
-                # Replace the request with our mock
-                flask.request = MockRequest(payload)
-                
-                # Call the webhook function
-                logger.debug(f"[{request_id}] Calling webhook handler in existing context")
-                response = webhook()
-                
-                # Check if successful
-                success = isinstance(response, tuple) and len(response) > 1 and response[1] == 200
-                if success:
-                    logger.info(f"[{request_id}] Meta webhook handler processed successfully with status 200")
-                else:
-                    status = response[1] if isinstance(response, tuple) and len(response) > 1 else "unknown"
-                    logger.warning(f"[{request_id}] Meta webhook handler returned non-200 status: {status}")
-                
-                return success
-            except Exception as e:
-                tb = log_and_capture_exception(f"[{request_id}] Error in webhook call (existing context): {e}")
-                return False
-            finally:
-                # Restore the original request
-                flask.request = old_request
+        headers = {}
+        if INTERNAL_HMAC_SECRET:
+            headers["X-Internal-Signature"] = sign_payload(payload, INTERNAL_HMAC_SECRET)
+        with app.test_request_context('/webhook', method='POST', json=payload, headers=headers):
+            from CloudAPIWebhook import webhook
+            resp = webhook()
+            # resp puede ser (body, status) o un Response
+            status = resp[1] if isinstance(resp, tuple) and len(resp) > 1 else getattr(resp, "status_code", None)
+            return status == 200
     except Exception as e:
-        tb = log_and_capture_exception(f"[{request_id}] Error setting up Meta webhook forwarding: {e}")
+        log_and_capture_exception(f"Error calling webhook() with test_request_context: {e}")
         return False
+
+
 
 @app.route('/webhookT', methods=['POST'])
 def webhook_twilio():
