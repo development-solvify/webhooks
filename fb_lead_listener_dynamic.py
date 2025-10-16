@@ -310,6 +310,48 @@ def get_supabase_connection():
 def strip_country_code(phone):
     return re.sub(r'^(?:\+?34)', '', str(phone).strip())
 
+def normalize_db_phone(phone: str) -> str:
+    s = str(phone or '').strip()
+    s = re.sub(r'\s+', '', s)          # quita espacios
+    s = re.sub(r'^\+?34', '', s)       # quita prefijo +34/34 al inicio
+    return s
+
+def lead_exists_in_company(company_id: str, phone: str) -> str | None:
+    """
+    Devuelve el lead_id si ya existe (no borrado) en ESA company con ese teléfono.
+    Relación vía deals: deals.company_id -> deals.lead_id -> leads.id
+    """
+    try:
+        conn = get_supabase_connection()
+        cur = conn.cursor()
+        phone_norm = normalize_db_phone(phone)
+        cur.execute(
+            """
+            SELECT l.id
+            FROM leads l
+            JOIN deals d ON d.lead_id = l.id
+            WHERE d.company_id = %s
+              AND l.is_deleted = FALSE
+              AND d.is_deleted = FALSE
+              AND TRIM(REPLACE(REPLACE(l.phone,'+34',''),' ','')) = %s
+            ORDER BY d.created_at DESC
+            LIMIT 1
+            """,
+            (company_id, phone_norm)
+        )
+        row = cur.fetchone()
+        return str(row[0]) if row else None
+    except Exception as e:
+        app.logger.error(f"Error comprobando duplicado por company_id: {e}", exc_info=True)
+        return None
+    finally:
+        try:
+            cur.close(); conn.close()
+        except:
+            pass
+
+
+
 def normalize_key(key: str) -> str:
     return key.strip().lstrip('¿').rstrip('?').strip().lower()
 
@@ -709,6 +751,15 @@ def create_portal_user(data, source, config=None):
         except:
             pass
 
+    # ➜ Prechequeo: ¿ya existe en ESTA company?
+    existing_lead_id = lead_exists_in_company(company_id, phone)
+    if existing_lead_id:
+        app.logger.info(
+            f"Duplicado por company → reuso lead existente: lead_id={existing_lead_id} "
+            f"| company_id={company_id} | phone={phone}"
+        )
+        return {"id": existing_lead_id, "duplicate": True}
+
     # 5️⃣ Construcción del payload
     parts = full.split()
     first = parts[0] if parts else ''
@@ -739,8 +790,13 @@ def create_portal_user(data, source, config=None):
             timeout=30
         )
         if r.status_code == 409:
-            app.logger.warning(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Portal user duplicado")
+            existing_lead_id = lead_exists_in_company(company_id, phone)
+            if existing_lead_id:
+                app.logger.info(f"409 pero lead ya existe en esta company → reuso lead_id={existing_lead_id}")
+                return {"id": existing_lead_id, "duplicate": True}
+            app.logger.warning(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Duplicado en otra company")
             return None
+
         if r.status_code not in (200,201):
             app.logger.error(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Error creando portal user: {r.status_code} {r.text}")
             return None
@@ -788,16 +844,18 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
                 "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
                 "WHERE TRIM(REPLACE(REPLACE(l.phone,'+34',''),' ',''))=%s "
                 "AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
+                "AND d.company_id = %s "
                 "ORDER BY d.created_at DESC LIMIT 1"
             )
-            cur.execute(query, (phone,))
+            cur.execute(query, (phone,company_id))
         else:
             query = (
                 "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
                 "WHERE l.email=%s AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
+                "AND d.company_id = %s "
                 "ORDER BY d.created_at DESC LIMIT 1"
             )
-            cur.execute(query, (data.get('correo_electrónico',''),))
+            cur.execute(query, (data.get('correo_electrónico',''),company_id))
         row = cur.fetchone()
         deal_id = str(row[0]) if row else None
         if deal_id:
@@ -954,17 +1012,20 @@ def receive_lead():
             query = (
                 "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
                 "WHERE TRIM(REPLACE(REPLACE(l.phone,'+34',''),' ',''))=%s "
+                "AND d.company_id = %s "               
                 "AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
                 "ORDER BY d.created_at DESC LIMIT 1"
             )
-            cur.execute(query, (phone,))
+            cur.execute(query, (phone, company_id))
+
         else:
             query = (
                 "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
                 "WHERE l.email=%s AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
+                "AND d.company_id = %s "
                 "ORDER BY d.created_at DESC LIMIT 1"
             )
-            cur.execute(query, (data.get('correo_electrónico',''),))
+            cur.execute(query, (data.get('correo_electrónico',''),company_id))
         row = cur.fetchone()
         deal_id = str(row[0]) if row else None
     except Exception as e:
