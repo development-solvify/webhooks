@@ -709,6 +709,41 @@ def create_portal_user(data, source, config=None):
         except:
             pass
 
+    # 4.5️⃣ Verificar si el cliente (número) ya existe para este company_id
+    if phone and company_id:
+        try:
+            conn = get_supabase_connection()
+            cur = conn.cursor()
+            # Consulta basada en la relación proporcionada:
+            # select l.phone, c.name, d.company_id from leads l, deals d, companies c 
+            # where d.lead_id = l.id and c.id = d.company_id and l.phone = ?
+            cur.execute("""
+                SELECT l.phone, c.name, d.company_id 
+                FROM leads l, deals d, companies c 
+                WHERE d.lead_id = l.id 
+                AND c.id = d.company_id 
+                AND l.phone = %s 
+                AND d.company_id = %s
+                LIMIT 1
+            """, (phone, company_id))
+            existing_lead = cur.fetchone()
+            
+            if existing_lead:
+                app.logger.warning(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Cliente ya existe para company_id {company_id}")
+                return None
+            else:
+                app.logger.debug(f"Cliente {phone} no existe para company_id {company_id}, procediendo a crear")
+                
+        except Exception as e:
+            app.logger.error(f"Error verificando duplicado para {phone} en company_id {company_id}: {e}")
+            # En caso de error en la verificación, continuamos con la creación para no bloquear el proceso
+        finally:
+            try:
+                cur.close()
+                conn.close()
+            except:
+                pass
+
     # 5️⃣ Construcción del payload
     parts = full.split()
     first = parts[0] if parts else ''
