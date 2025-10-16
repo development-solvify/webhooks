@@ -350,6 +350,74 @@ def lead_exists_in_company(company_id: str, phone: str) -> str | None:
         except:
             pass
 
+def get_company_id_for_source(source: str, fallback_id: str | None = None) -> str | None:
+    """
+    Dado un 'source' devuelve el company_id.
+    Prioridad:
+      1) Si en form_mappings.json → sources → <source> hay 'company_id', se devuelve tal cual.
+      2) Si hay 'company_name', se busca en BD: SELECT id FROM companies WHERE LOWER(name)=LOWER(company_name).
+      3) Si no hay entrada en mappings, se busca por el propio 'source' como nombre de empresa.
+      4) Si no se encuentra nada, devuelve fallback_id (o None si no se pasó).
+    """
+    try:
+        src_in = (source or '').strip()
+        if not src_in:
+            app.logger.warning("get_company_id_for_source: 'source' vacío")
+            return fallback_id
+
+        src_norm = src_in.casefold()
+        sources_cfg = (form_mapping_manager.mappings.get("sources") or {})
+
+        # Buscar coincidencia case-insensitive en el mapeo de sources
+        selected_cfg = None
+        for k, v in sources_cfg.items():
+            if str(k).strip().casefold() == src_norm:
+                selected_cfg = v or {}
+                break
+
+        # 1) company_id directo desde mapping
+        if selected_cfg and selected_cfg.get("company_id"):
+            comp_id = str(selected_cfg["company_id"]).strip()
+            app.logger.debug(f"[company_id] resuelto por mapping directo: {src_in} -> {comp_id}")
+            return comp_id
+
+        # 2) company_name desde mapping (o 3) usar source como nombre)
+        company_name = None
+        if selected_cfg and selected_cfg.get("company_name"):
+            company_name = str(selected_cfg["company_name"]).strip()
+            app.logger.debug(f"[company_name] resuelto por mapping: {src_in} -> '{company_name}'")
+        else:
+            company_name = src_in  # fallback: usar el propio source como nombre
+            app.logger.debug(f"[company_name] usando source como nombre: '{company_name}'")
+
+        # Lookup en BD por nombre (case-insensitive)
+        comp_id = None
+        try:
+            conn = get_supabase_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id FROM companies WHERE LOWER(name) = LOWER(%s) LIMIT 1",
+                (company_name,)
+            )
+            row = cur.fetchone()
+            if row:
+                comp_id = str(row[0])
+                app.logger.debug(f"[company_id] encontrado en BD para '{company_name}': {comp_id}")
+            else:
+                app.logger.warning(f"[company_id] NO encontrado en BD para '{company_name}'")
+        except Exception as e:
+            app.logger.error(f"Error buscando company_id para '{company_name}': {e}", exc_info=True)
+        finally:
+            try:
+                cur.close(); conn.close()
+            except:
+                pass
+
+        return comp_id or fallback_id
+
+    except Exception as e:
+        app.logger.error(f"get_company_id_for_source error: {e}", exc_info=True)
+        return fallback_id
 
 
 def normalize_key(key: str) -> str:
@@ -817,6 +885,9 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
     Devuelve dict con flags y objetos útiles para la respuesta del endpoint.
     """
     # 1) Portal user
+
+    company_id = get_company_id_for_source(source, fallback_id='a9242a58-4f5d-494c-8a74-45f8cee150e6')
+    app.logger.info(f"company_id resuelto para {source}: {company_id}")
     portal_resp = create_portal_user(data, source, config)
     app.logger.info(f"Lead de {source} procesado en portal: {portal_resp}")
 
