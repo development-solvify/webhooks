@@ -34,8 +34,19 @@ if os.path.exists('scripts.conf'):
         app.logger.info("scripts.conf cargado")
     except Exception as e:
         app.logger.error(f"Error cargando scripts.conf: {e}")
+        BASE_URL = "https://test.solvify.es/api"  # Fallback
 else:
     app.logger.warning("scripts.conf no encontrado.")
+    BASE_URL = "https://test.solvify.es/api"  # Fallback
+
+# 🔍 DEBUG CONFIGURACIÓN GLOBAL
+app.logger.info(f"=== CONFIGURACIÓN GLOBAL DEBUG ===")
+app.logger.info(f"🔑 TOKEN disponible: {'SÍ' if TOKEN else 'NO'}")
+app.logger.info(f"🔑 TOKEN (primeros 50 chars): {TOKEN[:50] if TOKEN else 'N/A'}...")
+app.logger.info(f"🌐 BASE_URL final: {BASE_URL}")
+app.logger.info(f"📂 Directorio actual: {os.getcwd()}")
+app.logger.info(f"📋 Variables de entorno API: SOLVIFY_API_TOKEN={'SET' if os.getenv('SOLVIFY_API_TOKEN') else 'NOT SET'}")
+app.logger.info("===================================")
 
 # ----------------------------------------------------------------------------
 # Sistema de Mappings Configurables
@@ -646,8 +657,18 @@ def create_info_lead_task(deal_id, data, content=None):
     return r.json()
 
 def create_portal_user(data, source, config=None):
+    # 🔍 DEBUG INICIO - DATOS DE ENTRADA
+    app.logger.info(f"=== INICIANDO CREATE_PORTAL_USER ===")
+    app.logger.info(f"📊 Data recibida: {data}")
+    app.logger.info(f"🏷️ Source: {source}")
+    app.logger.info(f"⚙️ Config: {config}")
+    
     full = data.get('nombre_y_apellidos', '').strip()
     phone = strip_country_code(data.get('número_de_teléfono','') or data.get('phone_number',''))
+    
+    app.logger.info(f"👤 Nombre procesado: '{full}'")
+    app.logger.info(f"📞 Teléfono original: '{data.get('número_de_teléfono', '') or data.get('phone_number', '')}'")
+    app.logger.info(f"📞 Teléfono procesado: '{phone}'")
     
     # 1️⃣ Validar datos usando configuración específica
     if config:
@@ -764,29 +785,74 @@ def create_portal_user(data, source, config=None):
 
     # 6️⃣ Petición a la API
     url = f"{BASE_URL}/leads/{cat_id}/"
+    
+    # 🔍 DEBUG DETALLADO - CREACIÓN PORTAL
+    app.logger.info(f"=== DEBUG CREACIÓN PORTAL USER ===")
+    app.logger.info(f"🌐 URL: {url}")
+    app.logger.info(f"📋 Payload completo: {payload}")
+    app.logger.info(f"🏢 Company ID usado: {company_id}")
+    app.logger.info(f"🏷️ Category ID usado: {cat_id}")
+    app.logger.info(f"📞 Teléfono procesado: {phone}")
+    app.logger.info(f"👤 Nombre completo: {full}")
+    app.logger.info(f"🔑 TOKEN disponible: {'SÍ' if TOKEN else 'NO'}")
+    app.logger.info(f"🎯 BASE_URL: {BASE_URL}")
+    
     try:
+        headers = {
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type": "application/json"
+        }
+        app.logger.info(f"📤 Headers: {headers}")
+        
         r = requests.post(
             url, json=payload,
-            headers={
-                "Authorization": f"Bearer {TOKEN}",
-                "Content-Type": "application/json"
-            },
+            headers=headers,
             timeout=30
         )
-        print(url, payload)  # DEBUG
-        print(r.status_code, r.text)
+        
+        # DEBUG RESPUESTA DETALLADO
+        app.logger.info(f"📥 RESPUESTA API:")
+        app.logger.info(f"   Status Code: {r.status_code}")
+        app.logger.info(f"   Response Headers: {dict(r.headers)}")
+        app.logger.info(f"   Response Text: {r.text}")
+        
+        try:
+            response_json = r.json()
+            app.logger.info(f"   Response JSON: {response_json}")
+        except:
+            app.logger.warning("   No se pudo parsear respuesta como JSON")
+        
         if r.status_code == 409:
             app.logger.warning(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Portal user duplicado")
             return None
         if r.status_code not in (200,201):
+            app.logger.error(f"❌ ERROR API - Status Code: {r.status_code}")
+            app.logger.error(f"❌ ERROR API - Response: {r.text}")
+            app.logger.error(f"❌ ERROR API - Headers: {dict(r.headers)}")
             app.logger.error(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Error creando portal user: {r.status_code} {r.text}")
             return None
+            
         r.raise_for_status()
+        
+    except requests.exceptions.Timeout as e:
+        app.logger.error(f"⏱️ TIMEOUT ERROR: {e}")
+        app.logger.error(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Timeout en petición API")
+        return None
+    except requests.exceptions.ConnectionError as e:
+        app.logger.error(f"🔌 CONNECTION ERROR: {e}")
+        app.logger.error(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Error de conexión API")
+        return None
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f"🌐 REQUEST ERROR: {e}")
+        app.logger.error(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Error en petición HTTP: {e}")
+        return None
     except Exception as e:
+        app.logger.error(f"💥 EXCEPCIÓN GENERAL: {type(e).__name__}: {e}")
         app.logger.error(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Excepción creando portal user: {e}")
         return None
 
-    app.logger.info(f"Portal user creado exitosamente para {company_name}: {full} | TEL={phone}")
+    app.logger.info(f"✅ Portal user creado exitosamente para {company_name}: {full} | TEL={phone}")
+    app.logger.info(f"✅ Respuesta exitosa: {r.json()}")
     return r.json()
 
 def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict):
