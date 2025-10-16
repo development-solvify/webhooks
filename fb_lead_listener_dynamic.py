@@ -1254,9 +1254,9 @@ def receive_b2b_lead():
 
     # 4) Fallback mínimo para críticos si no vienen en el mapping
     critical_fallbacks = {
-        'nombre_y_apellidos': ['Nombre', 'Full Name', 'full_name', 'fullname', 'name', 'Nombre '],
+        'nombre_y_apellidos': ['Nombre', 'Full Name', 'full_name', 'fullname', 'name', 'Nombre ', 'nombre', 'first_name', 'last_name'],
         'correo_electrónico': ['Mail', 'Email', 'email', 'correo', 'e-mail'],
-        'número_de_teléfono': ['Teléfono', 'Phone Number', 'phone_number', 'telefono', 'teléfono', 'tel', 'mobile'],
+        'número_de_teléfono': ['Teléfono', 'Phone Number', 'phone_number', 'telefono', 'teléfono', 'tel', 'mobile', 'phone'],
     }
     for target, aliases in critical_fallbacks.items():
         cur = str(data.get(target, '')).strip()
