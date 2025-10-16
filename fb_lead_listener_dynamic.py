@@ -1022,27 +1022,53 @@ def receive_lead():
             app.logger.debug(f"MAPEADO: '{original_key}' → '{mapped_key}' = '{value}' (tipo: {type(value)})")
     
     # Fallback inteligente para campos críticos si no se encontraron
-    critical_fields = {
-        'nombre_y_apellidos': [
-            'name', 'full_name', 'fullname', 'nombre', 'nombre_completo', 
-            'full name', 'Full Name', 'Nombre', 'Nombre '  # ← Agregado "Nombre " con espacio
-        ],
+    # Manejo especial para nombre_y_apellidos (combinar first_name + last_name)
+    current_name = str(data.get('nombre_y_apellidos', '')).strip()
+    if not current_name:
+        first_name = str(raw.get('first_name', '')).strip()
+        last_name = str(raw.get('last_name', '')).strip()
+        
+        # Si tenemos both first_name y last_name, combinarlos
+        if first_name and last_name:
+            data['nombre_y_apellidos'] = f"{first_name} {last_name}"
+            app.logger.debug(f"FALLBACK COMBINADO: 'first_name' + 'last_name' → 'nombre_y_apellidos' = '{first_name} {last_name}'")
+        # Si solo tenemos uno de los dos, usar el que tengamos
+        elif first_name:
+            data['nombre_y_apellidos'] = first_name
+            app.logger.debug(f"FALLBACK: 'first_name' → 'nombre_y_apellidos' = '{first_name}'")
+        elif last_name:
+            data['nombre_y_apellidos'] = last_name
+            app.logger.debug(f"FALLBACK: 'last_name' → 'nombre_y_apellidos' = '{last_name}'")
+        else:
+            # Fallback tradicional para otros campos de nombre
+            name_aliases = ['name', 'full_name', 'fullname', 'nombre', 'nombre_completo', 
+                           'full name', 'Full Name', 'Nombre', 'Nombre ']
+            for alias in name_aliases:
+                raw_value_original = raw.get(alias, '')
+                raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''
+                if raw_value:
+                    data['nombre_y_apellidos'] = raw_value
+                    app.logger.debug(f"FALLBACK MAPEADO: '{alias}' → 'nombre_y_apellidos' = '{raw_value}' (tipo original: {type(raw_value_original)})")
+                    break
+
+    # Fallback para otros campos críticos
+    other_critical_fields = {
         'correo_electrónico': [
-            'email', 'correo', 'mail', 'Email', 'e-mail', 'Mail'  # ← Agregado "Mail"
+            'email', 'correo', 'mail', 'Email', 'e-mail', 'Mail'
         ],
         'número_de_teléfono': [
             'phone', 'telefono', 'teléfono', 'phone_number', 'Phone Number', 
-            'tel', 'mobile', 'Teléfono'  # ← Agregado "Teléfono"
+            'tel', 'mobile', 'Teléfono'
         ]
     }
     
-    for target_field, possible_sources in critical_fields.items():
-        current_value = str(data.get(target_field, '')).strip()  # ← SEGURO: convertir a str primero
+    for target_field, possible_sources in other_critical_fields.items():
+        current_value = str(data.get(target_field, '')).strip()
         if not current_value:
             app.logger.debug(f"FALLBACK: Buscando '{target_field}' (actual: '{current_value}')")
             for possible_source in possible_sources:
                 raw_value_original = raw.get(possible_source, '')
-                raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''  # ← SEGURO: convertir a str
+                raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''
                 if raw_value:
                     data[target_field] = raw_value
                     app.logger.debug(f"FALLBACK MAPEADO: '{possible_source}' → '{target_field}' = '{raw_value}' (tipo original: {type(raw_value_original)})")
@@ -1063,8 +1089,13 @@ def receive_lead():
     # Debug final de datos mapeados
     app.logger.debug("DATOS FINALES MAPEADOS:")
     for key, value in data.items():
-        app.logger.debug(f"  '{key}': '{value}' (tipo: {type(value)})")    # 3️⃣ Crear portal user con configuración específica
-        app.logger.debug(f"  '{key}': '{value}' (tipo: {type(value)})")    # 3️⃣ Crear portal user con configuración específica
+        app.logger.debug(f"  '{key}': '{value}' (tipo: {type(value)})")
+
+    # 3️⃣ Obtener company_id para búsqueda de deal_id
+    company_id = get_company_id_for_source(source, fallback_id='a9242a58-4f5d-494c-8a74-45f8cee150e6')
+    app.logger.info(f"company_id resuelto para {source}: {company_id}")
+
+    # 3️⃣ Crear portal user con configuración específica
     if source in ('fb', 'Backup_FB', 'Alianza_FB'):
         portal_resp = create_portal_user(data, source, config)
         app.logger.info(f"Lead de {source} procesado en portal: {portal_resp}")
@@ -1158,15 +1189,43 @@ def receive_alianza_lead():
             data[mapped_key] = str(value) if not isinstance(value, str) else value
             app.logger.debug(f"MAPEADO: '{original_key}' → '{mapped_key}' = '{value}' (tipo: {type(value)})")
 
-    # 2.2 Fallback para críticos
-    critical_fields = {
-        'nombre_y_apellidos': ['name', 'full_name', 'fullname', 'nombre', 'nombre_completo',
-                               'full name', 'Full Name', 'Nombre', 'Nombre '],
+    # 2.2 Fallback para críticos - manejo especial para nombres
+    # Manejo especial para nombre_y_apellidos (combinar first_name + last_name)
+    current_name = str(data.get('nombre_y_apellidos', '')).strip()
+    if not current_name:
+        first_name = str(raw.get('first_name', '')).strip()
+        last_name = str(raw.get('last_name', '')).strip()
+        
+        # Si tenemos both first_name y last_name, combinarlos
+        if first_name and last_name:
+            data['nombre_y_apellidos'] = f"{first_name} {last_name}"
+            app.logger.debug(f"FALLBACK COMBINADO: 'first_name' + 'last_name' → 'nombre_y_apellidos' = '{first_name} {last_name}'")
+        # Si solo tenemos uno de los dos, usar el que tengamos
+        elif first_name:
+            data['nombre_y_apellidos'] = first_name
+            app.logger.debug(f"FALLBACK: 'first_name' → 'nombre_y_apellidos' = '{first_name}'")
+        elif last_name:
+            data['nombre_y_apellidos'] = last_name
+            app.logger.debug(f"FALLBACK: 'last_name' → 'nombre_y_apellidos' = '{last_name}'")
+        else:
+            # Fallback tradicional para otros campos de nombre
+            name_aliases = ['name', 'full_name', 'fullname', 'nombre', 'nombre_completo',
+                           'full name', 'Full Name', 'Nombre', 'Nombre ']
+            for alias in name_aliases:
+                raw_value_original = raw.get(alias, '')
+                raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''
+                if raw_value:
+                    data['nombre_y_apellidos'] = raw_value
+                    app.logger.debug(f"FALLBACK MAPEADO: '{alias}' → 'nombre_y_apellidos' = '{raw_value}'")
+                    break
+
+    # Fallback para otros campos críticos
+    other_critical_fields = {
         'correo_electrónico': ['email', 'correo', 'mail', 'Email', 'e-mail', 'Mail'],
         'número_de_teléfono': ['phone', 'telefono', 'teléfono', 'phone_number', 'Phone Number',
                                'tel', 'mobile', 'Teléfono'],
     }
-    for target_field, possible_sources in critical_fields.items():
+    for target_field, possible_sources in other_critical_fields.items():
         current_value = str(data.get(target_field, '')).strip()
         if not current_value:
             app.logger.debug(f"FALLBACK: Buscando '{target_field}' (actual: '{current_value}')")
@@ -1253,12 +1312,40 @@ def receive_b2b_lead():
             app.logger.debug(f"MAP: '{original_key}' → '{mapped_key}' = {val!r}")
 
     # 4) Fallback mínimo para críticos si no vienen en el mapping
-    critical_fallbacks = {
-        'nombre_y_apellidos': ['Nombre', 'Full Name', 'full_name', 'fullname', 'name', 'Nombre ', 'nombre', 'first_name', 'last_name'],
+    # 4.1) Manejo especial para nombre_y_apellidos (combinar first_name + last_name)
+    cur_name = str(data.get('nombre_y_apellidos', '')).strip()
+    if not cur_name:
+        first_name = str(raw.get('first_name', '')).strip()
+        last_name = str(raw.get('last_name', '')).strip()
+        
+        # Si tenemos both first_name y last_name, combinarlos
+        if first_name and last_name:
+            data['nombre_y_apellidos'] = f"{first_name} {last_name}"
+            app.logger.debug(f"FALLBACK COMBINADO: 'first_name' + 'last_name' → 'nombre_y_apellidos' = '{first_name} {last_name}'")
+        # Si solo tenemos uno de los dos, usar el que tengamos
+        elif first_name:
+            data['nombre_y_apellidos'] = first_name
+            app.logger.debug(f"FALLBACK: 'first_name' → 'nombre_y_apellidos' = '{first_name}'")
+        elif last_name:
+            data['nombre_y_apellidos'] = last_name
+            app.logger.debug(f"FALLBACK: 'last_name' → 'nombre_y_apellidos' = '{last_name}'")
+        else:
+            # Fallback tradicional para otros campos de nombre
+            name_aliases = ['Nombre', 'Full Name', 'full_name', 'fullname', 'name', 'Nombre ', 'nombre']
+            for alias in name_aliases:
+                raw_value_original = raw.get(alias, '')
+                raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''
+                if raw_value:
+                    data['nombre_y_apellidos'] = raw_value
+                    app.logger.debug(f"FALLBACK: '{alias}' → 'nombre_y_apellidos' = {raw_value!r}")
+                    break
+
+    # 4.2) Fallback para otros campos críticos
+    other_critical_fallbacks = {
         'correo_electrónico': ['Mail', 'Email', 'email', 'correo', 'e-mail'],
         'número_de_teléfono': ['Teléfono', 'Phone Number', 'phone_number', 'telefono', 'teléfono', 'tel', 'mobile', 'phone'],
     }
-    for target, aliases in critical_fallbacks.items():
+    for target, aliases in other_critical_fallbacks.items():
         cur = str(data.get(target, '')).strip()
         if not cur:
             for alias in aliases:
@@ -1290,148 +1377,6 @@ def receive_b2b_lead():
         "task": result["task"],
     }), 200
 
-
-@app.route('/B2B1', methods=['POST'])
-def receive_b2b_lead1():
-    """
-    Endpoint genérico para recibir leads B2B desde n8n
-    Acepta 'source' y usa lógica común: crear PortalUser -> (si OK) deal_id -> tarea Info lead
-    """
-    raw = request.json or {}
-    if isinstance(raw, list):
-        if not raw:
-            return jsonify({"error": "lista vacía"}), 400
-        raw = raw[0]
-
-    # --- Normalización de alias del source ---
-    alias_map = {
-        "despacho calero": "DespCaldero",
-        "despcaldero": "DespCaldero",
-        "despcalero": "DespCaldero",
-        "economis": "economis",  
-        "lexcorner": "lexcorner",  # Nuevo
-        "buenalex": "buenalex",  
-    }
-    src_in = (raw.get("source") or raw.get("Source") or "").strip()
-    src_norm_l = src_in.lower()
-   
-    source = alias_map.get(src_norm_l, src_in or "")
-    
-    app.logger.debug(f"Source normalizado: '{source}'")
-
-    app.logger.debug("="*50)
-    app.logger.debug("RAW GENERIC B2B LEAD:")
-    for key, value in raw.items():
-        app.logger.debug(f"  '{key}': '{value}'")
-    app.logger.debug("="*50)
-    app.logger.debug(f"Source detectado: '{source}'")
-
-    # 1) Mapping dinámico para el source
-    config = form_mapping_manager.get_mapping_for_form(source=source)
-    mapping = config.get("fields", {})
-    app.logger.debug(f"Config {source}: {config.get('description', 'Configuración dinámica')}")
-    app.logger.debug("MAPPING APLICADO:")
-    for orig, dest in mapping.items():
-        app.logger.debug(f"  '{orig}' → '{dest}'")
-
-    # 2) Mapear datos usando mapping dinámico
-    data = {}
-
-    # 2.1 Aplicar mapping específico
-    for original_key, mapped_key in mapping.items():
-        value = raw.get(original_key)
-        if value is not None:
-            data[mapped_key] = str(value) if not isinstance(value, str) else value
-            app.logger.debug(f"MAPEADO: '{original_key}' → '{mapped_key}' = '{value}' (tipo: {type(value)})")
-
-    # 2.2 Fallback inteligente para críticos
-    critical_fields = {
-        'nombre_y_apellidos': [
-            'name', 'full_name', 'fullname', 'nombre', 'nombre_completo', 
-            'full name', 'Full Name', 'Nombre', 'Nombre '  # ← Agregado "Nombre " con espacio
-        ],
-        'correo_electrónico': [
-            'email', 'correo', 'mail', 'Email', 'e-mail', 'Mail'  # ← Agregado "Mail"
-        ],
-        'número_de_teléfono': [
-            'phone', 'telefono', 'teléfono', 'phone_number', 'Phone Number', 
-            'tel', 'mobile', 'Teléfono'  # ← Agregado "Teléfono"
-        ]
-    }
-    for target_field, possible_sources in critical_fields.items():
-        current_value = str(data.get(target_field, '')).strip()
-        if not current_value:
-            app.logger.debug(f"FALLBACK: Buscando '{target_field}' (actual: '{current_value}')")
-            for possible_source in possible_sources:
-                raw_value_original = raw.get(possible_source, '')
-                raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''
-                if raw_value:
-                    data[target_field] = raw_value
-                    app.logger.debug(f"FALLBACK MAPEADO: '{possible_source}' → '{target_field}' = '{raw_value}' (tipo original: {type(raw_value_original)})")
-                    break
-                else:
-                    app.logger.debug(f"FALLBACK: '{possible_source}' no encontrado o vacío")
-        else:
-            app.logger.debug(f"FALLBACK: '{target_field}' ya tiene valor: '{current_value}'")
-
-    # 2.3 Agregar campos no mapeados (compatibilidad), excluyendo 'source'
-    for k, v in raw.items():
-        mapped_key = mapping.get(k)
-        if not mapped_key and k not in data and k != 'source':
-            data[k] = str(v) if not isinstance(v, str) else v
-            app.logger.debug(f"SIN MAPEAR: '{k}' = '{v}' (tipo: {type(v)})")
-
-    # 2.4 Debug final
-    app.logger.debug(f"DATOS FINALES MAPEADOS {source}:")
-    for key, value in data.items():
-        app.logger.debug(f"  '{key}': '{value}' (tipo: {type(value)})")
-
-    # --- Blindaje Despacho calero: completar campos críticos desde RAW si faltan ---
-    src_norm = (source or "").strip().lower()
-    app.logger.debug(f"=== BLINDAJE DEBUG: source='{source}', src_norm='{src_norm}' ===")
-    app.logger.debug(f"¿src_norm en lista?: {src_norm in ('despacho calero', 'despcaldero', 'despcalero')}")
-
-    if src_norm in ("despacho calero", "despcaldero", "despcalero"):
-        app.logger.debug("ENTRANDO EN BLINDAJE DESPCALDERO")
-
-
-    if src_norm in ("despacho calero", "despcaldero", "despcalero"):
-        # Deuda
-        if not data.get("monto_total_deudas"):
-            v = raw.get("Deuda") or raw.get("deuda")
-            if v is not None:
-                data["monto_total_deudas"] = str(v)
-
-        # Cantidad de deudas
-        if not data.get("cantidad_acreedores"):
-            v = (raw.get("Cantidad deudas") or raw.get("Cantidad de deudas")
-                 or raw.get("cantidad_deudas") or raw.get("cantidad deudas"))
-            if v is not None:
-                data["cantidad_acreedores"] = str(v)
-
-        # Dispuesto
-        if not data.get("dispuesto"):
-            v = raw.get("Dispuesto") or raw.get("dispuesto")
-            if v is not None:
-                data["dispuesto"] = str(v)
-
-        app.logger.debug("AFTER FILL (DespCaldero): " +
-                         f"monto_total_deudas={data.get('monto_total_deudas')}, " +
-                         f"cantidad_acreedores={data.get('cantidad_acreedores')}, " +
-                         f"dispuesto={data.get('dispuesto')}")
-
-
-    # 3) Lógica COMÚN: portal user -> (si OK) deal_id -> tarea Info lead
-    result = process_lead_common(source, data, raw, config)
-
-    return jsonify({
-        "message": f"Lead de {source} procesado",
-        "source": source,
-        "portal_user_created": result["portal_user_created"],
-        "info_lead_created": result["info_lead_created"],
-        "deal_id": result["deal_id"],
-        "task": result["task"],
-    }), 200
 
 @app.route('/reload-mappings', methods=['POST'])
 def reload_mappings():
