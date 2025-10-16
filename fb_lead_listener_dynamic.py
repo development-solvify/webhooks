@@ -773,6 +773,8 @@ def create_portal_user(data, source, config=None):
             },
             timeout=30
         )
+        print(url, payload)  # DEBUG
+        print(r.status_code, r.text)
         if r.status_code == 409:
             app.logger.warning(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Portal user duplicado")
             return None
