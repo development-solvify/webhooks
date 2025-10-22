@@ -2629,6 +2629,10 @@ class MessageService:
             derived_assigned = lead.get('user_assigned_id') if lead else None
             chat_id = (lead.get('deal_id') if lead and lead.get('deal_id') else clean_phone)
 
+            company_id = lead.get('company_id') if lead else None   
+            company_name = lead.get('company_name') if lead else None
+            print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+            print(company_name) 
             responsible_email = email or derived_email or ''
             assigned_to_id = assigned_to_id or derived_assigned
             if assigned_to_id and not self.lead_service.validate_assigned_to_id(assigned_to_id):
@@ -2669,7 +2673,7 @@ class MessageService:
                     id, message, sender_phone, responsible_email,
                     last_message_uid, last_message_timestamp,
                     from_me, status, created_at, updated_at, is_deleted,
-                    chat_id, chat_url, assigned_to_id
+                    chat_id, chat_url, assigned_to_id, company_id
                 ) VALUES (
                     %s, %s, %s, %s,
                     %s, %s,
@@ -2680,7 +2684,7 @@ class MessageService:
             params_ins = [
                 str(uuid4()), message_text, clean_phone, responsible_email,
                 message_id, now_ts, 'true', get_initial_message_status('text', is_template=False),
-                chat_id, clean_phone, assigned_to_id
+                chat_id, clean_phone, assigned_to_id, company_id
             ]
             self.db_manager.execute_query(insert_sql, params_ins)
             logging.info("✅ Outgoing message inserted")
