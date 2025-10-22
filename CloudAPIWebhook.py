@@ -2701,7 +2701,10 @@ class MessageService:
             assigned_to_id, email = self.lead_service.get_lead_assigned_info(clean_phone)
             now_ts = now_madrid_naive()
             payload_json = json.dumps(convert_uuids_to_strings(template_payload), ensure_ascii=False)
-
+            company_id = None
+            lead = self.lead_service.get_lead_data_by_phone(clean_phone)
+            if lead:
+                company_id = lead.get('company_id') 
             if message_id:
                 check_sql = "SELECT id FROM public.external_messages WHERE last_message_uid = %s LIMIT 1"
                 row = self.db_manager.execute_query(check_sql, [message_id], fetch_one=True)
@@ -2734,12 +2737,12 @@ class MessageService:
                     id, message, sender_phone, responsible_email,
                     last_message_uid, last_message_timestamp, from_me,
                     status, created_at, updated_at, is_deleted,
-                    chat_id, chat_url, assigned_to_id
+                    chat_id, chat_url, assigned_to_id, company_id
                 ) VALUES (
                     %s, %s, %s, %s,
                     %s, %s, %s,
                     %s, NOW(), NOW(), FALSE,
-                    %s, %s, %s
+                    %s, %s, %s, %s
                 )
             """
             params_ins = [
@@ -2748,7 +2751,7 @@ class MessageService:
                 clean_phone, clean_phone, assigned_to_id
             ]
             self.db_manager.execute_query(insert_sql, params_ins)
-            logging.info("✅ Template message inserted")
+            logging.info("✅ Template message inserted for company_id={company_id}")
             return True
 
         except Exception:
