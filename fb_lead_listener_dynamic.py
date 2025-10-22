@@ -735,28 +735,28 @@ def create_portal_user(data, source, config=None):
         try:
             conn = get_supabase_connection()
             cur = conn.cursor()
-            # Consulta basada en la relación proporcionada:
+            # Consulta exacta como la proporcionada:
             # select l.phone, c.name, d.company_id from leads l, deals d, companies c 
-            # where d.lead_id = l.id and c.id = d.company_id and l.phone = ?
+            # where d.lead_id = l.id and c.id = d.company_id and l.phone = '708684495'
             cur.execute("""
                 SELECT l.phone, c.name, d.company_id 
                 FROM leads l, deals d, companies c 
                 WHERE d.lead_id = l.id 
                 AND c.id = d.company_id 
-                AND l.phone = %s 
-                AND d.company_id = %s
+                AND l.phone = %s
                 LIMIT 1
-            """, (phone, company_id))
+            """, (phone,))
             existing_lead = cur.fetchone()
             
             if existing_lead:
-                app.logger.warning(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Cliente ya existe para company_id {company_id}")
+                existing_phone, existing_company_name, existing_company_id = existing_lead
+                app.logger.warning(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Cliente ya existe en company '{existing_company_name}' (ID: {existing_company_id})")
                 return None
             else:
-                app.logger.debug(f"Cliente {phone} no existe para company_id {company_id}, procediendo a crear")
+                app.logger.debug(f"Cliente {phone} no existe en ningún deal, procediendo a crear")
                 
         except Exception as e:
-            app.logger.error(f"Error verificando duplicado para {phone} en company_id {company_id}: {e}")
+            app.logger.error(f"Error verificando duplicado para {phone}: {e}")
             # En caso de error en la verificación, continuamos con la creación para no bloquear el proceso
         finally:
             try:

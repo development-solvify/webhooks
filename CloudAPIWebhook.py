@@ -2366,7 +2366,7 @@ class LeadService:
                 l.id, l.first_name, l.last_name, l.email,
                 d.id, d.user_assigned_id,
                 p.email, p.first_name, p.last_name,
-                c.name
+                c.name , c.id
             FROM public.leads l
             JOIN public.deals d ON d.lead_id = l.id
             LEFT JOIN public.profiles p ON p.id = d.user_assigned_id
@@ -2387,7 +2387,8 @@ class LeadService:
             'responsible_email': row[6] or '',
             'responsible_first_name': row[7] or '',
             'responsible_name': f"{row[7] or ''} {row[8] or ''}".strip(),
-            'company_name': row[9] or '',  # ← NUEVO CAMPO
+            'company_name': row[9] or '',  # ← NUEVO CAMPO,
+            'company_id': str(row[10]) if row[10] else None,
             'phone': clean_phone,
         }
 
@@ -2621,6 +2622,9 @@ class MessageService:
                 
             clean_phone = PhoneUtils.strip_34(customer_phone)
             lead = self.lead_service.get_lead_data_by_phone(clean_phone)
+            print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+            print(lead)
+
             derived_email = lead.get('responsible_email') if lead else None
             derived_assigned = lead.get('user_assigned_id') if lead else None
             chat_id = (lead.get('deal_id') if lead and lead.get('deal_id') else clean_phone)
