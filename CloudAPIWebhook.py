@@ -2622,7 +2622,7 @@ class MessageService:
                 
             clean_phone = PhoneUtils.strip_34(customer_phone)
             lead = self.lead_service.get_lead_data_by_phone(clean_phone)
-            print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+            print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
             print(lead)
 
             derived_email = lead.get('responsible_email') if lead else None
