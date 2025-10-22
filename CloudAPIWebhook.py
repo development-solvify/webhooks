@@ -2742,13 +2742,13 @@ class MessageService:
                     %s, %s, %s, %s,
                     %s, %s, %s,
                     %s, NOW(), NOW(), FALSE,
-                    %s, %s, %s, %s, %s 
+                    %s, %s, %s, %s
                 )
-            """
+            """            
             params_ins = [
                 str(uuid4()), payload_json, clean_phone, (email or ''),
                 message_id, now_ts, 'true', get_initial_message_status('text', is_template=True),
-                clean_phone, clean_phone, assigned_to_id
+                clean_phone, clean_phone, assigned_to_id, company_id
             ]
             self.db_manager.execute_query(insert_sql, params_ins)
             logging.info("✅ Template message inserted for company_id={company_id}")
