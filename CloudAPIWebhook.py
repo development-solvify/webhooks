@@ -2559,7 +2559,7 @@ class MessageService:
             lead = self.lead_service.get_lead_data_by_phone(sender)
             chat_id = (lead.get('deal_id') if lead and lead.get('deal_id') else sender)
             chat_url = sender
-
+            company_id = lead.get('company_id') if lead else None
             if uid:
                 check_sql = "SELECT id FROM public.external_messages WHERE last_message_uid = %s LIMIT 1"
                 row = self.db_manager.execute_query(check_sql, [uid], fetch_one=True)
@@ -2592,18 +2592,18 @@ class MessageService:
                     id, message, sender_phone, responsible_email,
                     last_message_uid, last_message_timestamp,
                     from_me, status, created_at, updated_at, is_deleted,
-                    chat_id, chat_url, assigned_to_id
+                    chat_id, chat_url, assigned_to_id, company_id
                 ) VALUES (
                     %s, %s, %s, %s,
                     %s, %s,
                     %s, %s, NOW(), NOW(), FALSE,
-                    %s, %s, %s
+                    %s, %s, %s, %s
                 )
             """
             params_ins = [
                 str(uuid4()), body_text_or_json, sender, (responsible_email or ""),
                 uid, last_message_ts, 'false', 'received',
-                chat_id, chat_url, assigned_to_id
+                chat_id, chat_url, assigned_to_id, company_id
             ]
             self.db_manager.execute_query(insert_sql, params_ins)
             logging.info("✅ Incoming message inserted")
