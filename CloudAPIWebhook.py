@@ -2678,7 +2678,7 @@ class MessageService:
                     %s, %s, %s, %s,
                     %s, %s,
                     %s, %s, NOW(), NOW(), FALSE,
-                    %s, %s, %s
+                    %s, %s, %s, %s
                 )
             """
             params_ins = [
