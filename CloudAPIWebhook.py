@@ -3611,8 +3611,24 @@ SUPABASE_KEY = os.getenv('SUPABASE_KEY') or supabase_cfg.get('SUPABASE_KEY')
 
 supabase_client = None
 if SUPABASE_URL and SUPABASE_KEY:
-    supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    logger.info(f"Supabase client created successfully with URL: {SUPABASE_URL[:30]}...")
+    try:
+        # Try creating client without proxy first
+        try:
+            supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        except TypeError as e:
+            if 'proxy' in str(e):
+                # If error mentions proxy, try alternative initialization
+                from supabase import Client, create_client
+                supabase_client = Client(
+                    supabase_url=SUPABASE_URL,
+                    supabase_key=SUPABASE_KEY
+                )
+            else:
+                raise
+        logger.info(f"Supabase client created successfully with URL: {SUPABASE_URL[:30]}...")
+    except Exception as e:
+        logger.error(f"Error creating Supabase client: {e}")
+        logger.warning("⚠️ Running without Supabase support")
 else:
     logger.warning(f"Supabase client not created. URL: {SUPABASE_URL}, KEY: {SUPABASE_KEY[:20] if SUPABASE_KEY else None}...")
 
