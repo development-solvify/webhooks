@@ -4510,6 +4510,46 @@ def get_whatsapp_credentials_for_phone(phone: str) -> dict:
     except Exception:
         logger.exception(f"[get_whatsapp_credentials_for_phone] Error resolving credentials for phone {phone}")
         return default
+# Helper function to get company credentials
+def get_whatsapp_credentials_for_company(company_id: str) -> dict:
+    """Get WhatsApp credentials for specific company"""
+    try:
+        # Check cache first
+        cached = company_cache.get(company_id)
+        if cached:
+            custom_props = cached.get('custom_properties', {})
+            if custom_props:
+                return {
+                    'access_token': custom_props.get('WHATSAPP_ACCESS_TOKEN'),
+                    'phone_number_id': custom_props.get('WHATSAPP_PHONE_NUMBER_ID'),
+                    'business_id': custom_props.get('WHATSAPP_BUSINESS_ID'),
+                    'base_url': f"https://graph.facebook.com/v22.0/{custom_props.get('WHATSAPP_PHONE_NUMBER_ID')}/messages"
+                }
+
+        # If not in cache, query database
+        sql = """
+            SELECT p.property_name, opv.value 
+            FROM object_property_values opv
+            JOIN properties p ON p.id = opv.property_id
+            WHERE opv.object_reference_type = 'companies'
+            AND opv.object_reference_id = %s
+            AND p.property_name IN ('WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_BUSINESS_ID')
+        """
+        rows = db_manager.execute_query(sql, [company_id], fetch_all=True)
+
+        credentials = {}
+        for row in rows:
+            credentials[row['property_name']] = row['value']
+
+        if credentials.get('WHATSAPP_PHONE_NUMBER_ID'):
+            credentials['base_url'] = f"https://graph.facebook.com/v22.0/{credentials['WHATSAPP_PHONE_NUMBER_ID']}/messages"
+
+        return credentials
+
+    except Exception as e:
+        logger.error(f"Error getting company credentials: {e}")
+        return {}
+
 # ...existing code...
 @app.route('/get_templates', methods=['GET'])
 def get_templates():
