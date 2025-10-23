@@ -73,7 +73,7 @@
     "required_fields": ["correo_electrónico", "número_de_teléfono"]
   }
 },
-    "lexcorner": {
+    "Lex Corner": {
       "description": "Mapping para FBLexCorner",
       "company_name": "Lex Corner",
       "fields": {
