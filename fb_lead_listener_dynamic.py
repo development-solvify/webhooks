@@ -730,40 +730,43 @@ def create_portal_user(data, source, config=None):
         except:
             pass
 
-    # 4.5️⃣ Verificar si el cliente (número) ya existe para este company_id
+    # 4.5️⃣ Verificar si el cliente (número) ya existe para ESTE company_id
     if phone and company_id:
         try:
             conn = get_supabase_connection()
             cur = conn.cursor()
-            # Consulta exacta como la proporcionada:
-            # select l.phone, c.name, d.company_id from leads l, deals d, companies c 
-            # where d.lead_id = l.id and c.id = d.company_id and l.phone = '708684495'
             cur.execute("""
-                SELECT l.phone, c.name, d.company_id 
-                FROM leads l, deals d, companies c 
-                WHERE d.lead_id = l.id 
-                AND c.id = d.company_id 
-                AND l.phone = %s
+                SELECT 1
+                FROM leads l
+                JOIN deals d ON d.lead_id = l.id AND d.is_deleted = FALSE
+                -- Mismo criterio de normalización que usas en la búsqueda de deal_id
+                WHERE TRIM(REPLACE(REPLACE(l.phone, '+34', ''), ' ', '')) = %s
+                AND l.is_deleted = FALSE
+                AND d.company_id = %s
                 LIMIT 1
-            """, (phone,))
-            existing_lead = cur.fetchone()
-            
-            if existing_lead:
-                existing_phone, existing_company_name, existing_company_id = existing_lead
-                app.logger.warning(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Cliente ya existe en company '{existing_company_name}' (ID: {existing_company_id})")
+            """, (phone, company_id))
+            exists_same_company = cur.fetchone() is not None
+
+            if exists_same_company:
+                app.logger.warning(
+                    f"RECHAZADO PortalUser: {full} | TEL={phone} | "
+                    f"MOTIVO=Cliente ya existe en ESTA company (ID: {company_id})"
+                )
                 return None
             else:
-                app.logger.debug(f"Cliente {phone} no existe en ningún deal, procediendo a crear")
-                
+                app.logger.debug(
+                    f"Cliente {phone} no existe en deals de company_id {company_id}, procediendo a crear"
+                )
+
         except Exception as e:
-            app.logger.error(f"Error verificando duplicado para {phone}: {e}")
-            # En caso de error en la verificación, continuamos con la creación para no bloquear el proceso
+            app.logger.error(f"Error verificando duplicado para {phone} en company {company_id}: {e}")
         finally:
             try:
                 cur.close()
                 conn.close()
             except:
                 pass
+
 
     # 5️⃣ Construcción del payload
     parts = full.split()
