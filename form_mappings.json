@@ -88,7 +88,7 @@
         "Audiencia": "audiencia", 
         "Anuncio": "anuncio",
         "Formulario": "form_name",
-        "Leadgen Id": "leadgen_id",
+        "Leadgen Id": "leadgen_id"
         
       },
       "validations": {
