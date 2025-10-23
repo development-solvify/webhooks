@@ -82,12 +82,14 @@
         "Correo electrónico": "correo_electrónico",
         "Teléfono": "número_de_teléfono",
         "¿A cuánto asciende el conjunto de tus deudas?": "monto_total_deudas",
+        "Deuda": "monto_total_deudas",
         "¿En qué situación laboral te encuentras?": "situacion_laboral",
         "Campaña": "campaign_name",
         "Audiencia": "audiencia", 
         "Anuncio": "anuncio",
         "Formulario": "form_name",
-        "Leadgen Id": "leadgen_id"
+        "Leadgen Id": "leadgen_id",
+        
       },
       "validations": {
         "check_debt_amount": true,
