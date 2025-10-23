@@ -1281,6 +1281,7 @@ def receive_b2b_lead1():
         "despcalero": "DespCaldero",
         "economis": "economis",  
         "lexcorner": "lexcorner",  # Nuevo
+        "lexcorner": "Lex C",  # Nuevo
         "buenalex": "buenalex",  
     }
     src_in = (raw.get("source") or raw.get("Source") or "").strip()
