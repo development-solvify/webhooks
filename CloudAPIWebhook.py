@@ -142,7 +142,9 @@ class CompanyConfigCache:
             if not result:
                 return None, None, None
                 
-            company_id, company_name = result
+            
+            company_id = str(result[0])  # ✅ Convertir UUID a string
+            company_name = result[1]
             company_cache = self.get(company_id)
             
             if not company_cache:
