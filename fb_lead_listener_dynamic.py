@@ -700,9 +700,9 @@ def create_portal_user(data, source, config=None):
     app.logger.debug(f"source recibido: '{source}'")
 
     if not company_name:
-        if source in ('Backup_FB', 'Alianza_FB', 'MARTIN'):
-            company_name = 'sheets'
-            app.logger.debug("Company name asignado: 'sheets'")
+        if source in ('Backup_FB', 'Alianza_FB', 'MARTIN','fb'):
+            company_name = 'Solvify'
+            app.logger.debug("Company name asignado: 'Solvify'")
         else:
             company_name = source
             app.logger.debug(f"Company name asignado desde source: '{company_name}'")
