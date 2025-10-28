@@ -252,4 +252,7 @@
     "required_fields": ["correo_electrónico", "número_de_teléfono"]
   }
 }
+  }
+} 
+
 
