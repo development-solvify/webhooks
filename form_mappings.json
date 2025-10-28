@@ -234,17 +234,24 @@
       "Mail": "correo_electrónico",
       "Lead ID": "leadgen_id",
 
-      "Tipo de Cita": "P1",
-      "Oficina Seleccionada": "P2",
-      "Tipo_cita": "tipo_cita",
+      "P1": "P1",
+      "P2": "P2",
+      "P3": "P3",
       "P4": "P4",
       "P5": "P5",
-      "P6": "P6"
+      "P6": "P6",
+      "Lead ID": "lead_gen_id",
+      "leadgen_id": "lead_gen_id"
 
     },
-    "validations": {
-      "check_debt_questions": false,
-      "required_fields": ["correo_electrónico", "número_de_teléfono"]
+  "labels": {
+    "P1": "Tipo de Cita",
+    "P2": "Oficina Seleccionada",
+    "tipo_cita": "Tipo de Cita"
+  },
+  "validations": {
+    "check_debt_questions": false,
+    "required_fields": ["correo_electrónico", "número_de_teléfono"]
     }
   }
 
