@@ -280,7 +280,7 @@ class FormMappingManager:
     
     def _resolve_mapping(self, config):
         """Resuelve herencia de mappings (inherits_from)"""
-        result = {"fields": {}, "validations": {}, "company_name": None}
+        result = {"fields": {}, "validations": {}, "company_name": None, "labels": {}}
         
         # Si hereda de otro mapping, combinar
         if "inherits_from" in config:
@@ -289,11 +289,13 @@ class FormMappingManager:
                 parent = self._resolve_mapping(self.mappings[parent_name])
                 result["fields"].update(parent["fields"])
                 result["validations"].update(parent.get("validations", {}))
+                result["labels"].update(parent.get("labels", {}))                
         
         # Aplicar campos específicos (override)
         result["fields"].update(config.get("fields", {}))
         result["validations"].update(config.get("validations", {}))
         result["company_name"] = config.get("company_name")
+        result["labels"].update(config.get("labels", {}))        
         
         return result
     
