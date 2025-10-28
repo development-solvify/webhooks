@@ -564,6 +564,7 @@ def build_info_lead_content_from_mapping(data_norm: dict, raw_payload: dict, map
 
     fields_map = (mapping.get('fields') or {})
     # Invertimos para conocer la etiqueta original (src_key) a partir de la clave normalizada
+    
     label_by_norm = {norm_key: src_key for src_key, norm_key in fields_map.items()}
     labels_map = mapping.get('labels') or {}
     
@@ -573,7 +574,7 @@ def build_info_lead_content_from_mapping(data_norm: dict, raw_payload: dict, map
     # 2) Recorremos TODOS los campos normalizados presentes en data_norm
     for norm_key, val in data_norm.items():
         # Excluir campos técnicos que no deben salir en el InfoLead
-        if norm_key in ('nombre_y_apellidos', 'correo_electrónico', 'número_de_teléfono', 'leadgen_id'):
+        if norm_key in ('nombre_y_apellidos', 'correo_electrónico', 'número_de_teléfono', 'leadgen_id', 'lead_gen_id'):
             continue  
 
         label = labels_map.get(norm_key) or label_by_norm.get(norm_key, norm_key)
@@ -783,7 +784,7 @@ def create_portal_user(data, source, config=None):
         'channel':    company_name,
         'form_name':  data.get('form_name',''),
         'campaign':   data.get('campaign_name',''),
-        'lead_gen_id':data.get('leadgen_id',''),
+        'lead_gen_id':data.get('lead_gen_id') or data.get('leadgen_id',''),
         'company_id' : company_id or 'a9242a58-4f5d-494c-8a74-45f8cee150e6'
     }
     app.logger.debug(f"Payload PortalUser para {company_name}: {payload}")
