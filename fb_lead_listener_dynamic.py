@@ -565,7 +565,8 @@ def build_info_lead_content_from_mapping(data_norm: dict, raw_payload: dict, map
     fields_map = (mapping.get('fields') or {})
     # Invertimos para conocer la etiqueta original (src_key) a partir de la clave normalizada
     label_by_norm = {norm_key: src_key for src_key, norm_key in fields_map.items()}
-
+    labels_map = mapping.get('labels') or {}
+    
     # 1) Reglas específicas “Despacho calero”: etiquetas legibles
     is_calero = (source or '').strip().lower() in ('despacho calero', 'despcaldero', 'despcalero')
 
@@ -575,7 +576,8 @@ def build_info_lead_content_from_mapping(data_norm: dict, raw_payload: dict, map
         if norm_key in ('nombre_y_apellidos', 'correo_electrónico', 'número_de_teléfono', 'leadgen_id'):
             continue  
 
-        label = label_by_norm.get(norm_key, norm_key)
+        label = labels_map.get(norm_key) or label_by_norm.get(norm_key, norm_key)
+
 
         # Caso especial: DISUESTO → Acepta coste de estudio (Sí/No)
         if norm_key == 'dispuesto':
