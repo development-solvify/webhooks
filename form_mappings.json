@@ -234,8 +234,8 @@
       "Mail": "correo_electrónico",
       "Lead ID": "leadgen_id",
 
-      "P1": "P1",
-      "P2": "P2",
+      "Tipo de Cita": "P1",
+      "Oficina Seleccionada": "P2",
       "Tipo_cita": "tipo_cita",
       "P4": "P4",
       "P5": "P5",
