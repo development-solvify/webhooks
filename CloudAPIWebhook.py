@@ -2194,7 +2194,7 @@ class WhatsAppService:
                     ]
                 }
             }
-        elif template_name in ['contacto_recordatorio_pago']:
+        elif template_name in ['contacto_recordatorio_pago','recordatorio_proximo_pago']:
             # Template sin parámetros - solo cuerpo estático
             return {
                 "messaging_product": "whatsapp",
