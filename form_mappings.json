@@ -224,6 +224,29 @@
         "required_fields": ["nombre_y_apellidos", "correo_electrónico", "número_de_teléfono"]
       }
     },
+    "APTD": {
+  "description": "Mapping para Abogados Typeform / n8n",
+  "company_name": "APTD",
+  "fields": {
+    "¿Nos facilitas tu nombre para personalizar tu experiencia?": "nombre_y_apellidos",
+    "[field:a40c33b1-d066-424f-93f7-1e698f389321], déjanos tu correo para enviarte información sobre tu caso": "correo_electrónico",
+    "¿Nos podrías proporcionar tu número para poder contactar contigo?": "número_de_teléfono",
+    
+    "Indícanos el importe total de tus deudas ": "monto_total_deudas",
+    "¿Qué tipo de deuda tienes?": "tipo_de_deuda",
+    "¿ [field:a40c33b1-d066-424f-93f7-1e698f389321], con cuantas entidades tienes las deudas?": "cantidad_acreedores",
+    
+    "¿Tienes vivienda en propiedad?": "tienes_vivienda",
+    "¿Tienes vehículo en propiedad?": "tienes_vehículo",
+    "¿Cuáles son tus ingresos familiares actualmente?": "ingresos_familiares",
+    "\\nNecesitamos que aceptes la cesión de tus datos desde *Reclamador* a nuestro partner, *Abogado para tus deudas*, con la finalidad de gestionar tu caso.": "consentimiento_cesion"
+  },
+  "validations": {
+    "check_debt_amount": true,
+    "rejected_amounts": ["menos_de_8000€", "sin_deudas"],
+    "required_fields": ["nombre_y_apellidos", "correo_electrónico", "número_de_teléfono"]
+  }
+},
 "ETD": {
   "description": "Mapping para Eliminamos Tu Deuda desde Google Sheets / n8n",
   "company_name": "Eliminamos Tu Deuda",
