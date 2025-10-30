@@ -4582,8 +4582,8 @@ def get_templates():
         query_phone = request.args.get('phone')
         query_id = request.args.get('company_id') or request.args.get('id')
 
-        logger.info(f"📊 Usando query_phone: {query_phone}...")
-        logger.info(f"📊 Usando query_id: {query_id}")
+        logger.info(f"📊 Usando PHONE NUMBER: {query_phone}...")
+        logger.info(f"📊 Usando COMPANY_ID: {query_id}")
 
         # Resolver teléfono desde id si hace falta
         resolved_phone = None
