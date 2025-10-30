@@ -475,9 +475,46 @@ class ExtendedFileService:
             raise
 
 
-    def get_whatsapp_credentials_for_phone(phone: str) -> dict:
-        """Obtiene credenciales de WhatsApp para un teléfono específico usando el caché."""
+def get_whatsapp_credentials_for_phone(self, phone=None, company_id=None):
+    """
+    Fetch WhatsApp credentials for a phone number or company.
+    If company_id is provided, attempt to fetch credentials for the company first.
+    If those creds are valid, return them. Otherwise fall back to phone-based lookup.
+    At least one of phone or company_id must be provided.
+    """
+    if not phone and not company_id:
+        raise ValueError("At least one of 'phone' or 'company_id' must be provided")
+    
+    if company_id:
         try:
+            self.logger.info(f"Fetching WhatsApp credentials for company_id={company_id}")
+        except Exception:
+            pass
+
+        company_creds = None
+        try:
+            company_creds = self.get_whatsapp_credentials_for_company(company_id)
+        except Exception as e:
+            try:
+                self.logger.warning(f"Error fetching company credentials for {company_id}: {e}")
+            except Exception:
+                pass
+
+        if company_creds:
+            required_keys = ("access_token", "phone_number_id")
+            if all(company_creds.get(k) for k in required_keys):
+                return company_creds
+            else:
+                try:
+                    self.logger.warning("Incomplete company WhatsApp credentials; falling back to phone lookup")
+                except Exception:
+                    pass
+
+    # Fallback: existing phone-based logic
+    if not phone:
+        try:
+            self.logger.error("No phone provided and company credentials unavailable")
+
             logger.info(f"[CREDENTIALS DEBUG] Getting credentials for phone: {phone}")
             clean_phone = PhoneUtils.strip_34(phone)
             logger.info(f"[CREDENTIALS DEBUG] Clean phone: {clean_phone}")
@@ -512,7 +549,9 @@ class ExtendedFileService:
             logger.error(f"[CREDENTIALS DEBUG] Error getting credentials for {phone}: {e}")
             return {}
 
-
+        except Exception:
+            pass
+        return None
 
     def download_whatsapp_media(self, media_url: str, phone: str = None) -> tuple[bytes, str, str]:
         """Download media from WhatsApp and return content, filename, mime_type.
@@ -4468,7 +4507,7 @@ def get_cover_wb_for_phone(phone: str) -> str:
         logger.exception(f"[COVER_WB] Error resolving cover for phone {phone}")
         return default_cover
     
-def get_whatsapp_credentials_for_phone(self, phone, company_id=None):
+def get_whatsapp_credentials_for_phone(phone: str) -> dict:
     """
     Devuelve las credenciales a usar para llamadas a la API de WhatsApp según el teléfono.
     - Intenta resolver company config desde la caché (company_cache.get_config_by_phone)
@@ -4477,39 +4516,6 @@ def get_whatsapp_credentials_for_phone(self, phone, company_id=None):
     - Si no, devuelve las credenciales globales (ACCESS_TOKEN, PHONE_NUMBER_ID, WABA_ID).
     Retorna dict con keys: access_token, phone_number_id, business_id, headers, base_url, company_name, company_id
     """
-    if company_id:
-        # Prefer company-level credentials when a company_id is given
-        try:
-            self.logger.info(f"Fetching WhatsApp credentials for company_id={company_id}")
-        except Exception:
-            # logger might not be available in all contexts; ignore logging errors
-            pass
-
-        company_creds = None
-        try:
-            company_creds = self.get_whatsapp_credentials_for_company(company_id)
-        except Exception as e:
-            try:
-                self.logger.warning(f"Error fetching company credentials for {company_id}: {e}")
-            except Exception:
-                pass
-
-        # Validate company credentials (adjust required keys to match your app)
-        if company_creds:
-            required_keys = ("access_token", "phone_number_id")  # adjust as needed
-            if all(company_creds.get(k) for k in required_keys):
-                # Ensure consistent return shape if needed (merge/add fields)
-                return company_creds
-            else:
-                try:
-                    self.logger.warning("Incomplete company WhatsApp credentials; falling back to phone lookup")
-                except Exception:
-                    pass
-        else:
-            try:
-                self.logger.info("No company WhatsApp credentials found; falling back to phone lookup")
-            except Exception:
-                pass    
     # Valores por defecto (globales)
     default = {
         'access_token': ACCESS_TOKEN,
