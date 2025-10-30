@@ -4506,8 +4506,7 @@ def get_cover_wb_for_phone(phone: str) -> str:
     except Exception:
         logger.exception(f"[COVER_WB] Error resolving cover for phone {phone}")
         return default_cover
-    
-def get_whatsapp_credentials_for_phone(phone: str) -> dict:
+  
     """
     Devuelve las credenciales a usar para llamadas a la API de WhatsApp según el teléfono.
     - Intenta resolver company config desde la caché (company_cache.get_config_by_phone)
@@ -4645,6 +4644,8 @@ def get_templates():
 
         # RESOLVER CREDENCIALES por teléfono (usa cache/company config) -> helper
         creds = get_whatsapp_credentials_for_phone(resolved_phone)
+
+
         used_company_name = creds.get('company_name')
         used_company_id = creds.get('company_id')
         headers = creds.get('headers') or WHATSAPP_HEADERS
