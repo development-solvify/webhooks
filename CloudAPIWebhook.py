@@ -4568,7 +4568,7 @@ def get_whatsapp_credentials_for_company(company_id: str) -> dict:
         logger.error(f"Error getting company credentials: {e}")
         return {}
 
-# ...existing code...
+
 @app.route('/get_templates', methods=['GET'])
 def get_templates():
     try:
@@ -4692,6 +4692,118 @@ def get_templates():
             'message': f'Error interno: {str(e)}',
             'waba_id_configured': WABA_ID if WABA_ID else 'Not configured'
         }), 500
+# ...existing code...
+
+def log_message_with_company_info(phone: str, message_type: str, direction: str, content: str = "", template_name: str = None, message_id: str = None):
+    """
+    Registra un mensaje con información clara de cliente y compañía
+    
+    Args:
+        phone: Número de teléfono
+        message_type: Tipo de mensaje (text, template, media, etc.)
+        direction: INCOMING o OUTGOING
+        content: Contenido del mensaje (opcional)
+        template_name: Nombre del template (si aplica)
+        message_id: ID del mensaje de WhatsApp
+    """
+    try:
+        clean_phone = PhoneUtils.strip_34(phone)
+        
+        # Obtener información del lead/cliente y compañía
+        lead_data = lead_service.get_lead_data_by_phone(clean_phone)
+        
+        if lead_data:
+            client_name = f"{lead_data.get('first_name', '')} {lead_data.get('last_name', '')}".strip()
+            company_name = lead_data.get('company_name', 'Sin compañía')
+            company_id = lead_data.get('company_id', 'N/A')
+            deal_id = lead_data.get('deal_id', 'N/A')
+            responsible = lead_data.get('responsible_name', 'Sin asignar')
+        else:
+            client_name = "Cliente no registrado"
+            company_name = "Sin compañía"
+            company_id = "N/A"
+            deal_id = "N/A"
+            responsible = "Sin asignar"
+        
+        # Construir mensaje de log
+        log_parts = [
+            f"📱 {direction}",
+            f"👤 Cliente: {client_name} ({clean_phone})",
+            f"🏢 Compañía: {company_name} (ID: {company_id})",
+            f"📋 Deal: {deal_id}",
+            f"👨‍💼 Responsable: {responsible}",
+            f"📨 Tipo: {message_type}"
+        ]
+        
+        if template_name:
+            log_parts.append(f"📄 Template: {template_name}")
+        
+        if message_id:
+            log_parts.append(f"🆔 Message ID: {message_id}")
+        
+        if content:
+            content_preview = content[:100] + "..." if len(content) > 100 else content
+            log_parts.append(f"💬 Contenido: {content_preview}")
+        
+        # Log principal muy visible
+        logger.info("=" * 80)
+        for part in log_parts:
+            logger.info(f"  {part}")
+        logger.info("=" * 80)
+        
+    except Exception as e:
+        logger.error(f"Error en log_message_with_company_info: {e}")
+        logger.info(f"📱 {direction} - Teléfono: {phone} - Tipo: {message_type} (Error obteniendo detalles)")
+
+def log_request_with_company_info(endpoint: str, method: str, data: dict = None):
+    """
+    Registra una petición HTTP con información de cliente/compañía si está disponible
+    """
+    try:
+        # Extraer teléfono de diferentes campos posibles
+        phone = None
+        company_id = None
+        
+        if data:
+            phone = (data.get('customer_phone') or 
+                    data.get('phone') or 
+                    data.get('to_phone') or
+                    data.get('telefono'))
+            company_id = data.get('company_id')
+        
+        log_parts = [
+            f"🌐 HTTP {method} {endpoint}",
+        ]
+        
+        if phone:
+            clean_phone = PhoneUtils.strip_34(phone)
+            lead_data = lead_service.get_lead_data_by_phone(clean_phone)
+            
+            if lead_data:
+                client_name = f"{lead_data.get('first_name', '')} {lead_data.get('last_name', '')}".strip()
+                company_name = lead_data.get('company_name', 'Sin compañía')
+                log_parts.extend([
+                    f"👤 Cliente: {client_name} ({clean_phone})",
+                    f"🏢 Compañía: {company_name}"
+                ])
+            else:
+                log_parts.append(f"📱 Teléfono: {clean_phone} (no registrado)")
+        
+        elif company_id:
+            # Si solo tenemos company_id, obtener info de la caché
+            cached_config = company_cache.get(company_id)
+            if cached_config:
+                company_name = cached_config.get('name', 'Desconocida')
+                log_parts.append(f"🏢 Compañía: {company_name} (ID: {company_id})")
+            else:
+                log_parts.append(f"🏢 Company ID: {company_id}")
+        
+        logger.info("🔔 " + " | ".join(log_parts))
+        
+    except Exception as e:
+        logger.error(f"Error en log_request_with_company_info: {e}")
+        logger.info(f"🌐 HTTP {method} {endpoint}")
+
 # ...existing code...
 
 
