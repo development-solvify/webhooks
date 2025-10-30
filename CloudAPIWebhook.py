@@ -4468,7 +4468,7 @@ def get_cover_wb_for_phone(phone: str) -> str:
         logger.exception(f"[COVER_WB] Error resolving cover for phone {phone}")
         return default_cover
     
-def get_whatsapp_credentials_for_phone(phone: str) -> dict:
+def get_whatsapp_credentials_for_phone(self, phone, company_id=None):
     """
     Devuelve las credenciales a usar para llamadas a la API de WhatsApp según el teléfono.
     - Intenta resolver company config desde la caché (company_cache.get_config_by_phone)
@@ -4477,6 +4477,39 @@ def get_whatsapp_credentials_for_phone(phone: str) -> dict:
     - Si no, devuelve las credenciales globales (ACCESS_TOKEN, PHONE_NUMBER_ID, WABA_ID).
     Retorna dict con keys: access_token, phone_number_id, business_id, headers, base_url, company_name, company_id
     """
+    if company_id:
+        # Prefer company-level credentials when a company_id is given
+        try:
+            self.logger.info(f"Fetching WhatsApp credentials for company_id={company_id}")
+        except Exception:
+            # logger might not be available in all contexts; ignore logging errors
+            pass
+
+        company_creds = None
+        try:
+            company_creds = self.get_whatsapp_credentials_for_company(company_id)
+        except Exception as e:
+            try:
+                self.logger.warning(f"Error fetching company credentials for {company_id}: {e}")
+            except Exception:
+                pass
+
+        # Validate company credentials (adjust required keys to match your app)
+        if company_creds:
+            required_keys = ("access_token", "phone_number_id")  # adjust as needed
+            if all(company_creds.get(k) for k in required_keys):
+                # Ensure consistent return shape if needed (merge/add fields)
+                return company_creds
+            else:
+                try:
+                    self.logger.warning("Incomplete company WhatsApp credentials; falling back to phone lookup")
+                except Exception:
+                    pass
+        else:
+            try:
+                self.logger.info("No company WhatsApp credentials found; falling back to phone lookup")
+            except Exception:
+                pass    
     # Valores por defecto (globales)
     default = {
         'access_token': ACCESS_TOKEN,
