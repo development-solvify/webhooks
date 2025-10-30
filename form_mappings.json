@@ -236,17 +236,18 @@
     
     "P1": "tipo_de_deuda",
     "P2": "cantidad_acreedores",
-    "P3": "tienes_vivienda",
-    "P4": "tienes_vehículo",
+    "P3": "vivienda_propiedad",
+    "P4": "vehiculo_propiedad",
     "P5": "ingresos_familiares",
-    "P6": "consentimiento_cesion"
+    "P6": "consentimiento"
   },
   "labels": {
-    "P1": "Tipo de deuda",
-    "P2": "Cantidad de deudas",
-    "P3": "Vivienda en propiedad",
-    "P4": "Vehículo en propiedad",
-    "P5": "Ingresos familiares"
+    "tipo_de_deuda": "Tipo de deuda",
+    "cantidad_acreedores": "Cantidad de deudas",
+    "vivienda_propiedad": "Vivienda en propiedad",
+    "vehiculo_propiedad": "Vehículo en propiedad",
+    "ingresos_familiares": "Ingresos familiares",
+    "consentimiento": "Consentimiento cesión datos"
   },
   "validations": {
     "check_debt_questions": false,
