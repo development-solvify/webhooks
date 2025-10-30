@@ -242,12 +242,11 @@
     "P6": "consentimiento_cesion"
   },
   "labels": {
-    "P1": "¿Qué tipo de deuda tienes?",
-    "P2": "¿Con cuántas entidades tienes las deudas?",
-    "P3": "¿Tienes vivienda en propiedad?",
-    "P4": "¿Tienes vehículo en propiedad?",
-    "P5": "¿Cuáles son tus ingresos familiares?",
-    "P6": "Aceptación cesión de datos"
+    "P1": "Tipo de deuda",
+    "P2": "Cantidad de deudas",
+    "P3": "Vivienda en propiedad",
+    "P4": "Vehículo en propiedad",
+    "P5": "Ingresos familiares"
   },
   "validations": {
     "check_debt_questions": false,
