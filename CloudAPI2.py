@@ -2595,6 +2595,70 @@ class MessageService:
             return False
 # ---------- Función send_flow_exit ----------
 
+
+# --- Cache opcional para mapear phone -> company_id (simple diccionario en memoria)
+_phone_company_cache: dict[str, str] = {}
+
+def _resolve_company_id_from_phone(phone: str) -> str | None:
+    """Intenta resolver company_id a partir del teléfono normalizado."""
+    try:
+        if not phone:
+            return None
+        phone_norm = PhoneUtils.strip_34(str(phone))
+        if phone_norm in _phone_company_cache:
+            return _phone_company_cache[phone_norm]
+
+        sql = """
+            SELECT d.company_id
+              FROM public.leads l
+              JOIN public.deals d ON d.lead_id = l.id
+             WHERE l.phone = %s
+             LIMIT 1
+        """
+        row = db_manager.execute_query(sql, [phone_norm], fetch_one=True)
+        company_id = row[0] if row else None
+        if company_id:
+            _phone_company_cache[phone_norm] = company_id
+        return company_id
+    except Exception:
+        logging.exception("Failed to resolve company_id from phone")
+        return None
+
+
+def get_whatsapp_credentials_for_phone(phone: str | None, company_id: str | None = None) -> dict:
+    """
+    Devuelve credenciales de WhatsApp priorizando:
+      1) company_id explícito (tenant)
+      2) company_id resuelto por phone
+      3) DEFAULT_* de entorno (modo global)
+    """
+    # 1) Si nos pasan company_id explícito, úsalo
+    if company_id:
+        return get_whatsapp_credentials_for_company(company_id)
+
+    # 2) Intentar resolver company_id a partir del phone
+    if phone:
+        cid = _resolve_company_id_from_phone(phone)
+        if cid:
+            return get_whatsapp_credentials_for_company(cid)
+
+    # 3) Fallback a variables globales (ya definidas en tu app)
+    #    Asegúrate de tener WABA_ID, ACCESS_TOKEN, PHONE_NUMBER_ID y GRAPH_API_VERSION
+    base_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    return {
+        "waba_id": WABA_ID,
+        "access_token": ACCESS_TOKEN,
+        "phone_number_id": PHONE_NUMBER_ID,
+        "base_url": base_url,
+        "headers": headers,
+    }
+
+
+
 from datetime import datetime
 import logging
 
