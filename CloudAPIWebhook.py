@@ -4719,7 +4719,7 @@ def webhook_company(company_id):
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
         mode = request.args.get('hub.mode')
-
+        print(f"Webhook verify: company_id={company_id}, mode={mode}, token={token}, challenge={challenge}")
         ok = (mode == 'subscribe' and token == VERIFY_TOKEN and challenge)
         logger.info(f"[{company_id}] Webhook verify -> ok={bool(ok)} mode={mode}")
         return (challenge, 200) if ok else ('Verify token incorrect', 403)
