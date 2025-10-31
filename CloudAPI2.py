@@ -33,6 +33,13 @@ from supabase import create_client, Client
 import hashlib
 import re
 from enum import Enum
+
+
+
+import os
+
+GRAPH_API_VERSION = (os.getenv("GRAPH_API_VERSION") or "v22.0").strip() or "v22.0"
+
 class CompanyConfigCache:
     """Cache manager for company configurations"""
     def __init__(self):
