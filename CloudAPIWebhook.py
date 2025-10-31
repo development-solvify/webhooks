@@ -4847,6 +4847,333 @@ def log_request_with_company_info(endpoint: str, method: str, data: dict = None)
 # ...existing code...
 
 
+from flask import request, jsonify, abort
+from uuid import uuid4
+import json
+from datetime import timedelta
+
+lask import request, jsonify, abort
+from uuid import uuid4
+from datetime import timedelta
+import json, re
+
+# Acepta UUID con guiones (validación rápida; Flask también tiene converter uuid, pero así no rompes nada)
+UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
+
+@app.route('/<company_id>/webhook', methods=['GET', 'POST'], strict_slashes=False)
+def webhook_company(company_id):
+    # --- Validación de ruta ---
+    if not UUID_RE.match(company_id):
+        abort(404)
+
+    # --- Verificación Webhook (GET) ---
+    if request.method == 'GET':
+        token = request.args.get('hub.verify_token')
+        challenge = request.args.get('hub.challenge')
+        mode = request.args.get('hub.mode')
+        print(f"Webhook verify: company_id={company_id}, mode={mode}, token={token}, challenge={challenge}")
+        ok = (mode == 'subscribe' and token == VERIFY_TOKEN and challenge)
+        logger.info(f"[{company_id}] Webhook verify -> ok={bool(ok)} mode={mode}")
+        return (challenge, 200) if ok else ('Verify token incorrect', 403)
+
+    # --- Recepción de eventos (POST) ---
+    try:
+        data = request.get_json(force=True)
+        if not data or 'entry' not in data:
+            logger.info(f"[{company_id}] Empty/invalid payload")
+            return 'ok', 200
+
+        for entry in data['entry']:
+            for change in entry.get('changes', []):
+                value = change.get('value', {})
+
+                # -------- MENSAJES ENTRANTES --------
+                if 'messages' in value:
+                    contacts = value.get('contacts', [])
+                    messages = value.get('messages', [])
+
+                    for idx, msg in enumerate(messages):
+                        contact = contacts[idx] if idx < len(contacts) else {}
+                        wa_id = contact.get('wa_id')
+                        sender_phone = PhoneUtils.strip_34(msg.get('from', ''))
+
+                        logger.info(f"[{company_id}] 📨 Processing message from {sender_phone}, type: {msg.get('type', 'unknown')}")
+
+                        # -------- MENSAJES DE TEXTO --------
+                        if msg.get('type') == 'text':
+                            log_received_message(msg, wa_id)
+                            # MINIMO: pasar company_id (haz que el método lo acepte como opcional)
+                            try:
+                                message_service.save_incoming_message(msg, wa_id, company_id=company_id)
+                            except TypeError:
+                                # compat si aún no acepta el parámetro
+                                message_service.save_incoming_message(msg, wa_id)
+
+                            # Flow EXIT logic (con filtro por tenant)
+                            try:
+                                context = msg.get('context') or {}
+                                context_id = context.get('id')
+                                madrid_ahora = now_madrid_naive()
+
+                                if not context_id:
+                                    query_last_template = """
+                                        SELECT last_message_uid
+                                          FROM public.external_messages
+                                         WHERE sender_phone = %s
+                                           AND company_id   = %s
+                                           AND from_me      = 'true'
+                                           AND status       = 'template_sent'
+                                           AND created_at   > %s
+                                           AND last_message_uid IS NOT NULL
+                                         ORDER BY created_at DESC
+                                         LIMIT 1
+                                    """
+                                    umbral = madrid_ahora - timedelta(minutes=15)
+                                    row = db_manager.execute_query(
+                                        query_last_template, [sender_phone, company_id, umbral], fetch_one=True
+                                    )
+                                    if row and row[0]:
+                                        context_id = row[0]
+                                    else:
+                                        if not auto_reply_service.is_office_hours():
+                                            auto_reply_service.send_auto_reply(
+                                                sender_phone, whatsapp_service, message_service
+                                            )
+                                        continue
+
+                                if context_id:
+                                    chk_template = """
+                                        SELECT 1
+                                          FROM public.external_messages
+                                         WHERE last_message_uid = %s
+                                           AND company_id       = %s
+                                           AND status           = 'template_sent'
+                                         LIMIT 1
+                                    """
+                                    ok_template = db_manager.execute_query(
+                                        chk_template, [context_id, company_id], fetch_one=True
+                                    )
+                                    if not ok_template:
+                                        if not auto_reply_service.is_office_hours():
+                                            auto_reply_service.send_auto_reply(
+                                                sender_phone, whatsapp_service, message_service
+                                            )
+                                        continue
+
+                                    chk_dedup = """
+                                        SELECT 1
+                                          FROM public.external_messages
+                                         WHERE last_message_uid = %s
+                                           AND sender_phone     = %s
+                                           AND company_id       = %s
+                                           AND status           = 'flow_exit_triggered'
+                                         LIMIT 1
+                                    """
+                                    ya_triggered = db_manager.execute_query(
+                                        chk_dedup, [context_id, sender_phone, company_id], fetch_one=True
+                                    )
+                                    if ya_triggered:
+                                        continue
+
+                                    lead = lead_service.get_lead_data_by_phone(sender_phone)
+                                    if not lead or not lead.get('lead_id'):
+                                        if not auto_reply_service.is_office_hours():
+                                            auto_reply_service.send_auto_reply(
+                                                sender_phone, whatsapp_service, message_service
+                                            )
+                                        continue
+
+                                    lead_id = lead['lead_id']
+                                    ok = flow_exit_client.send_exit(lead_id)
+                                    if ok:
+                                        flow_name = "welcome_email_flow"
+                                        motivo = "Usuario quiere salir del flow"
+                                        exit_message = f"Exit Flow: {flow_name} por: {motivo}"
+
+                                        # MINIMO: añadir company_id al INSERT
+                                        mark_sql = """
+                                            INSERT INTO public.external_messages (
+                                                id, message, sender_phone, responsible_email,
+                                                last_message_uid, last_message_timestamp,
+                                                from_me, status, created_at, updated_at, is_deleted,
+                                                chat_id, chat_url, assigned_to_id, company_id
+                                            ) VALUES (
+                                                %s, %s, %s, %s,
+                                                %s, %s,
+                                                %s, %s, NOW(), NOW(), FALSE,
+                                                %s, %s, %s, %s
+                                            )
+                                        """
+                                        params = [
+                                            str(uuid4()),
+                                            json.dumps({'text': exit_message}, ensure_ascii=False),
+                                            sender_phone, '', context_id, madrid_ahora,
+                                            'true', 'flow_exit_triggered',
+                                            sender_phone, sender_phone, None,
+                                            company_id
+                                        ]
+                                        db_manager.execute_query(mark_sql, params)
+
+                            except Exception:
+                                logger.exception(f"[{company_id}] Error procesando disparo de flow exit")
+
+                            # Auto-reply si es fuera de horario
+                            if not auto_reply_service.is_office_hours():
+                                auto_reply_service.send_auto_reply(
+                                    sender_phone, whatsapp_service, message_service
+                                )
+
+                        # -------- MENSAJES CON ARCHIVOS MULTIMEDIA (EXTENDIDO) --------
+                        elif msg.get('type') in ['image', 'audio', 'video', 'document', 'sticker', 'voice']:
+                            media_type = msg.get('type')
+                            logger.info(f"[{company_id}] 📎 Received {media_type} from {sender_phone}")
+
+                            try:
+                                media_info = msg.get(media_type, {})
+                                media_id = media_info.get('id')
+                                original_filename = media_info.get('filename')
+                                caption = media_info.get('caption', '')
+
+                                if not media_id:
+                                    logger.error(f"[{company_id}] No media ID found in {media_type} message")
+                                    try:
+                                        message_service.save_incoming_message(msg, wa_id, company_id=company_id)
+                                    except TypeError:
+                                        message_service.save_incoming_message(msg, wa_id)
+                                    continue
+
+                                # Determinar objeto de referencia
+                                lead = lead_service.get_lead_data_by_phone(sender_phone)
+                                if lead:
+                                    object_ref_type = 'leads'
+                                    object_ref_id = lead['lead_id']
+                                else:
+                                    object_ref_type = 'external_messages'
+                                    object_ref_id = str(uuid4())
+
+                                # Procesar media con ExtendedFileService
+                                if file_service:
+                                    try:
+                                        file_result = file_service.process_whatsapp_media_extended(
+                                            media_id, object_ref_type, object_ref_id, original_filename, sender_phone
+                                        )
+                                        file_info = {
+                                            'document_id': file_result['document_id'],
+                                            'filename': file_result['filename'],
+                                            'original_filename': file_result.get('original_filename'),
+                                            'media_type': file_result['media_type'],
+                                            'whatsapp_type': file_result['whatsapp_type'],
+                                            'content_type': file_result['content_type'],
+                                            'file_size': file_result['file_size'],
+                                            'public_url': file_result.get('public_url'),
+                                            'supabase_path': file_result.get('supabase_path')
+                                        }
+
+                                        # MINIMO: pasar company_id
+                                        try:
+                                            message_service.save_media_message(msg, wa_id, file_info, company_id=company_id)
+                                        except TypeError:
+                                            message_service.save_media_message(msg, wa_id, file_info)
+
+                                        file_size_mb = file_result['file_size'] / (1024 * 1024)
+                                        log_message = f"📎 {file_result['media_type'].title()}: {file_result['filename']} ({file_size_mb:.2f}MB)"
+                                        if file_result['content_type']:
+                                            log_message += f" [{file_result['content_type']}]"
+                                        if caption:
+                                            log_message += f" - Caption: {caption}"
+
+                                        log_received_message({
+                                            'from': msg.get('from'),
+                                            'timestamp': msg.get('timestamp'),
+                                            'text': {'body': log_message},
+                                            'type': 'media_extended'
+                                        }, wa_id)
+
+                                        logger.info(f"[{company_id}] ✅ Processed {file_result['whatsapp_type']} media: {file_result['filename']} (Extended MIME)")
+
+                                    except Exception as e:
+                                        logger.error(f"[{company_id}] ❌ Error processing media {media_id}: {e}")
+                                        error_info = {
+                                            'error': str(e),
+                                            'media_id': media_id,
+                                            'media_type': media_type,
+                                            'whatsapp_type': media_type,
+                                            'filename': f'error_{media_type}.bin',
+                                            'content_type': 'application/octet-stream',
+                                            'file_size': 0,
+                                            'public_url': '',
+                                            'note': 'Failed with extended MIME type support'
+                                        }
+                                        try:
+                                            message_service.save_media_message(msg, wa_id, error_info, company_id=company_id)
+                                        except TypeError:
+                                            message_service.save_media_message(msg, wa_id, error_info)
+                                else:
+                                    logger.warning(f"[{company_id}] 📎 ExtendedFileService not available")
+                                    fallback_info = {
+                                        'error': 'ExtendedFileService not available',
+                                        'media_type': media_type,
+                                        'whatsapp_type': media_type,
+                                        'filename': f'unavailable_{media_type}.bin',
+                                        'content_type': 'application/octet-stream',
+                                        'file_size': 0,
+                                        'public_url': ''
+                                    }
+                                    try:
+                                        message_service.save_media_message(msg, wa_id, fallback_info, company_id=company_id)
+                                    except TypeError:
+                                        message_service.save_media_message(msg, wa_id, fallback_info)
+
+                                # Auto-reply si es fuera de horario
+                                if not auto_reply_service.is_office_hours():
+                                    auto_reply_service.send_auto_reply(
+                                        sender_phone, whatsapp_service, message_service
+                                    )
+
+                            except Exception as e:
+                                logger.exception(f"[{company_id}] ❌ Error processing {media_type} message: {e}")
+                                try:
+                                    error_info = {
+                                        'error': str(e),
+                                        'media_type': media_type or 'unknown',
+                                        'whatsapp_type': media_type or 'unknown',
+                                        'filename': f'failed_{media_type or "unknown"}.bin',
+                                        'content_type': 'application/octet-stream',
+                                        'file_size': 0,
+                                        'public_url': ''
+                                    }
+                                    try:
+                                        message_service.save_media_message(msg, wa_id, error_info, company_id=company_id)
+                                    except TypeError:
+                                        message_service.save_media_message(msg, wa_id, error_info)
+                                except Exception:
+                                    logger.exception(f"[{company_id}] Failed to save fallback message")
+
+                # -------- ESTADOS DE MENSAJE --------
+                elif 'statuses' in value:
+                    # (mínimo: lo dejamos igual; si tu handler soporta company_id, pásaselo)
+                    handle_message_statuses_webhook(value, db_manager)
+
+                # -------- LLAMADAS (CALLS) --------
+                elif 'calls' in value:
+                    calls = value.get('calls', [])
+                    for call in calls:
+                        call_event = call.get('event', 'unknown')
+                        call_status = call.get('status', 'unknown')
+                        call_from = call.get('from', '')
+                        call_to = call.get('to', '')
+                        logger.info(f"[{company_id}] 📞 Call received: {call_event} - {call_status} from {call_from} to {call_to}")
+
+                # -------- OTROS EVENTOS --------
+                else:
+                    logger.info(f"[{company_id}] 📱 Webhook event not processed: {list(value.keys())}")
+
+        return 'ok', 200
+
+    except Exception:
+        logger.exception(f'[{company_id}] ❌ Error processing webhook')
+        return 'error', 500
+
 
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
