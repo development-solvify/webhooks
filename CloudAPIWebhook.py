@@ -4700,15 +4700,26 @@ from uuid import uuid4
 import json
 from datetime import timedelta
 
-@app.route('/<company_id>/webhook', methods=['GET', 'POST'])
+lask import request, jsonify, abort
+from uuid import uuid4
+from datetime import timedelta
+import json, re
+
+# Acepta UUID con guiones (validación rápida; Flask también tiene converter uuid, pero así no rompes nada)
+UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
+
+@app.route('/<company_id>/webhook', methods=['GET', 'POST'], strict_slashes=False)
 def webhook_company(company_id):
+    # --- Validación de ruta ---
+    if not UUID_RE.match(company_id):
+        abort(404)
+
     # --- Verificación Webhook (GET) ---
     if request.method == 'GET':
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
         mode = request.args.get('hub.mode')
 
-        # MINIMO: seguimos usando VERIFY_TOKEN global (puedes cambiarlo a per-company más adelante)
         ok = (mode == 'subscribe' and token == VERIFY_TOKEN and challenge)
         logger.info(f"[{company_id}] Webhook verify -> ok={bool(ok)} mode={mode}")
         return (challenge, 200) if ok else ('Verify token incorrect', 403)
