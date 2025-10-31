@@ -1926,235 +1926,235 @@ def send_text_message(self, to_phone: str, message: str, company_id: str | None 
         return False, None
 
 
-    def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str) -> dict:
+def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str) -> dict:
 
-        """Construye el JSON esperado por WABA"""
-    # 🔧 CAMBIO: Obtener cover dinámicamente según el teléfono de destino
-        cover_url = get_cover_wb_for_phone(to_phone)
-        
-        common_header = {
-            "type": "header",
-            "parameters": [{
-                "type": "image",
-                "image": {"link": cover_url}
-            }]
+    """Construye el JSON esperado por WABA"""
+# 🔧 CAMBIO: Obtener cover dinámicamente según el teléfono de destino
+    cover_url = get_cover_wb_for_phone(to_phone)
+    
+    common_header = {
+        "type": "header",
+        "parameters": [{
+            "type": "image",
+            "image": {"link": cover_url}
+        }]
+    }
+    template_name = template_name.strip()
+    if template_name == 'agendar_llamada_inicial':
+        return {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "template",
+            "template": {
+                "name": "agendar_llamada_inicial",
+                "language": {"code": "es_ES"},
+                "components": [
+                    common_header,
+                    {
+                        "type": "body",
+                        "parameters": [{
+                            "type": "text",
+                            "text": template_data.get("first_name", "Cliente")
+                        }]
+                    },
+                    {
+                        "type": "button",
+                        "sub_type": "url",
+                        "index": 0,
+                        "parameters": [{
+                            "type": "text",
+                            "text": str(template_data.get("deal_id", ""))
+                        }]
+                    }
+                ]
+            }
         }
-        template_name = template_name.strip()
-        if template_name == 'agendar_llamada_inicial':
-            return {
-                "messaging_product": "whatsapp",
-                "to": to_phone,
-                "type": "template",
-                "template": {
-                    "name": "agendar_llamada_inicial",
-                    "language": {"code": "es_ES"},
-                    "components": [
-                        common_header,
-                        {
-                            "type": "body",
-                            "parameters": [{
-                                "type": "text",
-                                "text": template_data.get("first_name", "Cliente")
-                            }]
-                        },
-                        {
-                            "type": "button",
-                            "sub_type": "url",
-                            "index": 0,
-                            "parameters": [{
-                                "type": "text",
-                                "text": str(template_data.get("deal_id", ""))
-                            }]
-                        }
-                    ]
-                }
-            }
 
-        elif template_name == 'nuevo_numero':
-            # Firma = nombre de pila del responsable
-            signer = (
-                template_data.get("responsible_first_name")
-                or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
-                or "Equipo"
-            )
-            return {
-                "messaging_product": "whatsapp",
-                "to": to_phone,
-                "type": "template",
-                "template": {
-                    "name": "nuevo_numero",
-                    "language": {"code": "es_ES"},
-                    "components": [
-                        common_header,
-                        {
-                            "type": "body",
-                            "parameters": [
-                                {"type": "text", "text": template_data.get("first_name", "Cliente")},
-                                {"type": "text", "text": signer}
-                            ]
-                        },
-                        {
-                            "type": "button",
-                            "sub_type": "url",
-                            "index": 0,
-                            "parameters": [
-                                {"type": "text", "text": str(template_data.get("deal_id", ""))}
-                            ]
-                        }
-                    ]
-                }
+    elif template_name == 'nuevo_numero':
+        # Firma = nombre de pila del responsable
+        signer = (
+            template_data.get("responsible_first_name")
+            or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
+            or "Equipo"
+        )
+        return {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "template",
+            "template": {
+                "name": "nuevo_numero",
+                "language": {"code": "es_ES"},
+                "components": [
+                    common_header,
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": template_data.get("first_name", "Cliente")},
+                            {"type": "text", "text": signer}
+                        ]
+                    },
+                    {
+                        "type": "button",
+                        "sub_type": "url",
+                        "index": 0,
+                        "parameters": [
+                            {"type": "text", "text": str(template_data.get("deal_id", ""))}
+                        ]
+                    }
+                ]
             }
-        elif template_name == 'followup_missed_calls':
-            # Firma = nombre de pila del responsable
+        }
+    elif template_name == 'followup_missed_calls':
+        # Firma = nombre de pila del responsable
 
-            return {
-                "messaging_product": "whatsapp",
-                "to": to_phone,
-                "type": "template",
-                "template": {
-                    "name": "followup_missed_calls",
-                    "language": {"code": "es_ES"},
-                    "components": [
-                        {
-                            "type": "body",
-                            "parameters": [
-                                {"type": "text", "text": template_data.get("first_name", "Cliente")}
-                            ]
-                        },
-                        {
-                            "type": "button",
-                            "sub_type": "url",
-                            "index": 0,
-                            "parameters": [
-                                {"type": "text", "text": str(template_data.get("deal_id", ""))}
-                            ]
-                        }
-                    ]
-                }
-            }            
-        elif template_name == 'recordatorio_llamada_agendada' or template_name == 'despachocalero_recordatorio_llamada_agendada':
-            # Firma = nombre de pila del responsable
-            signer = (
-                template_data.get("responsible_first_name")
-                or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
-                or "Equipo"
-            )
-            
-            # Obtener company_name
-            company_name = template_data.get("company_name", "").strip() or "tu empresa"
-            
-            return {
-                "messaging_product": "whatsapp",
-                "to": to_phone,
-                "type": "template",
-                "template": {
-                    "name": "recordatorio_llamada_agendada",
-                    "language": {"code": "es_ES"},
-                    "components": [
-                        # SIN HEADER - solo body
-                        {
-                            "type": "body",
-                            "parameters": [
-                                {"type": "text", "text": template_data.get("first_name", "Cliente")},
-                                {"type": "text", "text": signer},
-                                {"type": "text", "text": company_name}
-                            ]
-                        }
-                    ]
-                }
+        return {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "template",
+            "template": {
+                "name": "followup_missed_calls",
+                "language": {"code": "es_ES"},
+                "components": [
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": template_data.get("first_name", "Cliente")}
+                        ]
+                    },
+                    {
+                        "type": "button",
+                        "sub_type": "url",
+                        "index": 0,
+                        "parameters": [
+                            {"type": "text", "text": str(template_data.get("deal_id", ""))}
+                        ]
+                    }
+                ]
             }
+        }            
+    elif template_name == 'recordatorio_llamada_agendada' or template_name == 'despachocalero_recordatorio_llamada_agendada':
+        # Firma = nombre de pila del responsable
+        signer = (
+            template_data.get("responsible_first_name")
+            or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
+            or "Equipo"
+        )
+        
+        # Obtener company_name
+        company_name = template_data.get("company_name", "").strip() or "tu empresa"
+        
+        return {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "template",
+            "template": {
+                "name": "recordatorio_llamada_agendada",
+                "language": {"code": "es_ES"},
+                "components": [
+                    # SIN HEADER - solo body
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": template_data.get("first_name", "Cliente")},
+                            {"type": "text", "text": signer},
+                            {"type": "text", "text": company_name}
+                        ]
+                    }
+                ]
+            }
+        }
 # Agregar este bloque ANTES del else final en _build_template_payload
 
-        elif template_name in ['retomar_contacto']:
-            # Firma = nombre de pila del responsable
-            signer = (
-                template_data.get("responsible_first_name")
-                or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
-                or "Equipo"
-            )
-            
-            # Obtener company_name
-            company_name = template_data.get("company_name", "").strip() or "tu empresa"
-            
-            return {
-                "messaging_product": "whatsapp",
-                "to": to_phone,
-                "type": "template",
-                "template": {
-                    "name": template_name,
-                    "language": {"code": "es_ES"},
-                    "components": [
-                        # SIN HEADER - solo body
-                        {
-                            "type": "body",
-                            "parameters": [
-                                {"type": "text", "text": template_data.get("first_name", "Cliente")},
-                                {"type": "text", "text": signer},
-                                {"type": "text", "text": company_name}
-                            ]
-                        }
-                    ]
-                }
+    elif template_name in ['retomar_contacto']:
+        # Firma = nombre de pila del responsable
+        signer = (
+            template_data.get("responsible_first_name")
+            or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
+            or "Equipo"
+        )
+        
+        # Obtener company_name
+        company_name = template_data.get("company_name", "").strip() or "tu empresa"
+        
+        return {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "template",
+            "template": {
+                "name": template_name,
+                "language": {"code": "es_ES"},
+                "components": [
+                    # SIN HEADER - solo body
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": template_data.get("first_name", "Cliente")},
+                            {"type": "text", "text": signer},
+                            {"type": "text", "text": company_name}
+                        ]
+                    }
+                ]
             }
-        elif template_name in ['baja_comercial']:
-            # Firma = nombre de pila del responsable
-            signer = (
-                template_data.get("responsible_first_name")
-                or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
-                or "Equipo"
-            )
-            
-            # Obtener company_name
-            company_name = template_data.get("company_name", "").strip() or "tu empresa"
-            
-            return {
-                "messaging_product": "whatsapp",
-                "to": to_phone,
-                "type": "template",
-                "template": {
-                    "name": template_name,
-                    "language": {"code": "es_ES"},
-                    "components": [
-                        # SIN HEADER - solo body
-                        {
-                            "type": "body",
-                            "parameters": [
-                                {"type": "text", "text": template_data.get("first_name", "Cliente")},
-                                {"type": "text", "text": signer},
-                                {"type": "text", "text": company_name}
-                            ]
-                        },
-                        {
-                            "type": "button",
-                            "sub_type": "url",
-                            "index": 0,
-                            "parameters": [
-                                {"type": "text", "text": str(template_data.get("deal_id", ""))}
-                            ]
-                        }
-                    ]
-                }
+        }
+    elif template_name in ['baja_comercial']:
+        # Firma = nombre de pila del responsable
+        signer = (
+            template_data.get("responsible_first_name")
+            or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
+            or "Equipo"
+        )
+        
+        # Obtener company_name
+        company_name = template_data.get("company_name", "").strip() or "tu empresa"
+        
+        return {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "template",
+            "template": {
+                "name": template_name,
+                "language": {"code": "es_ES"},
+                "components": [
+                    # SIN HEADER - solo body
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": template_data.get("first_name", "Cliente")},
+                            {"type": "text", "text": signer},
+                            {"type": "text", "text": company_name}
+                        ]
+                    },
+                    {
+                        "type": "button",
+                        "sub_type": "url",
+                        "index": 0,
+                        "parameters": [
+                            {"type": "text", "text": str(template_data.get("deal_id", ""))}
+                        ]
+                    }
+                ]
             }
-        elif template_name in ['contacto_recordatorio_pago','recordatorio_proximo_pago']:
-            # Template sin parámetros - solo cuerpo estático
-            return {
-                "messaging_product": "whatsapp",
-                "to": to_phone,
-                "type": "template",
-                "template": {
-                    "name": template_name,
-                    "language": {"code": "es_ES"},
-                    "components": [
-                        # SIN HEADER - solo body sin parámetros
-                        {
-                            "type": "body"
-                            # No parameters - el texto está definido en WhatsApp
-                        }
-                    ]
-                }
+        }
+    elif template_name in ['contacto_recordatorio_pago','recordatorio_proximo_pago']:
+        # Template sin parámetros - solo cuerpo estático
+        return {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "template",
+            "template": {
+                "name": template_name,
+                "language": {"code": "es_ES"},
+                "components": [
+                    # SIN HEADER - solo body sin parámetros
+                    {
+                        "type": "body"
+                        # No parameters - el texto está definido en WhatsApp
+                    }
+                ]
             }
-        else:
-            raise ValueError(f"Template '{template_name}' no configurado")
+        }
+    else:
+        raise ValueError(f"Template '{template_name}' no configurado")
 
 class AutoReplyService:
     """Auto-reply service for office hours management"""
