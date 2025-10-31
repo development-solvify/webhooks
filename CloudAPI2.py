@@ -1842,32 +1842,33 @@ class WhatsAppService:
             logger.error(f"Error inesperado: {str(e)}")
             return False, None, None
 
-    def send_text_message(self, to_phone: str, message: str, timeout: int = 10):
-        try:
-            clean_phone = PhoneUtils.strip_34(to_phone)
-            if not PhoneUtils.validate_spanish_phone(clean_phone):
-                raise ValueError(f"Número de teléfono inválido: {to_phone}")
+def send_text_message(self, to_phone: str, message: str, company_id: str | None = None, timeout: int = 10):
+    try:
+        clean_phone = PhoneUtils.strip_34(to_phone)
+        if not PhoneUtils.validate_spanish_phone(clean_phone):
+            raise ValueError(f"Número de teléfono inválido: {to_phone}")
 
-            # Get company-specific WhatsApp credentials
-            creds = get_whatsapp_credentials_for_phone(clean_phone)
-            headers = creds.get('headers', self.headers)
-            base_url = creds.get('base_url', self.base_url)
-            
-            # Log detailed credential info
-            logger.info("=" * 80)
-            logger.info(f"🔐 Sending text message with credentials for phone {clean_phone}:")
-            logger.info(f"📱 Company: {creds.get('company_name', 'Default')}")
-            logger.info(f"🆔 Company ID: {creds.get('company_id', 'Default')}")
-            logger.info(f"🔑 Token: {creds.get('access_token', '')[:20]}...")
-            logger.info(f"📞 Phone Number ID: {creds.get('phone_number_id', '')}")
-            logger.info(f"🌐 Base URL: {base_url}")
-            logger.info(f"💼 Business ID: {creds.get('business_id', '')}")
-            logger.info("=" * 80)
+        # 1) Credenciales: prioriza el tenant si viene company_id
+        creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=company_id)
+        headers = creds.get('headers', self.headers)
+        base_url = creds.get('base_url', self.base_url)
 
-            logger.debug(f"Using credentials - base_url: {base_url}")
-            logger.debug(f"Using credentials - headers: {headers}")
+        logger.info("=" * 80)
+        logger.info(f"🔐 Sending text message with credentials for phone {clean_phone}:")
+        logger.info(f"📱 Company: {creds.get('company_name', 'Default')}")
+        logger.info(f"🆔 Company ID: {creds.get('company_id', company_id or 'Default')}")
+        logger.info(f"🔑 Token: {creds.get('access_token', '')[:20]}...")
+        logger.info(f"📞 Phone Number ID: {creds.get('phone_number_id', '')}")
+        logger.info(f"🌐 Base URL: {base_url}")
+        logger.info(f"💼 Business ID: {creds.get('business_id', '')}")
+        logger.info("=" * 80)
 
-            # 1. Obtener información de la compañía y su configuración
+        logger.debug(f"Using credentials - base_url: {base_url}")
+        logger.debug(f"Using credentials - headers: {headers}")
+
+        # 2) (Opcional) Fallback si no hay credenciales del tenant
+        if not creds.get('phone_number_id') or not creds.get('access_token'):
+            # Tu bloque actual que consulta lead/deal/company por teléfono
             query = """
                 SELECT l.id as lead_id, d.company_id, c.name as company_name, 
                        public.get_company_data(d.company_id) as company_data
@@ -1882,76 +1883,48 @@ class WhatsAppService:
                 cur.execute(query, [clean_phone])
                 result = cur.fetchone()
 
-            if not result:
-                logger.warning(f"[WhatsApp] No se encontró lead/deal/company para teléfono {to_phone}, usando config por defecto")
-                company_config = {
-                    'access_token': self.access_token,
-                    'phone_number_id': self.phone_number_id,
-                    'business_id': getattr(self, 'business_id', None)
-                }
-            else:
-                lead_id, company_id, company_name, company_data = result
-                logger.info(f"[WhatsApp] Lead {lead_id} encontrado para company: {company_name} (id: {company_id})")
+            if result:
+                lead_id, _company_id, company_name, company_data = result
+                logger.info(f"[WhatsApp] Lead {lead_id} encontrado para company: {company_name} (id: {_company_id})")
+                custom_props = (company_data or {}).get('custom_properties') or {}
+                access_token = custom_props.get('WHATSAPP_ACCESS_TOKEN') or creds.get('access_token')
+                phone_number_id = custom_props.get('WHATSAPP_PHONE_NUMBER_ID') or creds.get('phone_number_id')
+                headers = {'Authorization': f"Bearer {access_token}", 'Content-Type': 'application/json'}
+                base_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{phone_number_id}/messages"
 
-                if not company_data or 'custom_properties' not in company_data:
-                    logger.warning(f"[WhatsApp] No se encontraron custom_properties para company {company_id}, usando config por defecto")
-                    company_config = {
-                        'access_token': self.access_token,
-                        'phone_number_id': self.phone_number_id,
-                        'business_id': getattr(self, 'business_id', None)
-                    }
-                else:
-                    custom_props = company_data['custom_properties']
-                    company_config = {
-                        'access_token': custom_props.get('WHATSAPP_ACCESS_TOKEN'),
-                        'phone_number_id': custom_props.get('WHATSAPP_PHONE_NUMBER_ID'),
-                        'business_id': custom_props.get('WHATSAPP_BUSINESS_ID')
-                    }
-                    if not all(company_config.values()):
-                        logger.warning(f"[WhatsApp] Config incompleta para company {company_id}, usando por defecto")
-                        company_config = {
-                            'access_token': self.access_token,
-                            'phone_number_id': self.phone_number_id,
-                            'business_id': getattr(self, 'business_id', None)
-                        }
-                    else:
-                        logger.info(f"[WhatsApp] Usando config específica de company {company_name} (id: {company_id})")
+        # 3) Construir y enviar el mensaje
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": f"34{clean_phone}" if not clean_phone.startswith("34") else clean_phone,
+            "type": "text",
+            "text": {"body": message}
+        }
 
-            # 2. Actualizar la configuración de WhatsApp para este envío
-            headers = {
-                'Authorization': f"Bearer {company_config['access_token']}",
-                'Content-Type': 'application/json'
-            }
-            base_url = f"https://graph.facebook.com/v22.0/{company_config['phone_number_id']}/messages"
-            
-            # 3. Construir y enviar el mensaje
-            payload = {
-                "messaging_product": "whatsapp",
-                "to": to_phone,
-                "type": "text",
-                "text": {"body": message}
-            }
+        logger.debug(f"Enviando texto a {clean_phone} → payload: {payload}")
+        resp = requests.post(base_url, headers=headers, json=payload, timeout=timeout)
+        if not resp.ok:
+            logger.error(f"❌ Error {resp.status_code} enviando texto: {resp.text}")
+        resp.raise_for_status()
 
-            logger.debug(f"Enviando texto a {to_phone} → payload: {payload}")
-            resp = requests.post(base_url, headers=headers, json=payload, timeout=timeout)
-            
-            if not resp.ok:
-                logger.error(f"❌ Error {resp.status_code} enviando texto: {resp.text}")
-            resp.raise_for_status()
-            
-            msg_id = resp.json()["messages"][0]["id"]
-            logger.info(f"✅ Texto enviado. ID: {msg_id}")
-            return True, msg_id
-            
-        except ValueError as e:
-            logger.error(f"Error de validación: {str(e)}", exc_info=True)
+        data = resp.json() or {}
+        msg_id = (data.get("messages") or [{}])[0].get("id")
+        if not msg_id:
+            logger.error(f"WhatsApp API no devolvió WAMID: {data}")
             return False, None
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error de HTTP: {str(e)}", exc_info=True)
-            return False, None
-        except Exception as e:
-            logger.error(f"❌ Excepción enviando texto: {e}", exc_info=True)
-            return False, None
+
+        logger.info(f"✅ Texto enviado. ID: {msg_id}")
+        return True, msg_id
+
+    except ValueError as e:
+        logger.error(f"Error de validación: {str(e)}", exc_info=True)
+        return False, None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error de HTTP: {str(e)}", exc_info=True)
+        return False, None
+    except Exception as e:
+        logger.error(f"❌ Excepción enviando texto: {e}", exc_info=True)
+        return False, None
+
 
     def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str) -> dict:
 
@@ -2279,44 +2252,49 @@ class AutoReplyService:
                 auto_message = self.get_auto_reply_message(madrid_time)
 
                 destination = PhoneUtils.add_34(phone_number)
-                success, message_id = whatsapp_service.send_text_message(destination, auto_message)
+                success, message_id = whatsapp_service.send_text_message(destination, auto_message, company_id=company_id)
 
                 if success:
                     clean_phone = PhoneUtils.strip_34(phone_number)
                     current_time_naive = now_madrid_naive()
 
-                    # ✅ NUEVO: obtener assigned_to_id y email responsable
-                    # (si no hay, se quedan a NULL/"")
+                    # Asignado/responsable (pueden ser None/"")
                     assigned_to_id, responsible_email = message_service.lead_service.get_lead_assigned_info(clean_phone)
                     lead = message_service.lead_service.get_lead_data_by_phone(clean_phone)
-                    chat_id = (lead.get('deal_id') if lead and lead.get('deal_id') else clean_phone)
-                    chat_url = clean_phone
+                    deal_id = (lead.get('deal_id') if lead and lead.get('deal_id') else None)
 
+                    chat_id = deal_id            # ✅ chat_id ahora es deal_id (UUID) o None
+                    chat_url = clean_phone       # ✅ teléfono para deep-link/visual
+
+                    # ✅ Incluimos company_id en el INSERT y status='sent'
                     query = """
                         INSERT INTO external_messages (
                             id, message, sender_phone, responsible_email,
                             last_message_uid, last_message_timestamp, from_me,
                             status, created_at, updated_at, is_deleted,
-                            chat_url, chat_id, is_read, assigned_to_id
-                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                            chat_url, chat_id, is_read, assigned_to_id, company_id
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     """
                     params = [
                         str(uuid4()), auto_message, clean_phone, (responsible_email or ""),
                         message_id, current_time_naive, 'true',
-                        get_initial_message_status('text', is_template=False, is_auto_response=True),  # ✅ NUEVO status
+                        'sent',                              # ✅ FSM limpia
                         current_time_naive, current_time_naive, False,
-                        chat_url, chat_id, False, assigned_to_id  # ✅ guarda assigned_to_id
+                        chat_url, chat_id, False, assigned_to_id,
+                        company_id                           # ✅ TENANT
                     ]
                     self.db_manager.execute_query(query, params)
 
                     self._last_auto_replies[clean_phone] = time.time()
 
-                    log_sent_message(f'+{destination}', auto_message, 'AUTO_REPLY')
-                    logger.info(f"🤖 Auto-reply sent to {clean_phone} (outside office hours) -> autoresponse_delivered")
+                    # ✅ Log con WAMID real
+                    log_sent_message(f'+{destination}', auto_message, message_id)
+                    logger.info(f"🤖 Auto-reply sent to {clean_phone} (outside office hours) -> sent (wamid={message_id})")
 
                     return True, f"Auto-reply sent: {message_id}"
                 else:
                     return False, "Failed to send auto-reply message"
+
 
             except Exception:
                 logger.exception('Error in send_auto_reply')
@@ -2553,46 +2531,54 @@ class MessageService:
                     row = self.db_manager.execute_query(check_sql, [uid], fetch_one=True)
 
                 if row and row[0]:
-                    update_sql = """
-                        UPDATE public.external_messages
-                           SET message = %s,
-                               sender_phone = %s,
-                               responsible_email = %s,
-                               last_message_timestamp = %s,
-                               from_me = %s,
-                               status = %s,
-                               chat_id = %s,
-                               chat_url = %s,
-                               assigned_to_id = %s,
-                               updated_at = NOW()
-                         WHERE id = %s
+                    set_chat = ", chat_id = %s" if deal_id else ""
+                    update_sql = f"""
+                    UPDATE public.external_messages
+                    SET message = %s,
+                        sender_phone = %s,
+                        responsible_email = %s,
+                        last_message_timestamp = %s,
+                        from_me = %s,
+                        status = %s,
+                        chat_url = %s,
+                        assigned_to_id = %s,
+                        updated_at = NOW()
+                    {set_chat}
+                    WHERE id = %s
                     """
                     params_upd = [
-                        body_text_or_json, sender, (responsible_email or ""),
-                        last_message_ts, 'false', 'received',
-                        chat_id, chat_url, assigned_to_id, row[0]
+                    body_text_or_json, sender, (responsible_email or ""),
+                    last_message_ts, 'false', 'received',
+                    sender, assigned_to_id
                     ]
+                    if deal_id:
+                    params_upd.append(deal_id)
+                    params_upd.append(row[0])
                     self.db_manager.execute_query(update_sql, params_upd)
                     return True
 
+            deal_id = lead.get('deal_id') if lead else None
+
             insert_sql = """
-                INSERT INTO public.external_messages (
-                    id, message, sender_phone, responsible_email,
-                    last_message_uid, last_message_timestamp,
-                    from_me, status, created_at, updated_at, is_deleted,
-                    chat_id, chat_url, assigned_to_id, company_id
-                ) VALUES (
-                    %s, %s, %s, %s,
-                    %s, %s,
-                    %s, %s, NOW(), NOW(), FALSE,
-                    %s, %s, %s, %s
-                )
+            INSERT INTO public.external_messages (
+            id, message, sender_phone, responsible_email,
+            last_message_uid, last_message_timestamp,
+            from_me, status, created_at, updated_at, is_deleted,
+            chat_url, chat_id, assigned_to_id, company_id
+            ) VALUES (
+            %s, %s, %s, %s,
+            %s, %s,
+            %s, %s, NOW(), NOW(), FALSE,
+            %s, %s, %s, %s
+            )
             """
             params_ins = [
-                str(uuid4()), body_text_or_json, sender, (responsible_email or ""),
-                uid, last_message_ts,
-                'false', 'received',
-                chat_id, chat_url, assigned_to_id, effective_company_id
+            str(uuid4()), body_text_or_json, sender, (responsible_email or ""),
+            uid, last_message_ts,
+            'false', 'received',
+            sender,      # chat_url = teléfono
+            deal_id,     # chat_id = deal_id (UUID o NULL)
+            assigned_to_id, effective_company_id
             ]
             self.db_manager.execute_query(insert_sql, params_ins)
             return True
@@ -2621,24 +2607,28 @@ class MessageService:
                 lead = self.lead_service.get_lead_data_by_phone(sender)
                 effective_company_id = (lead.get('company_id') if lead else None)
 
+            deal_id = lead.get('deal_id') if lead else None
+
             insert_sql = """
-                INSERT INTO public.external_messages (
-                    id, message, sender_phone, responsible_email,
-                    last_message_uid, last_message_timestamp,
-                    from_me, status, created_at, updated_at, is_deleted,
-                    chat_id, chat_url, assigned_to_id, company_id
-                ) VALUES (
-                    %s, %s, %s, %s,
-                    %s, %s,
-                    %s, %s, NOW(), NOW(), FALSE,
-                    %s, %s, %s, %s
-                )
+            INSERT INTO public.external_messages (
+            id, message, sender_phone, responsible_email,
+            last_message_uid, last_message_timestamp,
+            from_me, status, created_at, updated_at, is_deleted,
+            chat_url, chat_id, assigned_to_id, company_id
+            ) VALUES (
+            %s, %s, %s, %s,
+            %s, %s,
+            %s, %s, NOW(), NOW(), FALSE,
+            %s, %s, %s, %s
+            )
             """
             params = [
-                str(uuid4()), (text or ""), sender, (responsible_email or ""),
-                wamid, last_message_ts,
-                'true', 'sent',  # ← status inicial saliente
-                sender, sender, assigned_to_id, effective_company_id
+            str(uuid4()), (text or ""), sender, (responsible_email or ""),
+            wamid, last_message_ts,
+            'true', 'sent',
+            sender,      # chat_url = teléfono
+            deal_id,     # chat_id = deal_id
+            assigned_to_id, effective_company_id
             ]
             self.db_manager.execute_query(insert_sql, params)
             return True
@@ -4790,7 +4780,7 @@ def webhook_company(company_id):
                                     else:
                                         if not auto_reply_service.is_office_hours():
                                             auto_reply_service.send_auto_reply(
-                                                sender_phone, whatsapp_service, message_service
+                                                sender_phone, whatsapp_service, message_service , company_id=company_id
                                             )
                                         continue
 
@@ -4809,7 +4799,7 @@ def webhook_company(company_id):
                                     if not ok_template:
                                         if not auto_reply_service.is_office_hours():
                                             auto_reply_service.send_auto_reply(
-                                                sender_phone, whatsapp_service, message_service
+                                                sender_phone, whatsapp_service, message_service , company_id=company_id
                                             )
                                         continue
 
@@ -4832,7 +4822,7 @@ def webhook_company(company_id):
                                     if not lead or not lead.get('lead_id'):
                                         if not auto_reply_service.is_office_hours():
                                             auto_reply_service.send_auto_reply(
-                                                sender_phone, whatsapp_service, message_service
+                                                sender_phone, whatsapp_service, message_service , company_id=company_id
                                             )
                                         continue
 
@@ -4873,7 +4863,7 @@ def webhook_company(company_id):
                             # Auto-reply si es fuera de horario
                             if not auto_reply_service.is_office_hours():
                                 auto_reply_service.send_auto_reply(
-                                    sender_phone, whatsapp_service, message_service
+                                    sender_phone, whatsapp_service, message_service , company_id=company_id
                                 )
 
                         # -------- MENSAJES CON ARCHIVOS MULTIMEDIA (EXTENDIDO) --------
@@ -4980,7 +4970,7 @@ def webhook_company(company_id):
                                 # Auto-reply si es fuera de horario
                                 if not auto_reply_service.is_office_hours():
                                     auto_reply_service.send_auto_reply(
-                                        sender_phone, whatsapp_service, message_service
+                                        sender_phone, whatsapp_service, message_service , company_id=company_id
                                     )
 
                             except Exception as e:
@@ -5097,7 +5087,7 @@ def webhook():
                                     else:
                                         if not auto_reply_service.is_office_hours():
                                             auto_reply_service.send_auto_reply(
-                                                sender_phone, whatsapp_service, message_service
+                                                sender_phone, whatsapp_service, message_service , company_id=company_id
                                             )
                                         continue
 
@@ -5115,7 +5105,7 @@ def webhook():
                                     if not ok_template:
                                         if not auto_reply_service.is_office_hours():
                                             auto_reply_service.send_auto_reply(
-                                                sender_phone, whatsapp_service, message_service
+                                                sender_phone, whatsapp_service, message_service , company_id=company_id
                                             )
                                         continue
 
@@ -5137,7 +5127,7 @@ def webhook():
                                     if not lead or not lead.get('lead_id'):
                                         if not auto_reply_service.is_office_hours():
                                             auto_reply_service.send_auto_reply(
-                                                sender_phone, whatsapp_service, message_service
+                                                sender_phone, whatsapp_service, message_service , company_id=company_id
                                             )
                                         continue
                                     
@@ -5176,7 +5166,7 @@ def webhook():
                             # Auto-reply si es fuera de horario
                             if not auto_reply_service.is_office_hours():
                                 auto_reply_service.send_auto_reply(
-                                    sender_phone, whatsapp_service, message_service
+                                    sender_phone, whatsapp_service, message_service , company_id=company_id
                                 )
 
                         # -------- MENSAJES CON ARCHIVOS MULTIMEDIA (EXTENDIDO) --------
@@ -5276,7 +5266,7 @@ def webhook():
                                 # Auto-reply si es fuera de horario
                                 if not auto_reply_service.is_office_hours():
                                     auto_reply_service.send_auto_reply(
-                                        sender_phone, whatsapp_service, message_service
+                                        sender_phone, whatsapp_service, message_service , company_id=company_id
                                     )
 
                             except Exception as e:
