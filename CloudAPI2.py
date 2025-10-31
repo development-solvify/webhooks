@@ -2665,7 +2665,7 @@ class MessageService:
         except Exception:
             logging.exception("Failed to update outgoing status")
 
-        def save_template_message(
+    def save_template_message(
         self,
         payload: dict,
         wamid: str | None,
@@ -2770,6 +2770,7 @@ class MessageService:
         except Exception:
             logging.exception("Failed to save template message")
             return False
+
 # ---------- Gestión de credenciales WhatsApp por company_id (tenant) ----------
 
 # --- Cache opcional para mapear phone -> company_id (simple diccionario en memoria)
