@@ -6630,7 +6630,7 @@ def test_status_update():
         status_before = before[0]
         
         # Realizar actualización
-        success = update_message_status(db_manager, message_id, whatsapp_status)
+        success = message_service.update_outgoing_status(message_id, whatsapp_status)
         
         # Obtener estado después de la actualización
         after = db_manager.execute_query(get_sql, [message_id], fetch_one=True)
