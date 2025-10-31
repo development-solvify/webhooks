@@ -2665,6 +2665,112 @@ class MessageService:
         except Exception:
             logging.exception("Failed to update outgoing status")
 
+        def save_template_message(
+        self,
+        payload: dict,
+        wamid: str | None,
+        company_id: str | None = None
+    ) -> bool:
+        """
+        Registra un mensaje saliente de tipo TEMPLATE (from_me=true) con status 'template_sent'.
+        Se intenta resolver phone y metadatos desde el payload y, si no, por la BBDD.
+        """
+        try:
+            # 1) Resolver teléfono (en distintos posibles lugares del payload)
+            phone = (
+                (payload.get("phone")) or
+                (payload.get("to")) or
+                # algunos endpoints usan "template" con "to" en el payload real de envío
+                ((payload.get("template_payload") or {}).get("to")) or
+                ""
+            )
+            sender = PhoneUtils.strip_34(str(phone)) if phone else None
+
+            # 2) Template name (si viene)
+            template_name = (
+                payload.get("template_name")
+                or (payload.get("template_data") or {}).get("template_name")
+                or (payload.get("template") or {}).get("name")
+                or ""
+            )
+
+            # 3) Timestamp
+            last_message_ts = now_madrid_naive()
+
+            # 4) Resolver asignaciones/lead
+            assigned_to_id = None
+            responsible_email = ""
+            lead = None
+
+            if sender:
+                try:
+                    assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
+                except Exception:
+                    logging.exception("Failed to get lead assigned info for sender=%s", sender)
+
+                try:
+                    lead = self.lead_service.get_lead_data_by_phone(sender)
+                except Exception:
+                    logging.exception("Failed to get lead data for sender=%s", sender)
+
+            chat_id = None
+            chat_url = None
+            if lead:
+                # Si tienes deal_id como chat_id, úsalo; si no, fallback al teléfono
+                chat_id = lead.get("deal_id") or sender
+                chat_url = sender
+                # company_id efectivo
+                if not company_id:
+                    company_id = lead.get("company_id")
+
+            if not chat_id:
+                chat_id = sender or str(uuid4())
+            if not chat_url:
+                chat_url = sender or ""
+
+            # 5) Cuerpo a guardar: si tienes el payload de template, lo guardamos como JSON
+            body_json = json.dumps({
+                "type": "template",
+                "template_name": template_name,
+                "payload": payload
+            }, ensure_ascii=False)
+
+            # 6) Insert con status template_sent y from_me='true'
+            insert_sql = """
+                INSERT INTO public.external_messages (
+                    id, message, sender_phone, responsible_email,
+                    last_message_uid, last_message_timestamp,
+                    from_me, status, created_at, updated_at, is_deleted,
+                    chat_id, chat_url, assigned_to_id, company_id
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s,
+                    %s, %s, NOW(), NOW(), FALSE,
+                    %s, %s, %s, %s
+                )
+                ON CONFLICT DO NOTHING
+            """
+            params = [
+                str(uuid4()),
+                body_json,
+                (sender or ""),
+                (responsible_email or ""),
+                wamid,
+                last_message_ts,
+                'true',
+                'template_sent',
+                chat_id,
+                chat_url,
+                assigned_to_id,
+                company_id
+            ]
+            self.db_manager.execute_query(insert_sql, params)
+            return True
+
+        except Exception:
+            logging.exception("Failed to save template message")
+            return False
+# ---------- Gestión de credenciales WhatsApp por company_id (tenant) ----------
 
 # --- Cache opcional para mapear phone -> company_id (simple diccionario en memoria)
 _phone_company_cache: dict[str, str] = {}
