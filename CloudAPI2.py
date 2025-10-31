@@ -2552,10 +2552,10 @@ class MessageService:
                     sender, assigned_to_id
                     ]
                     if deal_id:
-                    params_upd.append(deal_id)
-                    params_upd.append(row[0])
-                    self.db_manager.execute_query(update_sql, params_upd)
-                    return True
+                        params_upd.append(deal_id)
+                        params_upd.append(row[0])
+                        self.db_manager.execute_query(update_sql, params_upd)
+                        return True
 
             deal_id = lead.get('deal_id') if lead else None
 
