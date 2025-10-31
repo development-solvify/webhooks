@@ -2593,7 +2593,70 @@ class MessageService:
         except Exception:
             logging.exception('Failed to save incoming message')
             return False
-# ---------- Función send_flow_exit ----------
+        
+    def save_outgoing_message(
+        self,
+        phone: str,
+        text: str,
+        wamid: str | None,
+        responsible_email: str | None,
+        assigned_to_id: str | None,
+        company_id: str | None = None
+    ) -> bool:
+        """Registra un mensaje saliente (from_me=true), aislado por tenant si se conoce."""
+        try:
+            sender = PhoneUtils.strip_34(str(phone))
+            last_message_ts = now_madrid_naive()
+
+            effective_company_id = company_id
+            if not effective_company_id:
+                # Resolver por lead si no viene explicitamente
+                lead = self.lead_service.get_lead_data_by_phone(sender)
+                effective_company_id = (lead.get('company_id') if lead else None)
+
+            insert_sql = """
+                INSERT INTO public.external_messages (
+                    id, message, sender_phone, responsible_email,
+                    last_message_uid, last_message_timestamp,
+                    from_me, status, created_at, updated_at, is_deleted,
+                    chat_id, chat_url, assigned_to_id, company_id
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s,
+                    %s, %s, NOW(), NOW(), FALSE,
+                    %s, %s, %s, %s
+                )
+            """
+            params = [
+                str(uuid4()), (text or ""), sender, (responsible_email or ""),
+                wamid, last_message_ts,
+                'true', 'sent',  # ← status inicial saliente
+                sender, sender, assigned_to_id, effective_company_id
+            ]
+            self.db_manager.execute_query(insert_sql, params)
+            return True
+        except Exception:
+            logging.exception("Failed to save outgoing message")
+            return False
+    def update_outgoing_status(wamid: str, status: str, company_id: str | None):
+        try:
+            if company_id:
+                sql = """
+                    UPDATE public.external_messages
+                    SET status = %s, updated_at = NOW()
+                    WHERE last_message_uid = %s
+                    AND company_id = %s
+                """
+                db_manager.execute_query(sql, [status, wamid, company_id])
+            else:
+                sql = """
+                    UPDATE public.external_messages
+                    SET status = %s, updated_at = NOW()
+                    WHERE last_message_uid = %s
+                """
+                db_manager.execute_query(sql, [status, wamid])
+        except Exception:
+            logging.exception("Failed to update outgoing status")
 
 
 # --- Cache opcional para mapear phone -> company_id (simple diccionario en memoria)
@@ -4235,43 +4298,52 @@ def get_cover_wb_for_phone(phone: str) -> str:
         return default
 # Helper function to get company credentials
 def get_whatsapp_credentials_for_company(company_id: str) -> dict:
-    """Get WhatsApp credentials for specific company"""
+    """
+    Lee credenciales de properties/object_property_values para el tenant.
+    Devuelve dict con headers, base_url y metadatos. Hace fallback a DEFAULT_* si falta algo.
+    """
     try:
-        # Check cache first
-        cached = company_cache.get(company_id)
-        if cached:
-            custom_props = cached.get('custom_properties', {})
-            if custom_props:
-                return {
-                    'access_token': custom_props.get('WHATSAPP_ACCESS_TOKEN'),
-                    'phone_number_id': custom_props.get('WHATSAPP_PHONE_NUMBER_ID'),
-                    'business_id': custom_props.get('WHATSAPP_BUSINESS_ID'),
-                    'base_url': f"https://graph.facebook.com/v22.0/{custom_props.get('WHATSAPP_PHONE_NUMBER_ID')}/messages"
-                }
-
-        # If not in cache, query database
         sql = """
-            SELECT p.property_name, opv.value 
+            SELECT p.property_name, opv.value
             FROM object_property_values opv
             JOIN properties p ON p.id = opv.property_id
             WHERE opv.object_reference_type = 'companies'
-            AND opv.object_reference_id = %s
-            AND p.property_name IN ('WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_BUSINESS_ID')
+              AND opv.object_reference_id = %s
+              AND p.property_name IN ('WHATSAPP_ACCESS_TOKEN','WHATSAPP_PHONE_NUMBER_ID','WHATSAPP_BUSINESS_ID','COMPANY_NAME')
         """
-        rows = db_manager.execute_query(sql, [company_id], fetch_all=True)
+        rows = db_manager.execute_query(sql, [company_id], fetch_all=True) or []
+        kv = {name: val for (name, val) in rows if name}  # <-- convierte lista de tuplas a dict
 
-        credentials = {}
-        for row in rows:
-            credentials[row['property_name']] = row['value']
+        access_token   = kv.get('WHATSAPP_ACCESS_TOKEN')   or ACCESS_TOKEN
+        phone_number_id= kv.get('WHATSAPP_PHONE_NUMBER_ID')or PHONE_NUMBER_ID
+        business_id    = kv.get('WHATSAPP_BUSINESS_ID')    or WABA_ID
+        company_name   = kv.get('COMPANY_NAME')            or "Default"
 
-        if credentials.get('WHATSAPP_PHONE_NUMBER_ID'):
-            credentials['base_url'] = f"https://graph.facebook.com/v22.0/{credentials['WHATSAPP_PHONE_NUMBER_ID']}/messages"
+        base_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{phone_number_id}/messages"
+        headers  = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
 
-        return credentials
-
-    except Exception as e:
-        logger.error(f"Error getting company credentials: {e}")
-        return {}
+        return {
+            "waba_id": business_id,
+            "access_token": access_token,
+            "phone_number_id": phone_number_id,
+            "base_url": base_url,
+            "headers": headers,
+            "company_id": company_id,
+            "company_name": company_name,
+        }
+    except Exception:
+        logging.exception("Error getting company credentials")
+        # Fallback absoluto a defaults
+        base_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{PHONE_NUMBER_ID}/messages"
+        return {
+            "waba_id": WABA_ID,
+            "access_token": ACCESS_TOKEN,
+            "phone_number_id": PHONE_NUMBER_ID,
+            "base_url": base_url,
+            "headers": {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"},
+            "company_id": "Default",
+            "company_name": "Default",
+        }
 
 
 @app.route('/get_templates', methods=['GET'])
