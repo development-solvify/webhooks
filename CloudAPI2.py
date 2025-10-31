@@ -2240,65 +2240,59 @@ class AutoReplyService:
             return False
 
         return True
+    # AutoReplyService
+    def send_auto_reply(self, phone_number, whatsapp_service, message_service, company_id: str | None = None):
+        try:
+            madrid_time = now_madrid()
+            if self.is_office_hours(madrid_time):
+                return False, "Office hours - no auto-reply needed"
+            if not self.should_send_auto_reply(phone_number):
+                return False, "Auto-reply already sent recently"
 
-    def send_auto_reply(self, phone_number, whatsapp_service, message_service):
-            try:
-                madrid_time = now_madrid()
-                if self.is_office_hours(madrid_time):
-                    return False, "Office hours - no auto-reply needed"
-                if not self.should_send_auto_reply(phone_number):
-                    return False, "Auto-reply already sent recently"
+            auto_message = self.get_auto_reply_message(madrid_time)
 
-                auto_message = self.get_auto_reply_message(madrid_time)
+            destination = PhoneUtils.add_34(phone_number)
+            # ✅ ahora acepta company_id y lo pasa al envío
+            success, message_id = whatsapp_service.send_text_message(destination, auto_message, company_id=company_id)
 
-                destination = PhoneUtils.add_34(phone_number)
-                success, message_id = whatsapp_service.send_text_message(destination, auto_message, company_id=company_id)
+            if success:
+                clean_phone = PhoneUtils.strip_34(phone_number)
+                current_time_naive = now_madrid_naive()
 
-                if success:
-                    clean_phone = PhoneUtils.strip_34(phone_number)
-                    current_time_naive = now_madrid_naive()
+                assigned_to_id, responsible_email = message_service.lead_service.get_lead_assigned_info(clean_phone)
+                lead = message_service.lead_service.get_lead_data_by_phone(clean_phone)
+                deal_id = (lead.get('deal_id') if lead and lead.get('deal_id') else None)
 
-                    # Asignado/responsable (pueden ser None/"")
-                    assigned_to_id, responsible_email = message_service.lead_service.get_lead_assigned_info(clean_phone)
-                    lead = message_service.lead_service.get_lead_data_by_phone(clean_phone)
-                    deal_id = (lead.get('deal_id') if lead and lead.get('deal_id') else None)
+                chat_id = deal_id              # ✅ chat_id = deal_id (UUID)
+                chat_url = clean_phone         # ✅ teléfono como “url” visual
 
-                    chat_id = deal_id            # ✅ chat_id ahora es deal_id (UUID) o None
-                    chat_url = clean_phone       # ✅ teléfono para deep-link/visual
+                query = """
+                    INSERT INTO external_messages (
+                        id, message, sender_phone, responsible_email,
+                        last_message_uid, last_message_timestamp, from_me,
+                        status, created_at, updated_at, is_deleted,
+                        chat_url, chat_id, is_read, assigned_to_id, company_id
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW(),FALSE,%s,%s,%s,%s,%s)
+                """
+                params = [
+                    str(uuid4()), auto_message, clean_phone, (responsible_email or ""),
+                    message_id, current_time_naive, 'true',
+                    'sent',                          # FSM limpia: sent → delivered → read
+                    chat_url, chat_id, False, assigned_to_id, company_id
+                ]
+                self.db_manager.execute_query(query, params)
 
-                    # ✅ Incluimos company_id en el INSERT y status='sent'
-                    query = """
-                        INSERT INTO external_messages (
-                            id, message, sender_phone, responsible_email,
-                            last_message_uid, last_message_timestamp, from_me,
-                            status, created_at, updated_at, is_deleted,
-                            chat_url, chat_id, is_read, assigned_to_id, company_id
-                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    """
-                    params = [
-                        str(uuid4()), auto_message, clean_phone, (responsible_email or ""),
-                        message_id, current_time_naive, 'true',
-                        'sent',                              # ✅ FSM limpia
-                        current_time_naive, current_time_naive, False,
-                        chat_url, chat_id, False, assigned_to_id,
-                        company_id                           # ✅ TENANT
-                    ]
-                    self.db_manager.execute_query(query, params)
+                self._last_auto_replies[clean_phone] = time.time()
 
-                    self._last_auto_replies[clean_phone] = time.time()
+                log_sent_message(f'+{destination}', auto_message, message_id)
+                logger.info(f"🤖 Auto-reply sent to {clean_phone} (outside office hours) -> sent (wamid={message_id})")
+                return True, f"Auto-reply sent: {message_id}"
+            else:
+                return False, "Failed to send auto-reply message"
 
-                    # ✅ Log con WAMID real
-                    log_sent_message(f'+{destination}', auto_message, message_id)
-                    logger.info(f"🤖 Auto-reply sent to {clean_phone} (outside office hours) -> sent (wamid={message_id})")
-
-                    return True, f"Auto-reply sent: {message_id}"
-                else:
-                    return False, "Failed to send auto-reply message"
-
-
-            except Exception:
-                logger.exception('Error in send_auto_reply')
-                return False, "Error sending auto-reply"
+        except Exception:
+            logger.exception('Error in send_auto_reply')
+            return False, "Error sending auto-reply"
 
 class LeadService:
     """Lead and deal management service"""
