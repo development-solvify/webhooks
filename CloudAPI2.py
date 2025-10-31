@@ -1437,7 +1437,7 @@ class Config:
 
         access_token = os.getenv('WHATSAPP_ACCESS_TOKEN') or wa_cfg.get('WHATSAPP_ACCESS_TOKEN')
         phone_number_id = os.getenv('WHATSAPP_PHONE_NUMBER_ID') or wa_cfg.get('WHATSAPP_PHONE_NUMBER_ID')
-        verify_token = wa_cfg.get('VERIFY_TOKEN', 'solvify-whatsapp-2024')
+        verify_token = wa_cfg.get('VERIFY_TOKEN', 'SICUEL2025')
         business_id = os.getenv('WHATSAPP_BUSINESS_ID') or wa_cfg.get('WHATSAPP_BUSINESS_ID')
         self.whatsapp_config = {
             'access_token': access_token,
@@ -4917,7 +4917,7 @@ def webhook_company(company_id):
     # --- Validación de ruta ---
     if not UUID_RE.match(company_id):
         abort(404)
-
+    print(f"Webhook called for company_id={company_id} with method={request.method}")
     # --- Verificación Webhook (GET) ---
     if request.method == 'GET':
         token = request.args.get('hub.verify_token')
