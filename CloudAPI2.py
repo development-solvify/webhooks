@@ -2584,89 +2584,58 @@ class MessageService:
         row = self.db_manager.execute_query(q, [clean_phone, threshold], fetch_one=True)
         return row[0] if row else None
 
-# ---------- Guardado de mensajes (TENANT-AWARE) ----------
-def save_incoming_message(self, msg: dict, wa_id: str, company_id: str | None = None) -> bool:
-    """Guarda mensaje entrante. Upsert manual por last_message_uid, aislado por company_id."""
-    try:
-        sender = PhoneUtils.strip_34(msg.get('from', ''))
-        uid = msg.get('id')  # wamid.* si llega
-        text = (msg.get('text') or {}).get('body')
-        body_text_or_json = text if text else json.dumps(msg, ensure_ascii=False)
+    # ---------- Guardado de mensajes (TENANT-AWARE) ----------
+    def save_incoming_message(self, msg: dict, wa_id: str, company_id: str | None = None) -> bool:
+        """Guarda mensaje entrante. Upsert manual por last_message_uid, aislado por company_id."""
+        try:
+            sender = PhoneUtils.strip_34(msg.get('from', ''))
+            uid = msg.get('id')  # wamid.* si llega
+            text = (msg.get('text') or {}).get('body')
+            body_text_or_json = text if text else json.dumps(msg, ensure_ascii=False)
 
-        wa_timestamp = msg.get('timestamp')
-        last_message_ts = timestamp_to_madrid_naive(wa_timestamp) if wa_timestamp else now_madrid_naive()
+            wa_timestamp = msg.get('timestamp')
+            last_message_ts = timestamp_to_madrid_naive(wa_timestamp) if wa_timestamp else now_madrid_naive()
 
-        assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
-        lead = self.lead_service.get_lead_data_by_phone(sender)
+            assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
+            lead = self.lead_service.get_lead_data_by_phone(sender)
 
-        # chat_id/chat_url como antes
-        chat_id = (lead.get('deal_id') if lead and lead.get('deal_id') else sender)
-        chat_url = sender
+            # chat_id/chat_url como antes
+            chat_id = (lead.get('deal_id') if lead and lead.get('deal_id') else sender)
+            chat_url = sender
 
-        # --- Resolver company_id efectivo ---
-        effective_company_id = company_id or (lead.get('company_id') if lead else None)
+            # --- Resolver company_id efectivo ---
+            effective_company_id = company_id or (lead.get('company_id') if lead else None)
 
-        # --- DEDUPE por last_message_uid (aislado por tenant si lo conocemos) ---
-        if uid:
-            if effective_company_id:
-                # Busca SOLO dentro del tenant
-                check_sql = """
-                    SELECT id, company_id
-                      FROM public.external_messages
-                     WHERE last_message_uid = %s
-                       AND company_id       = %s
-                     LIMIT 1
-                """
-                row = self.db_manager.execute_query(check_sql, [uid, effective_company_id], fetch_one=True)
-            else:
-                # Sin tenant conocido: busca por uid (compat histórica)
-                check_sql = """
-                    SELECT id, company_id
-                      FROM public.external_messages
-                     WHERE last_message_uid = %s
-                     ORDER BY created_at DESC
-                     LIMIT 1
-                """
-                row = self.db_manager.execute_query(check_sql, [uid], fetch_one=True)
-
-            if row and row[0]:
-                # Si había fila previa y no tenía company_id pero ahora sí lo sabemos, lo rellenamos
-                if effective_company_id and (row[1] is None):
-                    update_sql = """
-                        UPDATE public.external_messages
-                           SET message               = %s,
-                               sender_phone          = %s,
-                               responsible_email     = %s,
-                               last_message_timestamp= %s,
-                               from_me               = %s,
-                               status                = %s,
-                               chat_id               = %s,
-                               chat_url              = %s,
-                               assigned_to_id        = %s,
-                               company_id            = %s,
-                               updated_at            = NOW()
-                         WHERE id = %s
+            # --- DEDUPE por last_message_uid (aislado por tenant si lo conocemos) ---
+            if uid:
+                if effective_company_id:
+                    # Busca SOLO dentro del tenant
+                    check_sql = """
+                        SELECT id, company_id
+                          FROM public.external_messages
+                         WHERE last_message_uid = %s
+                           AND company_id       = %s
+                         LIMIT 1
                     """
-                    params_upd = [
-                        body_text_or_json, sender, (responsible_email or ""),
-                        last_message_ts, 'false', 'received',
-                        chat_id, chat_url, assigned_to_id,
-                        effective_company_id, row[0]
-                    ]
+                    row = self.db_manager.execute_query(check_sql, [uid, effective_company_id], fetch_one=True)
                 else:
-                    # Actualiza sin tocar company_id existente
+                    # Sin tenant, busca global (compatibilidad)
+                    check_sql = "SELECT id FROM public.external_messages WHERE last_message_uid = %s LIMIT 1"
+                    row = self.db_manager.execute_query(check_sql, [uid], fetch_one=True)
+
+                if row and row[0]:
                     update_sql = """
                         UPDATE public.external_messages
-                           SET message               = %s,
-                               sender_phone          = %s,
-                               responsible_email     = %s,
-                               last_message_timestamp= %s,
-                               from_me               = %s,
-                               status                = %s,
-                               chat_id               = %s,
-                               chat_url              = %s,
-                               assigned_to_id        = %s,
-                               updated_at            = NOW()
+                           SET message = %s,
+                               sender_phone = %s,
+                               responsible_email = %s,
+                               last_message_timestamp = %s,
+                               from_me = %s,
+                               status = %s,
+                               chat_id = %s,
+                               chat_url = %s,
+                               assigned_to_id = %s,
+                               updated_at = NOW()
                          WHERE id = %s
                     """
                     params_upd = [
@@ -2674,91 +2643,7 @@ def save_incoming_message(self, msg: dict, wa_id: str, company_id: str | None = 
                         last_message_ts, 'false', 'received',
                         chat_id, chat_url, assigned_to_id, row[0]
                     ]
-
-                self.db_manager.execute_query(update_sql, params_upd)
-                logging.info(f"🔁 Incoming message dedupe: updated id={row[0]} company_id={row[1] or effective_company_id}")
-                return True
-
-        # --- INSERT (con company_id si lo tenemos) ---
-        insert_sql = """
-            INSERT INTO public.external_messages (
-                id, message, sender_phone, responsible_email,
-                last_message_uid, last_message_timestamp,
-                from_me, status, created_at, updated_at, is_deleted,
-                chat_id, chat_url, assigned_to_id, company_id
-            ) VALUES (
-                %s, %s, %s, %s,
-                %s, %s,
-                %s, %s, NOW(), NOW(), FALSE,
-                %s, %s, %s, %s
-            )
-        """
-        params_ins = [
-            str(uuid4()), body_text_or_json, sender, (responsible_email or ""),
-            uid, last_message_ts, 'false', 'received',
-            chat_id, chat_url, assigned_to_id, effective_company_id
-        ]
-        self.db_manager.execute_query(insert_sql, params_ins)
-        logging.info(f"✅ Incoming message inserted company_id={effective_company_id} sender={sender}")
-        return True
-
-    except Exception:
-        logging.exception('Failed to save incoming message')
-        return False
-
-    def save_outgoing_message(self, customer_phone: str, message_text: str, message_id: str,
-                              email: str = None, assigned_to_id: str = None, is_failed: bool = False) -> bool:
-        try:
-            if not message_id:
-                logger.warning("❌ Attempted to save outgoing message without wamid")
-                return False
-                
-            clean_phone = PhoneUtils.strip_34(customer_phone)
-            lead = self.lead_service.get_lead_data_by_phone(clean_phone)
-            print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
-            print(lead)
-
-            derived_email = lead.get('responsible_email') if lead else None
-            derived_assigned = lead.get('user_assigned_id') if lead else None
-            chat_id = (lead.get('deal_id') if lead and lead.get('deal_id') else clean_phone)
-
-            company_id = lead.get('company_id') if lead else None   
-            company_name = lead.get('company_name') if lead else None
-            print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
-            print(company_name) 
-            responsible_email = email or derived_email or ''
-            assigned_to_id = assigned_to_id or derived_assigned
-            if assigned_to_id and not self.lead_service.validate_assigned_to_id(assigned_to_id):
-                logging.warning(f"[save_outgoing] assigned_to_id inválido -> {assigned_to_id}, lo dejo a NULL")
-                assigned_to_id = None
-
-            now_ts = now_madrid_naive()
-
-            if message_id:
-                check_sql = "SELECT id FROM public.external_messages WHERE last_message_uid = %s LIMIT 1"
-                row = self.db_manager.execute_query(check_sql, [message_id], fetch_one=True)
-                if row and row[0]:
-                    update_sql = """
-                        UPDATE public.external_messages
-                        SET message = %s,
-                            sender_phone = %s,
-                            responsible_email = %s,
-                            last_message_timestamp = %s,
-                            from_me = %s,
-                            status = %s,
-                            chat_id = %s,
-                            chat_url = %s,
-                            assigned_to_id = %s,
-                            updated_at = NOW()
-                        WHERE id = %s
-                    """
-                    params_upd = [
-                        message_text, clean_phone, responsible_email,
-                        now_ts, 'true', 'sent',
-                        chat_id, clean_phone, assigned_to_id, row[0]
-                    ]
                     self.db_manager.execute_query(update_sql, params_upd)
-                    logging.info(f"🔁 Outgoing message dedupe: updated id={row[0]}")
                     return True
 
             insert_sql = """
@@ -2775,274 +2660,18 @@ def save_incoming_message(self, msg: dict, wa_id: str, company_id: str | None = 
                 )
             """
             params_ins = [
-                str(uuid4()), message_text, clean_phone, responsible_email,
-                message_id, now_ts, 'true', get_initial_message_status('text', is_template=False),
-                chat_id, clean_phone, assigned_to_id, company_id
+                str(uuid4()), body_text_or_json, sender, (responsible_email or ""),
+                uid, last_message_ts,
+                'false', 'received',
+                chat_id, chat_url, assigned_to_id, effective_company_id
             ]
             self.db_manager.execute_query(insert_sql, params_ins)
-            logging.info("✅ Outgoing message inserted")
             return True
 
         except Exception:
-            logging.exception('Failed to save outgoing message (INSERT/UPDATE)')
+            logging.exception('Failed to save incoming message')
             return False
-
-    def save_template_message(self, template_payload: dict, message_id: str) -> bool:
-        """Guarda envío de plantilla. Emula upsert por last_message_uid sin ON CONFLICT."""
-        try:
-            clean_phone = PhoneUtils.strip_34(template_payload.get('to', ''))
-            assigned_to_id, email = self.lead_service.get_lead_assigned_info(clean_phone)
-            now_ts = now_madrid_naive()
-            payload_json = json.dumps(convert_uuids_to_strings(template_payload), ensure_ascii=False)
-            company_id = None
-            lead = self.lead_service.get_lead_data_by_phone(clean_phone)
-            if lead:
-                company_id = lead.get('company_id') 
-            if message_id:
-                check_sql = "SELECT id FROM public.external_messages WHERE last_message_uid = %s LIMIT 1"
-                row = self.db_manager.execute_query(check_sql, [message_id], fetch_one=True)
-                if row and row[0]:
-                    update_sql = """
-                        UPDATE public.external_messages
-                        SET message = %s,
-                            sender_phone = %s,
-                            responsible_email = %s,
-                            last_message_timestamp = %s,
-                            from_me = %s,
-                            status = %s,
-                            chat_id = %s,
-                            chat_url = %s,
-                            assigned_to_id = %s,
-                            updated_at = NOW()
-                        WHERE id = %s
-                    """
-                    params_upd = [
-                        payload_json, clean_phone, (email or ''),
-                        now_ts, 'true', 'template_sent',
-                        clean_phone, clean_phone, assigned_to_id, row[0]
-                    ]
-                    self.db_manager.execute_query(update_sql, params_upd)
-                    logging.info(f"🔁 Template message dedupe: updated id={row[0]}")
-                    return True
-
-            insert_sql = """
-                INSERT INTO public.external_messages (
-                    id, message, sender_phone, responsible_email,
-                    last_message_uid, last_message_timestamp, from_me,
-                    status, created_at, updated_at, is_deleted,
-                    chat_id, chat_url, assigned_to_id, company_id
-                ) VALUES (
-                    %s, %s, %s, %s,
-                    %s, %s, %s,
-                    %s, NOW(), NOW(), FALSE,
-                    %s, %s, %s, %s
-                )
-            """            
-            params_ins = [
-                str(uuid4()), payload_json, clean_phone, (email or ''),
-                message_id, now_ts, 'true', get_initial_message_status('text', is_template=True),
-                clean_phone, clean_phone, assigned_to_id, company_id
-            ]
-            self.db_manager.execute_query(insert_sql, params_ins)
-            logging.info("✅ Template message inserted for company_id={company_id}")
-            return True
-
-        except Exception:
-            logging.exception('Failed to save template message')
-            return False
-
-    def save_media_message(self, msg: dict, wa_id: str, file_info: dict = None) -> bool:
-        """Save incoming media message with file reference - FORMATO JSON ESTRUCTURADO"""
-        try:
-            sender = PhoneUtils.strip_34(msg.get('from', ''))
-            uid = msg.get('id')
-            
-            # Detectar tipo de media
-            media_type = None
-            for mtype in ['image', 'audio', 'video', 'document', 'sticker', 'voice']:
-                if mtype in msg:
-                    media_type = mtype
-                    break
-            
-            # 🔧 CAMBIO PRINCIPAL: Construir JSON estructurado en lugar de texto descriptivo
-            if file_info:
-                # Construir mensaje JSON estructurado como los salientes
-                message_json = {
-                    "type": file_info.get('whatsapp_type', media_type),
-                    "url": file_info.get('public_url', ''),
-                    "filename": file_info.get('filename', 'archivo'),
-                    "mime_type": file_info.get('content_type', ''),
-                    "detected_type": file_info.get('media_type', media_type),
-                    "extended_support": True
-                }
-                
-                # Agregar caption solo si existe y es un tipo que lo soporta
-                caption = msg.get(media_type, {}).get('caption', '') if media_type else ''
-                if caption and file_info.get('whatsapp_type') in ['image', 'video', 'document']:
-                    message_json["caption"] = caption
-                    
-                # Agregar document_id si existe
-                if file_info.get('document_id'):
-                    message_json["document_id"] = file_info['document_id']
-                    
-                # Agregar información adicional
-                if file_info.get('file_size'):
-                    message_json["file_size"] = file_info['file_size']
-                    
-                # Convertir a JSON string
-                message_text = json.dumps(message_json, ensure_ascii=False)
-            else:
-                # Fallback: mensaje JSON básico si no hay file_info
-                message_json = {
-                    "type": media_type or "unknown",
-                    "url": "",
-                    "filename": f"{media_type}_recibido.bin" if media_type else "archivo_desconocido.bin",
-                    "mime_type": "application/octet-stream",
-                    "detected_type": media_type or "unknown",
-                    "extended_support": True,
-                    "error": "No file info available"
-                }
-                message_text = json.dumps(message_json, ensure_ascii=False)
-            
-            wa_timestamp = msg.get('timestamp')
-            last_message_ts = timestamp_to_madrid_naive(wa_timestamp) if wa_timestamp else now_madrid_naive()
-
-            assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
-            lead = self.lead_service.get_lead_data_by_phone(sender)
-            chat_id = (lead.get('deal_id') if lead and lead.get('deal_id') else sender)
-
-            # Guardar como mensaje normal pero con JSON estructurado
-            if uid:
-                check_sql = "SELECT id FROM public.external_messages WHERE last_message_uid = %s LIMIT 1"
-                row = self.db_manager.execute_query(check_sql, [uid], fetch_one=True)
-                if row and row[0]:
-                    update_sql = """
-                        UPDATE public.external_messages
-                        SET message = %s,
-                            sender_phone = %s,
-                            responsible_email = %s,
-                            last_message_timestamp = %s,
-                            from_me = %s,
-                            status = %s,
-                            chat_id = %s,
-                            chat_url = %s,
-                            assigned_to_id = %s,
-                            updated_at = NOW()
-                        WHERE id = %s
-                    """
-                    params_upd = [
-                        message_text, sender, (responsible_email or ""),
-                        last_message_ts, 'false', 'media_received',
-                        chat_id, sender, assigned_to_id, row[0]
-                    ]
-                    self.db_manager.execute_query(update_sql, params_upd)
-                    logging.info(f"📎 Media message dedupe: updated id={row[0]} with JSON format")
-                    return True
-
-            insert_sql = """
-                INSERT INTO public.external_messages (
-                    id, message, sender_phone, responsible_email,
-                    last_message_uid, last_message_timestamp,
-                    from_me, status, created_at, updated_at, is_deleted,
-                    chat_id, chat_url, assigned_to_id
-                ) VALUES (
-                    %s, %s, %s, %s,
-                    %s, %s,
-                    %s, %s, NOW(), NOW(), FALSE,
-                    %s, %s, %s
-                )
-            """
-            params_ins = [
-                str(uuid4()), message_text, sender, (responsible_email or ""),
-                uid, last_message_ts, 'false', 'media_received',
-                chat_id, sender, assigned_to_id
-            ]
-            self.db_manager.execute_query(insert_sql, params_ins)
-            logging.info("✅ Media message inserted with JSON format")
-            return True
-
-        except Exception:
-            logging.exception('Failed to save media message')
-            return False
-        def save_outgoing_media_message(self, customer_phone: str, media_description: str, 
-                                       message_id: str, email: str = None, 
-                                       assigned_to_id: str = None, file_info: dict = None) -> bool:
-            """Save outgoing media message"""
-            try:
-                clean_phone = PhoneUtils.strip_34(customer_phone)
-                lead = self.lead_service.get_lead_data_by_phone(clean_phone)
-                
-                # Construir mensaje descriptivo
-                message_text = f"📤 {media_description}"
-                if file_info:
-                    message_text += f": {file_info.get('filename', 'archivo')}"
-                
-                derived_email = lead.get('responsible_email') if lead else None
-                derived_assigned = lead.get('user_assigned_id') if lead else None
-                chat_id = (lead.get('deal_id') if lead and lead.get('deal_id') else clean_phone)
-
-                responsible_email = email or derived_email or ''
-                assigned_to_id = assigned_to_id or derived_assigned
-                
-                if assigned_to_id and not self.lead_service.validate_assigned_to_id(assigned_to_id):
-                    logging.warning(f"assigned_to_id inválido -> {assigned_to_id}, lo dejo a NULL")
-                    assigned_to_id = None
-
-                now_ts = now_madrid_naive()
-
-                if message_id:
-                    check_sql = "SELECT id FROM public.external_messages WHERE last_message_uid = %s LIMIT 1"
-                    row = self.db_manager.execute_query(check_sql, [message_id], fetch_one=True)
-                    if row and row[0]:
-                        update_sql = """
-                            UPDATE public.external_messages
-                            SET message = %s,
-                                sender_phone = %s,
-                                responsible_email = %s,
-                                last_message_timestamp = %s,
-                                from_me = %s,
-                                status = %s,
-                                chat_id = %s,
-                                chat_url = %s,
-                                assigned_to_id = %s,
-                                updated_at = NOW()
-                            WHERE id = %s
-                        """
-                        params_upd = [
-                            message_text, clean_phone, responsible_email,
-                            now_ts, 'true', 'media_sent',
-                            chat_id, clean_phone, assigned_to_id, row[0]
-                        ]
-                        self.db_manager.execute_query(update_sql, params_upd)
-                        logging.info(f"📤 Outgoing media message dedupe: updated id={row[0]}")
-                        return True
-
-                insert_sql = """
-                    INSERT INTO public.external_messages (
-                        id, message, sender_phone, responsible_email,
-                        last_message_uid, last_message_timestamp,
-                        from_me, status, created_at, updated_at, is_deleted,
-                        chat_id, chat_url, assigned_to_id
-                    ) VALUES (
-                        %s, %s, %s, %s,
-                        %s, %s,
-                        %s, %s, NOW(), NOW(), FALSE,
-                        %s, %s, %s
-                    )
-                """
-                params_ins = [
-                    str(uuid4()), message_text, clean_phone, responsible_email,
-                    message_id, now_ts, 'true', get_initial_message_status(media_type, is_template=False),
-                    chat_id, clean_phone, assigned_to_id
-                ]
-                self.db_manager.execute_query(insert_sql, params_ins)
-                logging.info("✅ Outgoing media message inserted")
-                return True
-
-            except Exception:
-                logging.exception('Failed to save outgoing media message')
-                return False
-
+# ---------- Función send_flow_exit ----------
 
 from datetime import datetime
 import logging
