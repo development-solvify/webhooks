@@ -5090,7 +5090,7 @@ def send_template_endpoint():
         )
 
         if success:
-            message_service.save_template_message(payload, message_id)
+            message_service.save_template_message(payload, message_id, company_id=company_id or lead_data.get('company_id'))
             return jsonify({
                 'status': 'success',
                 'message_id': message_id,
@@ -5134,7 +5134,7 @@ def handle_template():
         )
 
         if success:
-            message_service.save_template_message(payload, message_id)
+            message_service.save_template_message(payload, message_id,
             return jsonify({'status': 'success', 'message_id': message_id}), 200
         else:
             return jsonify({'status': 'error', 'message': 'Failed to send template'}), 500
