@@ -1108,6 +1108,13 @@ class Config:
             config_path = 'scripts.conf'
         self.config.read(config_path)
         self._init_logging()
+        # Clamp global levels a INFO
+        logging.getLogger().setLevel(logging.INFO)          # root
+        logging.getLogger("__main__").setLevel(logging.INFO) # el módulo lanzado
+        # Sube también el nivel mínimo de cada handler para que no “cuele” DEBUG
+        for h in logging.getLogger().handlers:
+            if h.level < logging.INFO:
+                h.setLevel(logging.INFO)        
         self.company_id = company_id
         self.supabase_client = supabase_client
         self.company_config = None
