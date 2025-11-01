@@ -1438,12 +1438,47 @@ class Config:
         }
 
         # ---------- Logging ----------
+        # ========= Carga desde config =========
         log_cfg = self.config['LOGGING'] if self.config.has_section('LOGGING') else {}
-        self.log_config = {
-            'level': getattr(logging, log_cfg.get('LOG_LEVEL', 'INFO'), logging.DEBUG),
-            'file': log_cfg.get('LOG_FILE', None),
-            'format': log_cfg.get('LOG_FORMAT', '%(asctime)s | %(levelname)s | %(name)s | %(message)s'),
-        }
+        level_name = (log_cfg.get('LOG_LEVEL', 'INFO') or 'INFO').upper()
+        level = getattr(logging, level_name, logging.INFO)
+
+        fmt = log_cfg.get('LOG_FORMAT', '%(asctime)s | %(levelname)s | %(name)s | %(message)s')
+        log_file = log_cfg.get('LOG_FILE', None)
+
+        # ========= Configuración base =========
+        handlers = []
+        if log_file:
+            from logging.handlers import TimedRotatingFileHandler
+            fh = TimedRotatingFileHandler(log_file, when="midnight", backupCount=7, encoding="utf-8")
+            fh.setLevel(level)
+            fh.setFormatter(logging.Formatter(fmt))
+            handlers.append(fh)
+
+        ch = logging.StreamHandler()
+        # si quieres menos ruido en consola, baja el nivel aquí
+        console_level_name = (log_cfg.get('CONSOLE_LOG_LEVEL', level_name) or level_name).upper()
+        ch.setLevel(getattr(logging, console_level_name, level))
+        ch.setFormatter(logging.Formatter(fmt))
+        handlers.append(ch)
+
+        logging.basicConfig(level=level, handlers=handlers, format=fmt)
+        logger = logging.getLogger(__name__)
+
+        # ========= Silenciar librerías ruidosas (AQUÍ) =========
+        logging.getLogger("werkzeug").setLevel(logging.WARNING)
+        logging.getLogger("urllib3").setLevel(logging.WARNING)
+        logging.getLogger("requests").setLevel(logging.WARNING)
+        logging.getLogger("sqlalchemy").setLevel(logging.WARNING)  # si la usas
+        # evita que werkzeug/requests vuelquen a tus handlers si no quieres
+        logging.getLogger("werkzeug").propagate = False
+        logging.getLogger("urllib3").propagate = False
+        logging.getLogger("requests").propagate = False
+
+        # (Opcional) silencia tu SQL detallado salvo que estés en DEBUG
+        if level > logging.DEBUG:
+            logging.getLogger("db").setLevel(logging.ERROR)
+
 
         # ---------- FLOW (scheduler) ----------
         # Solo necesitas la URL base del servidor del scheduler y la API key.
