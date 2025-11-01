@@ -1951,7 +1951,7 @@ class WhatsAppService:
             self.access_token    = wc['access_token']
             self.phone_number_id = wc['phone_number_id']
             self.base_url        = wc['base_url']
-            self.headers         = wc['headers']``
+            self.headers         = wc['headers']
             self.api_base_url    = getattr(config, 'api_base_url', "https://test.solvify.es/api")
 
     def send_template_message(
