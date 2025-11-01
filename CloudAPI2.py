@@ -1155,7 +1155,7 @@ class Config:
     def _validate_critical_config(self):
 
 
-        print("HOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO")
+
         if not self.company_id:
             logger.info("Skipping critical config validation for temporary config object")
             return
@@ -1440,7 +1440,7 @@ class Config:
         # ---------- Logging ----------
         log_cfg = self.config['LOGGING'] if self.config.has_section('LOGGING') else {}
         self.log_config = {
-            'level': getattr(logging, log_cfg.get('LOG_LEVEL', 'DEBUG'), logging.DEBUG),
+            'level': getattr(logging, log_cfg.get('LOG_LEVEL', 'INFO'), logging.DEBUG),
             'file': log_cfg.get('LOG_FILE', None),
             'format': log_cfg.get('LOG_FORMAT', '%(asctime)s | %(levelname)s | %(name)s | %(message)s'),
         }
