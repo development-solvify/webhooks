@@ -7951,9 +7951,9 @@ def _last_template_sent_ts_tenant(dbm, phone: str, company_id: str):
     SELECT created_at
     FROM external_messages
     WHERE company_id = %s
-      AND direction = 'out'
+      AND from_me = 'true'
       AND type = 'template'
-      AND phone = ANY(%s)
+      AND sender_phone = ANY(%s)
     ORDER BY created_at DESC
     LIMIT 1
     """
