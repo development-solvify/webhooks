@@ -3117,7 +3117,7 @@ class MessageService:
             assigned_to_id = None
             responsible_email = ""
             lead = None
-
+            print("Sender for template save--------------------------------------------------------------------->:", sender,  company_id)
             if sender:
                 try:
                     assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
