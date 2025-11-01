@@ -7930,6 +7930,74 @@ def migrate_existing_message_statuses(db_manager) -> dict:
             'error': str(e)
         }
 
+def _get_lead_phone_tenant(dbm, lead_id: str, company_id: str) -> str | None:
+    # Saca el teléfono del lead del tenant correcto
+    sql = """
+    SELECT phone
+    FROM leads
+    WHERE lead_id = %s AND company_id = %s
+    LIMIT 1
+    """
+    row = dbm.fetch_one(sql, [lead_id, company_id])
+    return row["phone"] if row else None
+
+
+def _last_template_sent_ts_tenant(dbm, phone: str, company_id: str):
+    # Busca el último template ENVIADO por este tenant a este teléfono (normalizado)
+    candidates = _normalize_phone_candidates(phone)  # p.ej. ['608684495', '34608684495']
+    sql = """
+    SELECT created_at
+    FROM external_messages
+    WHERE company_id = %s
+      AND direction = 'out'
+      AND type = 'template'
+      AND phone = ANY(%s)
+    ORDER BY created_at DESC
+    LIMIT 1
+    """
+    row = dbm.fetch_one(sql, [company_id, candidates])
+    return row["created_at"] if row else None
+
+
+def _last_user_message_ts_tenant(dbm, phone: str, company_id: str):
+    # Último mensaje del USUARIO (entrante) en este tenant
+    candidates = _normalize_phone_candidates(phone)
+    sql = """
+    SELECT created_at
+    FROM external_messages
+    WHERE company_id = %s
+      AND direction = 'in'
+      AND phone = ANY(%s)
+    ORDER BY created_at DESC
+    LIMIT 1
+    """
+    row = dbm.fetch_one(sql, [company_id, candidates])
+    return row["created_at"] if row else None
+
+
+def _can_send_template_tenant(dbm, phone: str, company_id: str, last_template_ts):
+    """
+    Reusa tu lógica existente pero asegurando tenant-awareness para el último mensaje del usuario.
+    Devuelve (can_send: bool, seconds_remaining: int, reason: str)
+    """
+    now = _now()
+    # 1) ¿Support window activa? (último IN del usuario en este tenant)
+    last_user_msg_ts = _last_user_message_ts_tenant(dbm, phone, company_id)
+    if last_user_msg_ts:
+        if last_user_msg_ts.tzinfo is None:
+            last_user_msg_ts = last_user_msg_ts.replace(tzinfo=TZ)
+        if (now - last_user_msg_ts).total_seconds() < WABA_WINDOW_SEC:
+            return True, 0, "Support window activa (<24h desde último mensaje del usuario)"
+
+    # 2) Si no hay ventana activa → sólo 1 template/24h por tenant+teléfono
+    if last_template_ts:
+        delta = (now - last_template_ts).total_seconds()
+        if delta < WABA_WINDOW_SEC:
+            return False, int(WABA_WINDOW_SEC - delta), "24h template limit active (last sent %.1fh ago)" % (delta/3600.0)
+
+    return True, 0, "No previous templates sent" if not last_template_ts else "Fuera de ventana pero >24h desde último template"
+
+
 def _last_template_sent_ts(dbm, phone: str) -> datetime | None:
     """
     Obtiene el timestamp del último template enviado a un teléfono específico.
@@ -8047,54 +8115,59 @@ def _can_send_template(last_template_ts: datetime | None, phone: str, dbm) -> tu
 @app.route("/canSendTemplate", methods=["POST"])
 def can_send_template():
     """
-    Verifica si se puede enviar un template con lógica de support window.
-    
+    Verifica si se puede enviar un template (multi-tenant).
     Reglas:
-    1. Si el cliente escribió hace menos de 24h -> Support window activa -> SÍ se puede enviar
-    2. Si no hay support window activa -> Solo 1 template cada 24h
+      1) Si el cliente escribió hace < 24h -> support window activa -> SÍ puede enviar
+      2) Si no hay support window -> solo 1 template cada 24h por tenant+teléfono
     """
     logger.info("=" * 50)
     logger.info("[TEMPLATE CHECK] Iniciando verificación de template con support window")
-    
+
     _, dbm = _get_cfg_db()
     data = request.get_json(silent=True) or {}
-    id_ = data.get("id")
-    phone_override = data.get("phone")
-    
-    logger.info(f"[TEMPLATE CHECK] Request data - ID: {id_}, Phone: {phone_override}")
+    id_          = data.get("id")
+    phone_raw    = data.get("phone")
+    company_id   = data.get("company_id")
 
-    if not id_ and not phone_override:
-        logger.error("[TEMPLATE CHECK] Error: Falta id o phone")
-        return jsonify({"ok": False, "error": "Falta id o phone"}), 400
+    logger.info(f"[TEMPLATE CHECK] Request data - ID: {id_}, Phone: {phone_raw}, Company: {company_id}")
 
-    phone = None
-    if phone_override:
-        phone = phone_override
+    # --- Validaciones mínimas ---
+    if not company_id:
+        logger.error("[TEMPLATE CHECK] Error: Falta company_id")
+        return jsonify({"ok": False, "error": "Falta company_id"}), 400
+    if not _is_valid_uuid(company_id):
+        logger.error(f"[TEMPLATE CHECK] Error: company_id inválido: {company_id}")
+        return jsonify({"ok": False, "error": "company_id inválido"}), 400
+
+    # Resolver teléfono
+    if phone_raw:
+        phone = phone_raw
         logger.info(f"[TEMPLATE CHECK] Using phone override: {phone}")
     elif _is_valid_uuid(id_):
-        phone = _get_lead_phone(dbm, id_)
+        phone = _get_lead_phone_tenant(dbm, id_, company_id)   # <- tenant-aware
         logger.info(f"[TEMPLATE CHECK] Retrieved phone from lead {id_}: {phone}")
     else:
         logger.error(f"[TEMPLATE CHECK] Error: id '{id_}' no es UUID válido y no se proporcionó phone")
         return jsonify({"ok": False, "error": "id no es UUID válido y no se proporcionó phone"}), 400
 
     if not phone:
-        logger.error(f"[TEMPLATE CHECK] Error: No se encontró teléfono para el id {id_}")
+        logger.error(f"[TEMPLATE CHECK] Error: No se encontró teléfono (tenant={company_id})")
         return jsonify({"ok": False, "error": "No se encontró teléfono para el id"}), 404
 
-    # Verificar último template enviado
-    logger.info(f"[TEMPLATE CHECK] Verificando último template para teléfono: {phone}")
-    last_template_ts = _last_template_sent_ts(dbm, phone)
-    
+    # --- Búsqueda tenant-aware del último template enviado ---
+    logger.info(f"[TEMPLATE CHECK] Verificando último template para phone={phone} tenant={company_id}")
+    last_template_ts = _last_template_sent_ts_tenant(dbm, phone, company_id)
+
     if last_template_ts and last_template_ts.tzinfo is None:
         last_template_ts = last_template_ts.replace(tzinfo=TZ)
-    
-    # Verificar si se puede enviar (con lógica de support window)
-    can_send, seconds_remaining, reason = _can_send_template(last_template_ts, phone, dbm)
+
+    # --- Verificación con support window (tenant-aware para últimos mensajes del usuario) ---
+    can_send, seconds_remaining, reason = _can_send_template_tenant(dbm, phone, company_id, last_template_ts)
 
     result = {
         "ok": True,
         "id": id_,
+        "company_id": company_id,
         "phone": phone,
         "canSendTemplate": can_send,
         "reason": reason,
@@ -8106,35 +8179,27 @@ def can_send_template():
         }
     }
 
-    # Agregar información adicional según el resultado
     if not can_send:
         result["secondsUntilNextTemplate"] = seconds_remaining
         result["hoursUntilNextTemplate"] = round(seconds_remaining / 3600, 1)
-        
         if last_template_ts:
             result["lastTemplateSentAt"] = last_template_ts.isoformat()
-            
         logger.info(f"[TEMPLATE CHECK] RESULTADO: NO SE PUEDE ENVIAR - {reason}")
     else:
         result["secondsUntilNextTemplate"] = 0
-        
         if last_template_ts:
             result["lastTemplateSentAt"] = last_template_ts.isoformat()
             hours_since_last = round(((_now() - last_template_ts).total_seconds()) / 3600, 1)
             result["hoursSinceLastTemplate"] = hours_since_last
-            logger.info(f"[TEMPLATE CHECK] RESULTADO: SÍ SE PUEDE ENVIAR - {reason}")
-        else:
-            logger.info(f"[TEMPLATE CHECK] RESULTADO: SÍ SE PUEDE ENVIAR - {reason}")
+        logger.info(f"[TEMPLATE CHECK] RESULTADO: SÍ SE PUEDE ENVIAR - {reason}")
 
-    # Agregar información del support window si está activo
-    last_user_msg_ts = _last_user_message_ts(dbm, phone)
+    # Info de support window (último mensaje del usuario en este tenant)
+    last_user_msg_ts = _last_user_message_ts_tenant(dbm, phone, company_id)
     if last_user_msg_ts:
         if last_user_msg_ts.tzinfo is None:
             last_user_msg_ts = last_user_msg_ts.replace(tzinfo=TZ)
-        
         support_window_end = last_user_msg_ts + timedelta(seconds=WABA_WINDOW_SEC)
         now = _now()
-        
         result["support_window"] = {
             "last_user_message_at": last_user_msg_ts.isoformat(),
             "support_window_active": now < support_window_end,
@@ -8144,36 +8209,45 @@ def can_send_template():
 
     logger.info(f"[TEMPLATE CHECK] Respuesta final: {result}")
     logger.info("=" * 50)
-    
     return jsonify(result), 200
+
 
 @app.route("/canSendMessage", methods=["POST"])
 def can_send_message():
+    """
+    ¿Se puede enviar MENSAJE (no template) ahora? Multi-tenant.
+    Se abre/cierran ventanas según último mensaje del usuario en este tenant.
+    """
     _, dbm = _get_cfg_db()
     data = request.get_json(silent=True) or {}
-    id_ = data.get("id")
-    phone_override = data.get("phone")
+    id_        = data.get("id")
+    phone_raw  = data.get("phone")
+    company_id = data.get("company_id")
 
-    if not id_ and not phone_override:
-        return jsonify({"ok": False, "error": "Falta id o phone"}), 400
+    if not company_id:
+        return jsonify({"ok": False, "error": "Falta company_id"}), 400
+    if not _is_valid_uuid(company_id):
+        return jsonify({"ok": False, "error": "company_id inválido"}), 400
 
-    phone = None
-    if phone_override:
-        phone = phone_override
+    # Resolver teléfono
+    if phone_raw:
+        phone = phone_raw
     elif _is_valid_uuid(id_):
-        phone = _get_lead_phone(dbm, id_)
+        phone = _get_lead_phone_tenant(dbm, id_, company_id)
     else:
         return jsonify({"ok": False, "error": "id no es UUID válido y no se proporcionó phone"}), 400
 
     if not phone:
         return jsonify({"ok": False, "error": "No se encontró teléfono para el id"}), 404
 
-    last_ts = _last_user_message_ts(dbm, phone)
-    is_open, secs = _can_send_message(last_ts)
+    # Último mensaje del usuario en este tenant
+    last_ts = _last_user_message_ts_tenant(dbm, phone, company_id)
+    is_open, secs = _can_send_message(last_ts)  # tu lógica actual (ventana soporte)
 
     return jsonify({
         "ok": True,
         "id": id_,
+        "company_id": company_id,
         "phone": phone,
         "canSendMessage": is_open,
         "secondsUntilTemplateOnly": secs
