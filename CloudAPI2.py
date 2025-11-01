@@ -2002,7 +2002,7 @@ class WhatsAppService:
 
             # 3) Construir payload (tu helper actual)
             payload = self._build_template_payload(template_name, template_data, to_phone)
-
+            print(payload)
             # Si quieres forzar idioma por parámetro, puedes ajustar aquí:
             if language:
                 try:
@@ -2011,6 +2011,9 @@ class WhatsAppService:
                     pass
 
             # 4) Enviar
+            print("Headers:", headers)
+            print("Payload:", payload)
+            print("Base URL:", base_url)
             r = requests.post(base_url, headers=headers, json=payload, timeout=timeout)
             if r.status_code // 100 == 2:
                 body = r.json()
