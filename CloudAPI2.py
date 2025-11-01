@@ -1954,6 +1954,7 @@ class WhatsAppService:
             self.base_url        = wc['base_url']
             self.headers         = wc['headers']
             self.api_base_url    = getattr(config, 'api_base_url', "https://test.solvify.es/api")
+    
     def send_template_message(
         self,
         to_phone: str,
@@ -2153,106 +2154,6 @@ class WhatsAppService:
                 None
             )
 
-    def send_template_message(self, to_phone: str, template_name: str, template_data: dict, timeout=15):
-        try:
-            clean_phone = PhoneUtils.strip_34(to_phone)
-            if not PhoneUtils.validate_spanish_phone(clean_phone):
-                raise ValueError(f"Número de teléfono inválido: {to_phone}")
-
-            # Get company-specific credentials first
-            creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=company_id or (template_data.get("company_id") if isinstance(template_data, dict) else None))
-            
-            # Log detailed credential info
-            logger.info("=" * 80)
-            logger.info(f"🔐 Sending template '{template_name}' with credentials for phone {clean_phone}:")
-            logger.info(f"📱 Company: {creds.get('company_name', 'Default')}")
-            logger.info(f"🆔 Company ID: {creds.get('company_id', 'Default')}")
-            logger.info(f"🔑 Token: {creds.get('access_token', '')[:20]}...")
-            logger.info(f"📞 Phone Number ID: {creds.get('phone_number_id', '')}")
-            logger.info(f"🌐 Base URL: {creds.get('base_url', '')}")
-            logger.info(f"💼 Business ID: {creds.get('business_id', '')}")
-            logger.info(f"📋 Template Data: {template_data}")
-            logger.info("=" * 80)
-
-            # 1. Obtener información de la compañía y su configuración
-            query = """
-                SELECT l.id as lead_id, d.company_id, c.name as company_name, 
-                       public.get_company_data(d.company_id) as company_data
-                FROM public.leads l
-                INNER JOIN public.deals d ON d.lead_id = l.id AND d.is_deleted = false
-                INNER JOIN public.companies c ON d.company_id = c.id
-                WHERE l.phone = %s AND l.is_deleted = false
-                LIMIT 1
-            """
-            with db_manager.get_connection() as conn:
-                cur = conn.cursor()
-                cur.execute(query, [clean_phone])
-                result = cur.fetchone()
-
-            if not result:
-                logger.warning(f"[WhatsApp] No se encontró lead/deal/company para teléfono {to_phone}, usando config por defecto")
-                company_config = {
-                    'access_token': self.access_token,
-                    'phone_number_id': self.phone_number_id,
-                    'business_id': getattr(self, 'business_id', None)
-                }
-            else:
-                lead_id, company_id, company_name, company_data = result
-                logger.info(f"[WhatsApp] Lead {lead_id} encontrado para company: {company_name} (id: {company_id})")
-
-                if not company_data or 'custom_properties' not in company_data:
-                    logger.warning(f"[WhatsApp] No se encontraron custom_properties para company {company_id}, usando config por defecto")
-                    company_config = {
-                        'access_token': self.access_token,
-                        'phone_number_id': self.phone_number_id,
-                        'business_id': getattr(self, 'business_id', None)
-                    }
-                else:
-                    custom_props = company_data['custom_properties']
-                    company_config = {
-                        'access_token': custom_props.get('WHATSAPP_ACCESS_TOKEN'),
-                        'phone_number_id': custom_props.get('WHATSAPP_PHONE_NUMBER_ID'),
-                        'business_id': custom_props.get('WHATSAPP_BUSINESS_ID')
-                    }
-                    if not all(company_config.values()):
-                        logger.warning(f"[WhatsApp] Config incompleta para company {company_id}, usando por defecto")
-                        company_config = {
-                            'access_token': self.access_token,
-                            'phone_number_id': self.phone_number_id,
-                            'business_id': getattr(self, 'business_id', None)
-                        }
-                    else:
-                        logger.info(f"[WhatsApp] Usando config específica de company {company_name} (id: {company_id})")
-
-            # 2. Actualizar la configuración de WhatsApp para este envío
-            headers = {
-                'Authorization': f"Bearer {company_config['access_token']}",
-                'Content-Type': 'application/json'
-            }
-            base_url = f"https://graph.facebook.com/v22.0/{company_config['phone_number_id']}/messages"
-            
-            # 3. Construir y enviar el mensaje
-            payload = self._build_template_payload(template_name, template_data, to_phone)
-            logger.debug(f"Enviando template '{template_name}' a {to_phone} → payload: {json.dumps(payload)}")
-            
-            response = requests.post(base_url, headers=headers, json=payload, timeout=timeout)
-            if not response.ok:
-                logger.error(f"❌ WhatsApp template error {response.status_code}: {response.text}")
-            response.raise_for_status()
-            
-            message_id = response.json()['messages'][0]['id']
-            logger.info(f"✅ Template '{template_name}' enviado exitosamente. ID: {message_id}")
-            return True, message_id, payload
-            
-        except ValueError as e:
-            logger.error(f"Error de validación: {str(e)}")
-            return False, None, None
-        except HTTPError as e:
-            logger.error(f"Error de HTTP: {str(e)}")
-            return False, None, None
-        except Exception as e:
-            logger.error(f"Error inesperado: {str(e)}")
-            return False, None, None
 
     def send_text_message(self, to_phone: str, message: str, company_id: str | None = None, timeout: int = 10):
         try:
