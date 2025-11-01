@@ -2099,7 +2099,7 @@ class WhatsAppService:
                     pass
 
             # Devuelve el error para que el endpoint lo propague
-            return False, None, {"payload": payload, "meta_error": errj, "status": r.status_code}
+        return False, None, {"payload": payload, "meta_error": errj, "status": r.status_code}
 
     def _build_template_components(self, template_name: str, lead_data: dict, company_id: str | None):
         """
