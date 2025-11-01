@@ -856,6 +856,81 @@ class ExtendedFileService:
         raise ValueError(f"Unsupported media_kind: {media_kind}")
 
     from typing import Optional, Tuple
+    def _resolve_wa_creds_for_send_strict(
+        *,
+        company_id: Optional[str],
+        fallback_to_phone: Optional[str] = None,  # opcional
+        headers: Optional[dict] = None,
+        base_url: Optional[str] = None
+    ) -> Tuple[Optional[dict], Optional[str], str, Optional[str], Optional[str]]:
+        """
+        Devuelve (headers, base_url, source, phone_number_id, waba_id) de forma estricta:
+        1) Si headers y base_url vienen dados → úsalo tal cual (source='override').
+        2) Si company_id está definido → usa credenciales del tenant (source='company').
+        3) Si no hay company_id pero hay phone → intenta por teléfono (source='phone').
+        4) Si todo falla → usa DEFAULT_* (source='default').
+
+        Siempre reconstruye base_url = https://graph.facebook.com/v22.0/{pnid}/messages
+        para evitar endpoints inconsistentes.
+        """
+        # 1) Override directo
+        if headers and base_url:
+            return headers, base_url, 'override', None, None
+
+        creds = None
+        source = 'default'
+        pnid = None
+        waba = None
+
+        try:
+            if company_id:
+                # ← estricto: si hay tenant, usamos tenant; no lo pisamos con phone
+                creds = get_whatsapp_credentials_for_company(company_id)
+                source = 'company'
+            elif fallback_to_phone:
+                # opcional: solo si quieres soporte por teléfono cuando no hay company_id
+                creds = get_whatsapp_credentials_for_phone(fallback_to_phone)
+                source = 'phone'
+            else:
+                creds = {
+                    'access_token': ACCESS_TOKEN,
+                    'phone_number_id': PHONE_NUMBER_ID,
+                    'waba_id': WABA_ID,
+                    'headers': {
+                        'Authorization': f'Bearer {ACCESS_TOKEN}',
+                        'Content-Type': 'application/json'
+                    },
+                    'base_url': f"https://graph.facebook.com/{GRAPH_API_VERSION}/{PHONE_NUMBER_ID}/messages"
+                }
+                source = 'default'
+
+            if not creds:
+                return None, None, 'none', None, None
+
+            token = creds.get('access_token') or ACCESS_TOKEN
+            pnid = creds.get('phone_number_id') or PHONE_NUMBER_ID
+            waba = creds.get('waba_id') or WABA_ID
+
+            # reconstruimos base_url SIEMPRE para garantizar endpoint correcto
+            final_base_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{pnid}/messages"
+            final_headers = {
+                'Authorization': f'Bearer {token}',
+                'Content-Type': 'application/json'
+            }
+            return final_headers, final_base_url, source, pnid, waba
+        except Exception:
+            logger.exception("[_resolve_wa_creds_for_send_strict] Error resolviendo credenciales")
+            return None, None, 'error', None, None
+
+    def _validate_pnid_auth(pnid: str, access_token: str):
+        try:
+            url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{pnid}"
+            r = requests.get(url, headers={"Authorization": f"Bearer {access_token}"}, timeout=8)
+            if r.status_code != 200:
+                raise RuntimeError(f"Token no válido para PNID {pnid}: HTTP {r.status_code} {r.text}")
+        except Exception:
+            # No rompemos el flujo por validación; sólo dejamos traza clara
+            logger.warning("[WA CREDS CHECK] Falló validación de PNID/token (posible token de otro Business)", exc_info=True)
 
     def _resolve_wa_creds_for_send(
         self,
@@ -922,7 +997,6 @@ class ExtendedFileService:
         d_url = self.config.whatsapp_config.get("base_url")
         return d_headers, d_url, ("defaults" if creds is None else f"{source}_defaults")
 
-
     def _send_whatsapp_media_message_extended(
         self,
         phone: str,
@@ -945,67 +1019,84 @@ class ExtendedFileService:
             logger.exception("[_send_whatsapp_media_message_extended] Error normalizando teléfono")
             return False, None
 
-        # 2) Resolver credenciales
-        token_headers, url, source = self._resolve_wa_creds_for_send(
-            phone=clean_phone, company_id=company_id, headers=headers, base_url=base_url
+        # 2) Validar tipo soportado por la API
+        allowed_types = {"image", "video", "audio", "document", "sticker", "voice"}
+        if media_type not in allowed_types:
+            logger.error(f"[_send_whatsapp_media_message_extended] media_type no soportado: {media_type}")
+            return False, None
+
+        # 3) Resolver credenciales de forma estricta (prioriza company_id)
+        token_headers, url, source, pnid, waba = _resolve_wa_creds_for_send_strict(
+            company_id=company_id,
+            fallback_to_phone=clean_phone,   # opcional: comenta si NO quieres fallback por teléfono
+            headers=headers,
+            base_url=base_url
         )
         if not token_headers or not url:
             logger.error("[_send_whatsapp_media_message_extended] No hay headers/base_url. Abortando.")
             return False, None
 
-        # 3) Payload
+        # (opcional) validación de PNID/token para diagnósticos de 401
+        try:
+            auth = token_headers.get("Authorization", "")
+            token = auth[7:] if auth.startswith("Bearer ") else ""
+            if pnid and token:
+                _validate_pnid_auth(pnid, token)
+        except Exception:
+            # ya deja traza el validador
+            pass
+
+        # 4) Construir payload
         payload = {
             "messaging_product": "whatsapp",
             "to": destination,
             "type": media_type,
-            media_type: {
-                "id": media_id
-            }
+            media_type: {"id": media_id}
         }
         if caption and media_type in ("image", "video", "document"):
             payload[media_type]["caption"] = caption
         if filename and media_type == "document":
             payload[media_type]["filename"] = filename
 
-        # 4) Enviar
+        # 5) Enviar
         try:
-            # Log sin exponer el token
+            # log seguro
             masked = ""
             try:
-                auth = token_headers.get("Authorization", "")
-                if auth.startswith("Bearer "):
-                    t = auth[7:]
-                    masked = (t[:6] + "..." + t[-6:]) if len(t) > 12 else "***"
+                if token:
+                    masked = (token[:6] + "..." + token[-6:]) if len(token) > 12 else "***"
             except Exception:
                 masked = "***"
 
             logger.info(
-                f"[_send_whatsapp_media_message_extended] Enviando {media_type} a {destination} "
-                f"(source={source}, base_url={url}, token={masked}) | "
-                f"caption={'yes' if caption else 'no'} | filename={filename or 'N/A'}"
+                "[_send_whatsapp_media_message_extended] Enviando %s a %s (source=%s, pnid=%s, waba=%s, base_url=%s, token=%s) | caption=%s | filename=%s",
+                media_type, destination, source, pnid, waba, url, masked, bool(caption), (filename or "N/A")
             )
 
             resp = requests.post(url, headers=token_headers, json=payload, timeout=30)
             if not resp.ok:
                 logger.error(
-                    f"Error {resp.status_code} enviando media: {resp.text} (type={media_type}, source={source})"
+                    "Error %s enviando media: %s (type=%s, source=%s, pnid=%s)",
+                    resp.status_code, resp.text, media_type, source, pnid
                 )
             resp.raise_for_status()
 
             body = resp.json()
             lst = body.get("messages") or []
-            message_id = lst[0]["id"] if lst and "id" in lst[0] else None
+            message_id = lst[0]["id"] if lst and isinstance(lst[0], dict) and "id" in lst[0] else None
 
-            logger.info(f"Extended media message sent successfully: {message_id} (type: {media_type}, source={source})")
+            logger.info(
+                "Extended media message sent successfully: %s (type=%s, source=%s, pnid=%s)",
+                message_id, media_type, source, pnid
+            )
             return True, message_id
 
         except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTPError enviando media: {e}")
+            logger.error("HTTPError enviando media: %s | detail=%s", e, getattr(e.response, "text", ""))
             return False, None
         except Exception as e:
-            logger.error(f"Error enviando media: {e}")
+            logger.error("Error enviando media: %s", e)
             return False, None
-
 
     def _send_whatsapp_document_message(
         self,
