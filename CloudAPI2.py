@@ -855,12 +855,101 @@ class ExtendedFileService:
 
         raise ValueError(f"Unsupported media_kind: {media_kind}")
 
-    def _send_whatsapp_media_message_extended(self, phone: str, media_id: str, 
-                                            media_type: str, caption: str = None,
-                                            filename: str = None) -> tuple[bool, str]:
-        """Send media message with extended type support"""
-        destination = PhoneUtils.add_34(phone)
-        
+    from typing import Optional, Tuple
+
+    def _resolve_wa_creds_for_send(
+        self,
+        *,
+        phone: Optional[str] = None,
+        company_id: Optional[str] = None,
+        headers: Optional[dict] = None,
+        base_url: Optional[str] = None,
+    ) -> Tuple[Optional[dict], Optional[str], str]:
+        """
+        Devuelve (headers, base_url, resolved_source) según prioridad:
+        1) headers/base_url explícitos
+        2) company_id -> get_whatsapp_credentials_for_company
+        3) phone -> get_whatsapp_credentials_for_phone
+        4) defaults (self.config.whatsapp_config)
+        """
+        if headers and base_url:
+            return headers, base_url, "explicit"
+
+        creds = None
+        if company_id:
+            try:
+                creds = get_whatsapp_credentials_for_company(company_id)
+                source = f"company:{company_id}"
+            except Exception:
+                logger.exception("get_whatsapp_credentials_for_company() falló")
+                creds = None
+        else:
+            source = "unspecified"
+
+        if not creds and phone:
+            try:
+                clean = PhoneUtils.strip_34(phone)
+                creds = get_whatsapp_credentials_for_phone(clean)
+                source = "by_phone"
+            except Exception:
+                logger.exception("get_whatsapp_credentials_for_phone() falló")
+                creds = None
+
+        if creds:
+            token = (creds.get("access_token")
+                    or creds.get("token")
+                    or creds.get("WHATSAPP_ACCESS_TOKEN"))
+            pnid = (creds.get("phone_number_id")
+                    or creds.get("WHATSAPP_PHONE_NUMBER_ID"))
+            if token and pnid:
+                hdrs = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                }
+                ver = globals().get("GRAPH_API_VERSION", "v22.0")
+                url = f"https://graph.facebook.com/{ver}/{pnid}/messages"
+                return hdrs, url, source
+
+            # Fallback a defaults si faltan piezas
+            source = f"{source}_fallback_incomplete_creds"
+
+        # Defaults
+        d_headers = self.config.whatsapp_config.get("headers")
+        d_url = self.config.whatsapp_config.get("base_url")
+        return d_headers, d_url, ("defaults" if creds is None else f"{source}_defaults")
+
+
+    def _send_whatsapp_media_message_extended(
+        self,
+        phone: str,
+        media_id: str,
+        media_type: str,
+        caption: Optional[str] = None,
+        filename: Optional[str] = None,
+        *,
+        company_id: Optional[str] = None,
+        headers: Optional[dict] = None,
+        base_url: Optional[str] = None,
+    ) -> Tuple[bool, Optional[str]]:
+        """Send media message with extended type support (multitenant)."""
+
+        # 1) Normalizar teléfono
+        try:
+            clean_phone = PhoneUtils.strip_34(phone)
+            destination = PhoneUtils.add_34(clean_phone)
+        except Exception:
+            logger.exception("[_send_whatsapp_media_message_extended] Error normalizando teléfono")
+            return False, None
+
+        # 2) Resolver credenciales
+        token_headers, url, source = self._resolve_wa_creds_for_send(
+            phone=clean_phone, company_id=company_id, headers=headers, base_url=base_url
+        )
+        if not token_headers or not url:
+            logger.error("[_send_whatsapp_media_message_extended] No hay headers/base_url. Abortando.")
+            return False, None
+
+        # 3) Payload
         payload = {
             "messaging_product": "whatsapp",
             "to": destination,
@@ -869,38 +958,81 @@ class ExtendedFileService:
                 "id": media_id
             }
         }
-        
-        # Agregar caption según el tipo
-        if caption and media_type in ['image', 'video', 'document']:
+        if caption and media_type in ("image", "video", "document"):
             payload[media_type]["caption"] = caption
-        
-        # Para documentos, agregar filename
-        if filename and media_type == 'document':
+        if filename and media_type == "document":
             payload[media_type]["filename"] = filename
-        
+
+        # 4) Enviar
         try:
-            response = requests.post(
-                self.config.whatsapp_config['base_url'],
-                headers=self.config.whatsapp_config['headers'],
-                json=payload,
-                timeout=30
+            # Log sin exponer el token
+            masked = ""
+            try:
+                auth = token_headers.get("Authorization", "")
+                if auth.startswith("Bearer "):
+                    t = auth[7:]
+                    masked = (t[:6] + "..." + t[-6:]) if len(t) > 12 else "***"
+            except Exception:
+                masked = "***"
+
+            logger.info(
+                f"[_send_whatsapp_media_message_extended] Enviando {media_type} a {destination} "
+                f"(source={source}, base_url={url}, token={masked}) | "
+                f"caption={'yes' if caption else 'no'} | filename={filename or 'N/A'}"
             )
-            
-            response.raise_for_status()
-            message_id = response.json()['messages'][0]['id']
-            
-            logger.info(f"Extended media message sent successfully: {message_id} (type: {media_type})")
+
+            resp = requests.post(url, headers=token_headers, json=payload, timeout=30)
+            if not resp.ok:
+                logger.error(
+                    f"Error {resp.status_code} enviando media: {resp.text} (type={media_type}, source={source})"
+                )
+            resp.raise_for_status()
+
+            body = resp.json()
+            lst = body.get("messages") or []
+            message_id = lst[0]["id"] if lst and "id" in lst[0] else None
+
+            logger.info(f"Extended media message sent successfully: {message_id} (type: {media_type}, source={source})")
             return True, message_id
-            
+
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTPError enviando media: {e}")
+            return False, None
         except Exception as e:
-            logger.error(f"Error sending extended media message: {e}")
+            logger.error(f"Error enviando media: {e}")
             return False, None
 
-    def _send_whatsapp_document_message(self, phone: str, public_url: str, 
-                                      filename: str = None, caption: str = None) -> tuple[bool, str]:
-        """Send document via public URL"""
-        destination = PhoneUtils.add_34(phone)
-        
+
+    def _send_whatsapp_document_message(
+        self,
+        phone: str,
+        public_url: str,
+        filename: Optional[str] = None,
+        caption: Optional[str] = None,
+        *,
+        company_id: Optional[str] = None,
+        headers: Optional[dict] = None,
+        base_url: Optional[str] = None,
+    ) -> Tuple[bool, Optional[str]]:
+        """Send document via public URL (multitenant)."""
+
+        # 1) Normalizar teléfono
+        try:
+            clean_phone = PhoneUtils.strip_34(phone)
+            destination = PhoneUtils.add_34(clean_phone)
+        except Exception:
+            logger.exception("[_send_whatsapp_document_message] Error normalizando teléfono")
+            return False, None
+
+        # 2) Resolver credenciales
+        token_headers, url, source = self._resolve_wa_creds_for_send(
+            phone=clean_phone, company_id=company_id, headers=headers, base_url=base_url
+        )
+        if not token_headers or not url:
+            logger.error("[_send_whatsapp_document_message] No hay headers/base_url. Abortando.")
+            return False, None
+
+        # 3) Payload
         payload = {
             "messaging_product": "whatsapp",
             "to": destination,
@@ -909,28 +1041,47 @@ class ExtendedFileService:
                 "link": public_url
             }
         }
-        
         if filename:
             payload["document"]["filename"] = filename
         if caption:
             payload["document"]["caption"] = caption
-        
+
+        # 4) Enviar
         try:
-            response = requests.post(
-                self.config.whatsapp_config['base_url'],
-                headers=self.config.whatsapp_config['headers'],
-                json=payload,
-                timeout=30
+            masked = ""
+            try:
+                auth = token_headers.get("Authorization", "")
+                if auth.startswith("Bearer "):
+                    t = auth[7:]
+                    masked = (t[:6] + "..." + t[-6:]) if len(t) > 12 else "***"
+            except Exception:
+                masked = "***"
+
+            logger.info(
+                f"[_send_whatsapp_document_message] Enviando DOC a {destination} "
+                f"(source={source}, base_url={url}, token={masked}) | "
+                f"filename={filename or 'N/A'} | caption={'yes' if caption else 'no'}"
             )
-            
-            response.raise_for_status()
-            message_id = response.json()['messages'][0]['id']
-            
-            logger.info(f"Document message sent successfully: {message_id}")
+
+            resp = requests.post(url, headers=token_headers, json=payload, timeout=30)
+            if not resp.ok:
+                logger.error(
+                    f"Error {resp.status_code} enviando documento: {resp.text} (source={source})"
+                )
+            resp.raise_for_status()
+
+            body = resp.json()
+            lst = body.get("messages") or []
+            message_id = lst[0]["id"] if lst and "id" in lst[0] else None
+
+            logger.info(f"Document message sent successfully: {message_id} (source={source})")
             return True, message_id
-            
+
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTPError enviando documento: {e}")
+            return False, None
         except Exception as e:
-            logger.error(f"Error sending document message: {e}")
+            logger.error(f"Error enviando documento: {e}")
             return False, None
 
     def get_supported_types_info(self) -> dict:
