@@ -1917,25 +1917,132 @@ class PhoneUtils:
 
 
 class WhatsAppService:
-    """WhatsApp API service con templates y logging de errores"""
-    def __init__(self, config=None):
-        self.config = config  # Guardar la configuración completa
-        if config is None:
-            self.access_token    = ACCESS_TOKEN
-            self.phone_number_id = PHONE_NUMBER_ID
-            self.base_url        = WHATSAPP_BASE_URL
-            self.headers         = WHATSAPP_HEADERS
-            # URL base para API de propiedades personalizadas
-            self.api_base_url    = "https://test.solvify.es/api"
-        else:
-            # Acceder a través de whatsapp_config que es donde están los valores
-            self.access_token    = config.whatsapp_config['access_token']
-            self.phone_number_id = config.whatsapp_config['phone_number_id']
-            self.base_url        = config.whatsapp_config['base_url']
-            self.headers         = config.whatsapp_config['headers']
-            # URL base para API de propiedades personalizadas
-            self.api_base_url    = getattr(config, 'api_base_url', "https://test.solvify.es/api")
+    def __init__(self, cred_manager, http_client, logger):
+        self.cred_manager = cred_manager
+        self.http = http_client
+        self.logger = logger
 
+    def send_template_message(
+        self,
+        to: str,
+        template_name: str,
+        lead_data: dict,
+        company_id: str | None = None,
+        language: str | None = None,
+        phone_number_id: str | None = None,
+    ):
+        """
+        Envía un mensaje de plantilla usando el contexto del tenant.
+        - company_id: fuerza la resolución de credenciales por compañía (multi-tenant).
+        - language: opcional; si no se pasa, se resuelve por mapeo del template o default ('es').
+        - phone_number_id: opcional; si se pasa, tiene prioridad sobre las credenciales por company.
+        Retorna (success: bool, message_id: str | None, payload_enviado: dict)
+        """
+
+        try:
+            # 1) Resolver tenant/credenciales
+            resolved_company_id = company_id or lead_data.get('company_id')
+            creds = None
+            if phone_number_id:
+                # Prioridad explícita si ya sabes el PNID
+                creds = self.cred_manager.get_by_phone_number_id(phone_number_id)
+            elif resolved_company_id:
+                creds = self.cred_manager.get_for_company(resolved_company_id)
+            else:
+                # Fallback (último recurso): inferir por número destino o configuración por defecto
+                creds = self.cred_manager.get_by_destination_or_default(to)
+
+            if not creds or not creds.access_token or not creds.phone_number_id:
+                self.logger.error("❌ No credentials resolved for template send", extra={
+                    "company_id": resolved_company_id, "to": to
+                })
+                return False, None, {}
+
+            # 2) Resolver idioma/namespace del template
+            #    - Primero, intenta un mapeo por tenant y template.
+            #    - Si no hay, usa 'es' por defecto.
+            tpl_cfg = self.cred_manager.get_template_config(
+                template_name=template_name,
+                company_id=resolved_company_id
+            ) or {}
+            lang = (language or tpl_cfg.get('language') or 'es').lower()
+            namespace = tpl_cfg.get('namespace')  # opcional; Meta ya no exige namespace en body, pero guárdalo si lo usas en tus logs
+
+            # 3) Construir componentes de la plantilla (variables) por tenant/template
+            components = self._build_template_components(template_name, lead_data, resolved_company_id)
+
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": to,
+                "type": "template",
+                "template": {
+                    "name": template_name,
+                    "language": {"code": lang},
+                    "components": components or []
+                }
+            }
+
+            url = f"https://graph.facebook.com/v20.0/{creds.phone_number_id}/messages"
+            headers = {
+                "Authorization": f"Bearer {creds.access_token}",
+                "Content-Type": "application/json"
+            }
+
+            self.logger.info("📨 Enviando template", extra={
+                "company_id": resolved_company_id,
+                "to": to,
+                "template": template_name,
+                "language": lang,
+                "phone_number_id": creds.phone_number_id
+            })
+
+            resp = self.http.post(url, headers=headers, json=payload)
+            if resp.status_code // 100 == 2:
+                body = resp.json()
+                message_id = None
+                # Meta suele devolver message IDs en 'messages'
+                try:
+                    message_id = (body.get("messages") or [{}])[0].get("id")
+                except Exception:
+                    pass
+                return True, message_id, payload
+
+            # Error HTTP
+            try:
+                err = resp.json()
+            except Exception:
+                err = {"raw": resp.text}
+            self.logger.error("❌ Error enviando template", extra={
+                "company_id": resolved_company_id,
+                "status": resp.status_code,
+                "error": err
+            })
+            return False, None, payload
+
+        except Exception as e:
+            self.logger.exception("❌ Excepción en send_template_message", extra={
+                "company_id": company_id, "to": to, "template": template_name
+            })
+            return False, None, {}
+
+    def _build_template_components(self, template_name: str, lead_data: dict, company_id: str | None):
+        """
+        Devuelve los 'components' del template (HEADER/BODY/BUTTONS) según tenant/plantilla.
+        Aquí puedes:
+          - Mapear por template y company (DB o config).
+          - Usar variables de lead_data (nombre, email, etc.).
+        Debe devolver una lista compatible con el formato de WhatsApp.
+        """
+        # Ejemplo sencillo (BODY con placeholders):
+        placeholders = [
+            lead_data.get('first_name') or '',
+            lead_data.get('last_name') or '',
+            lead_data.get('deal_id') or '',
+        ]
+        return [{
+            "type": "body",
+            "parameters": [{"type": "text", "text": str(v)} for v in placeholders]
+        }]
     def get_debug_info(self):
         return {
             'access_token_preview': f"{self.access_token[:20]}..." if self.access_token else "None",
@@ -4990,7 +5097,8 @@ def send_template_endpoint():
         success, message_id, payload = whatsapp_service.send_template_message(
             destination,
             template_name,
-            lead_data
+            lead_data,
+            company_id=company_id or lead_data.get('company_id')  # fallback seguro
         )
 
         if success:
