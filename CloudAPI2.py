@@ -1339,10 +1339,10 @@ class Config:
         console_lv = (_opt('LOGGING', 'CONSOLE_LOG_LEVEL', level_name) or level_name).upper()
 
         self.log_config = {
-            'level': getattr(logging, level_name, logging.INFO),
+            'level': getattr(logging, level_name, logging.DEBUG),
             'file': log_file,
             'format': fmt,
-            'console_level': getattr(logging, console_lv, logging.INFO),
+            'console_level': getattr(logging, console_lv, logging.DEBUG),
         }
 
         # Handlers
