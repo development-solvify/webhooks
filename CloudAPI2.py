@@ -3910,14 +3910,21 @@ def send_file_endpoint():
         supa_client = get_supabase_client(fs)
         bucket = get_bucket_name(fs)
 
-        # Resolver teléfono del actor
+         # --- Resolver teléfono, deal_id y company_id ---
         actor_phone = None
         actor_is_lead = False
+        deal_id = None
+        company_id = data.get('company_id') or None  # <- permite que venga en la petición
 
         # 1) ¿Es un lead?
         row = _one(db_exec(
             dbm,
-            "SELECT phone FROM public.leads WHERE id = %s LIMIT 1",
+            """
+            SELECT l.phone
+            FROM public.leads l
+            WHERE l.id = %s AND l.is_deleted = false
+            LIMIT 1
+            """,
             (any_id,),
             fetch_one=True
         ))
@@ -3925,11 +3932,16 @@ def send_file_endpoint():
             actor_is_lead = True
             actor_phone = _first_scalar(row)
 
-        # 2) Si no es lead, probamos en profiles
+        # 2) Si no es lead, probar profiles
         if not actor_phone:
             row = _one(db_exec(
                 dbm,
-                "SELECT phone FROM public.profiles WHERE id = %s LIMIT 1",
+                """
+                SELECT p.phone
+                FROM public.profiles p
+                WHERE p.id = %s AND p.is_deleted = false
+                LIMIT 1
+                """,
                 (any_id,),
                 fetch_one=True
             ))
@@ -3938,6 +3950,63 @@ def send_file_endpoint():
 
         if not actor_phone:
             return jsonify({"status": "error", "message": f"Phone vacío para id {any_id}"}), 400
+
+        # Normaliza teléfono a DB (9 dígitos) y E.164 para WhatsApp
+        msisdn_db = _strip_cc_34(actor_phone)          # p.ej. '608684495'
+        to_e164   = _normalize_msisdn(actor_phone, "34")  # p.ej. '34608684495'
+
+        # 3) Resolver deal y company por teléfono si no vienen
+        #    (deal más reciente no eliminado)
+        deal_row = _one(db_exec(
+            dbm,
+            """
+            SELECT d.id AS deal_id, d.company_id
+            FROM public.deals d
+            JOIN public.leads l ON l.id = d.lead_id
+            WHERE l.phone = %s
+              AND l.is_deleted = false
+              AND d.is_deleted = false
+            ORDER BY d.created_at DESC NULLS LAST
+            LIMIT 1
+            """,
+            (msisdn_db,),
+            fetch_one=True
+        ))
+        if deal_row:
+            deal_id = _first_scalar(deal_row[0]) if isinstance(deal_row, (list, tuple)) else deal_row.get('deal_id')
+            if not company_id:
+                company_id = deal_row[1] if isinstance(deal_row, (list, tuple)) else deal_row.get('company_id')
+
+        # Si sigue sin company_id, último intento: companies del lead_id explícito
+        if not company_id and actor_is_lead:
+            cid_row = _one(db_exec(
+                dbm,
+                """
+                SELECT d.company_id
+                FROM public.deals d
+                WHERE d.lead_id = %s AND d.is_deleted = false
+                ORDER BY d.created_at DESC NULLS LAST
+                LIMIT 1
+                """,
+                (any_id,),
+                fetch_one=True
+            ))
+            if cid_row:
+                company_id = _first_scalar(cid_row)
+
+        # Fallback: si aún no hay tenant, sigue en defaults (pero lo ideal es tenerlo)
+        # --- Aplicar credenciales del tenant al WhatsApp client de ExtendedFileService ---
+        if company_id:
+            try:
+                tenant = get_whatsapp_credentials_for_company(company_id)
+                # Pisamos la config en runtime para que ExtendedFileService utilice el tenant correcto
+                config.whatsapp_config['access_token']    = tenant['access_token']
+                config.whatsapp_config['phone_number_id'] = tenant['phone_number_id']
+                config.whatsapp_config['waba_id']         = tenant['waba_id']
+                config.whatsapp_config['base_url']        = tenant['base_url']
+                config.whatsapp_config['headers']         = tenant['headers']
+            except Exception:
+                logger.exception(f"[send_file_extended] No se pudieron aplicar credenciales para company_id={company_id}. Usando defaults.")
 
         # Validación extendida
         validation = fs.validate_file_extended(file_bytes, safe_name, content_type)
@@ -3967,7 +4036,7 @@ def send_file_endpoint():
             caption = data.get("caption", f"Documento: {safe_name}")
 
         success, wamid = fs.send_media_to_whatsapp_extended(
-            actor_phone,
+            to_e164,
             upload_result['file_path'],
             wa_type,
             safe_name,
@@ -3985,16 +4054,34 @@ def send_file_endpoint():
         # Datos de responsable/assigned_to
         assigned_id = None
         assigned_email = None
+        # Datos de responsable/assigned_to
+        assigned_id = None
+        assigned_email = None
         if actor_is_lead:
-            arow = _one(db_exec(dbm,
-                                "SELECT d.user_assigned_id FROM public.deals d WHERE d.lead_id = %s ORDER BY d.created_at DESC NULLS LAST LIMIT 1",
-                                (any_id,), fetch_one=True))
+            arow = _one(db_exec(
+                dbm,
+                """
+                SELECT d.user_assigned_id
+                FROM public.deals d
+                WHERE d.lead_id = %s
+                  AND d.is_deleted = false
+                ORDER BY d.created_at DESC NULLS LAST
+                LIMIT 1
+                """,
+                (any_id,),
+                fetch_one=True
+            ))
             assigned_id = str(_first_scalar(arow)) if arow else None
             if assigned_id:
-                prow = _one(db_exec(dbm, "SELECT email FROM public.profiles WHERE id = %s LIMIT 1", (assigned_id,), fetch_one=True))
+                prow = _one(db_exec(
+                    dbm,
+                    "SELECT email FROM public.profiles WHERE id = %s LIMIT 1",
+                    (assigned_id,),
+                    fetch_one=True
+                ))
                 assigned_email = _first_scalar(prow)
 
-        chat_id = msisdn_db
+        chat_id = deal_id or msisdn_db   # <- deal_id si existe; si no, teléfono
         chat_url = f"https://wa.me/{msisdn_db}"
 
         message_json = {
@@ -4012,10 +4099,10 @@ def send_file_endpoint():
             """
             INSERT INTO public.external_messages
             ( id, message, sender_phone, responsible_email, last_message_uid, last_message_timestamp,
-              from_me, status, created_at, updated_at, is_deleted, chat_id, chat_url, assigned_to_id )
+              from_me, status, created_at, updated_at, is_deleted, chat_id, chat_url, assigned_to_id, company_id )
             VALUES
             ( gen_random_uuid(), %s, %s, %s, %s, NOW(),
-              TRUE, %s, NOW(), NOW(), FALSE, %s, %s, %s )
+              TRUE, %s, NOW(), NOW(), FALSE, %s, %s, %s, %s )
             """,
             [
                 json.dumps(message_json, ensure_ascii=False),
@@ -4025,7 +4112,8 @@ def send_file_endpoint():
                 'media_sent',
                 chat_id,
                 chat_url,
-                assigned_id
+                assigned_id,
+                company_id
             ],
             fetch_one=False
         )
@@ -4063,7 +4151,8 @@ def send_media_message_extended():
         customer_phone = data['customer_phone']
         document_id = data['document_id']
         caption = data.get('caption', '')
-
+        if not caption and wa_type in ("image", "video", "document"):
+            caption = f"{safe_name}"
         if not PhoneUtils.validate_spanish_phone(customer_phone):
             return jsonify({'status': 'error', 'message': 'Invalid phone number'}), 400
 
