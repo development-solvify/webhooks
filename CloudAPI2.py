@@ -445,7 +445,7 @@ class ExtendedFileService:
             # Resolver credenciales por teléfono si se pasa
             if phone:
                 logger.info(f"[MEDIA DEBUG] Phone provided: {phone}, getting credentials...")
-                creds = get_whatsapp_credentials_for_phone(phone)
+                creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=company_id or (template_data.get("company_id") if isinstance(template_data, dict) else None))
                 logger.info(f"[MEDIA DEBUG] Credentials result: {creds}")
                 token = creds.get('access_token')
                 logger.info(f"[MEDIA DEBUG] Token from credentials: {token[:20] if token else 'None'}...")
@@ -2160,7 +2160,7 @@ class WhatsAppService:
                 raise ValueError(f"Número de teléfono inválido: {to_phone}")
 
             # Get company-specific credentials first
-            creds = get_whatsapp_credentials_for_phone(clean_phone)
+            creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=company_id or (template_data.get("company_id") if isinstance(template_data, dict) else None))
             
             # Log detailed credential info
             logger.info("=" * 80)
@@ -2360,7 +2360,7 @@ class WhatsAppService:
                 creds = get_whatsapp_credentials_for_company(company_id)
                 logger.info("[TENANT CREDS] company_id=%s pnid=%s waba_id=%s token_tail=%s",company_id, creds["phone_number_id"], creds["waba_id"], creds["access_token"][-8:])
             else:
-                creds = get_whatsapp_credentials_for_phone(clean_phone)
+                creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=company_id or (template_data.get("company_id") if isinstance(template_data, dict) else None))
 
             headers = creds["headers"]
             base_url = creds["base_url"]
@@ -3427,7 +3427,7 @@ def _resolve_wa_creds_for_send_strict(
     if fallback_to_phone:
         try:
             clean = PhoneUtils.strip_34(fallback_to_phone)
-            creds = get_whatsapp_credentials_for_phone(clean)
+            creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=company_id or (template_data.get("company_id") if isinstance(template_data, dict) else None))
             token = creds.get("access_token") or creds.get("token")
             pnid  = creds.get("phone_number_id")
             waba  = creds.get("waba_id") or creds.get("business_id")
@@ -5365,7 +5365,7 @@ def get_templates():
             logger.exception("Error obteniendo lead_info desde lead_service")
 
         # RESOLVER CREDENCIALES por teléfono (usa cache/company config) -> helper
-        creds = get_whatsapp_credentials_for_phone(resolved_phone)
+        creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=company_id or (template_data.get("company_id") if isinstance(template_data, dict) else None))
 
 
         used_company_name = creds.get('company_name')
