@@ -1916,11 +1916,44 @@ class PhoneUtils:
         return len(clean_phone) == 9 and clean_phone.startswith(('6', '7', '8', '9'))
 
 
+# arriba del archivo
+import logging
+import requests
+try:
+    from flask import current_app
+except Exception:
+    current_app = None
+
 class WhatsAppService:
-    def __init__(self, cred_manager, http_client, logger):
-        self.cred_manager = cred_manager
-        self.http = http_client
-        self.logger = logger
+    """WhatsApp API service con templates y logging de errores"""
+
+    def __init__(self, config=None, http_client=None, logger=None):
+        # === Compatibilidad hacia atrás ===
+        # Si no pasan http_client/logger, se auto-configuran.
+        self.http   = http_client or requests.Session()
+        self.logger = (
+            logger
+            or (getattr(current_app, "logger", None) if current_app else None)
+            or logging.getLogger("whatsapp")
+        )
+
+        self.config = config  # Guardar la configuración completa
+
+        if config is None:
+            # Modo legacy: usa constantes globales ya definidas
+            self.access_token    = ACCESS_TOKEN
+            self.phone_number_id = PHONE_NUMBER_ID
+            self.base_url        = WHATSAPP_BASE_URL
+            self.headers         = WHATSAPP_HEADERS
+            self.api_base_url    = "https://test.solvify.es/api"
+        else:
+            # Modo configurado: tira de whatsapp_config
+            wc = config.whatsapp_config
+            self.access_token    = wc['access_token']
+            self.phone_number_id = wc['phone_number_id']
+            self.base_url        = wc['base_url']
+            self.headers         = wc['headers']
+            self.api_base_url    = getattr(config, 'api_base_url', "https://test.solvify.es/api")
 
     def send_template_message(
         self,
