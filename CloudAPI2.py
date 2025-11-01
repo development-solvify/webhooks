@@ -39,7 +39,7 @@ from enum import Enum
 import os
 
 GRAPH_API_VERSION = (os.getenv("GRAPH_API_VERSION") or "v22.0").strip() or "v22.0"
-
+logger = logging.getLogger(__name__)
 class CompanyConfigCache:
     """Cache manager for company configurations"""
     def __init__(self):
@@ -1463,7 +1463,7 @@ class Config:
         handlers.append(ch)
 
         logging.basicConfig(level=level, handlers=handlers, format=fmt)
-        logger = logging.getLogger(__name__)
+
 
         # ========= Silenciar librerías ruidosas (AQUÍ) =========
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
