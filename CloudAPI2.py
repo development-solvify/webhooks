@@ -1842,319 +1842,245 @@ class WhatsAppService:
             logger.error(f"Error inesperado: {str(e)}")
             return False, None, None
 
-def send_text_message(self, to_phone: str, message: str, company_id: str | None = None, timeout: int = 10):
-    try:
-        clean_phone = PhoneUtils.strip_34(to_phone)
-        if not PhoneUtils.validate_spanish_phone(clean_phone):
-            raise ValueError(f"Número de teléfono inválido: {to_phone}")
+    def send_text_message(self, to_phone: str, message: str, company_id: str | None = None, timeout: int = 10):
+        try:
+            clean_phone = PhoneUtils.strip_34(to_phone)
+            if not PhoneUtils.validate_spanish_phone(clean_phone):
+                raise ValueError(f"Número de teléfono inválido: {to_phone}")
 
-        # 1) Credenciales: prioriza el tenant si viene company_id
-        creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=company_id)
-        headers = creds.get('headers', self.headers)
-        base_url = creds.get('base_url', self.base_url)
+            # 1) Credenciales: prioriza el tenant si viene company_id
+            creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=company_id)
+            headers = creds.get('headers', self.headers)
+            base_url = creds.get('base_url', self.base_url)
 
-        logger.info("=" * 80)
-        logger.info(f"🔐 Sending text message with credentials for phone {clean_phone}:")
-        logger.info(f"📱 Company: {creds.get('company_name', 'Default')}")
-        logger.info(f"🆔 Company ID: {creds.get('company_id', company_id or 'Default')}")
-        logger.info(f"🔑 Token: {creds.get('access_token', '')[:20]}...")
-        logger.info(f"📞 Phone Number ID: {creds.get('phone_number_id', '')}")
-        logger.info(f"🌐 Base URL: {base_url}")
-        logger.info(f"💼 Business ID: {creds.get('business_id', '')}")
-        logger.info("=" * 80)
+            logger.info("=" * 80)
+            logger.info(f"🔐 Sending text message with credentials for phone {clean_phone}:")
+            logger.info(f"📱 Company: {creds.get('company_name', 'Default')}")
+            logger.info(f"🆔 Company ID: {creds.get('company_id', company_id or 'Default')}")
+            logger.info(f"🔑 Token: {creds.get('access_token', '')[:20]}...")
+            logger.info(f"📞 Phone Number ID: {creds.get('phone_number_id', '')}")
+            logger.info(f"🌐 Base URL: {base_url}")
+            logger.info(f"💼 Business ID: {creds.get('business_id', '')}")
+            logger.info("=" * 80)
 
-        logger.debug(f"Using credentials - base_url: {base_url}")
-        logger.debug(f"Using credentials - headers: {headers}")
+            logger.debug(f"Using credentials - base_url: {base_url}")
+            logger.debug(f"Using credentials - headers: {headers}")
 
-        # 2) (Opcional) Fallback si no hay credenciales del tenant
-        if not creds.get('phone_number_id') or not creds.get('access_token'):
-            # Tu bloque actual que consulta lead/deal/company por teléfono
-            query = """
-                SELECT l.id as lead_id, d.company_id, c.name as company_name, 
-                       public.get_company_data(d.company_id) as company_data
-                FROM public.leads l
-                INNER JOIN public.deals d ON d.lead_id = l.id AND d.is_deleted = false
-                INNER JOIN public.companies c ON d.company_id = c.id
-                WHERE l.phone = %s AND l.is_deleted = false
-                LIMIT 1
-            """
-            with db_manager.get_connection() as conn:
-                cur = conn.cursor()
-                cur.execute(query, [clean_phone])
-                result = cur.fetchone()
+            # 2) (Opcional) Fallback si no hay credenciales del tenant
+            if not creds.get('phone_number_id') or not creds.get('access_token'):
+                # Tu bloque actual que consulta lead/deal/company por teléfono
+                query = """
+                    SELECT l.id as lead_id, d.company_id, c.name as company_name, 
+                        public.get_company_data(d.company_id) as company_data
+                    FROM public.leads l
+                    INNER JOIN public.deals d ON d.lead_id = l.id AND d.is_deleted = false
+                    INNER JOIN public.companies c ON d.company_id = c.id
+                    WHERE l.phone = %s AND l.is_deleted = false
+                    LIMIT 1
+                """
+                with db_manager.get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute(query, [clean_phone])
+                    result = cur.fetchone()
 
-            if result:
-                lead_id, _company_id, company_name, company_data = result
-                logger.info(f"[WhatsApp] Lead {lead_id} encontrado para company: {company_name} (id: {_company_id})")
-                custom_props = (company_data or {}).get('custom_properties') or {}
-                access_token = custom_props.get('WHATSAPP_ACCESS_TOKEN') or creds.get('access_token')
-                phone_number_id = custom_props.get('WHATSAPP_PHONE_NUMBER_ID') or creds.get('phone_number_id')
-                headers = {'Authorization': f"Bearer {access_token}", 'Content-Type': 'application/json'}
-                base_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{phone_number_id}/messages"
+                if result:
+                    lead_id, _company_id, company_name, company_data = result
+                    logger.info(f"[WhatsApp] Lead {lead_id} encontrado para company: {company_name} (id: {_company_id})")
+                    custom_props = (company_data or {}).get('custom_properties') or {}
+                    access_token = custom_props.get('WHATSAPP_ACCESS_TOKEN') or creds.get('access_token')
+                    phone_number_id = custom_props.get('WHATSAPP_PHONE_NUMBER_ID') or creds.get('phone_number_id')
+                    headers = {'Authorization': f"Bearer {access_token}", 'Content-Type': 'application/json'}
+                    base_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{phone_number_id}/messages"
 
-        # 3) Construir y enviar el mensaje
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": f"34{clean_phone}" if not clean_phone.startswith("34") else clean_phone,
-            "type": "text",
-            "text": {"body": message}
-        }
+            # 3) Construir y enviar el mensaje
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": f"34{clean_phone}" if not clean_phone.startswith("34") else clean_phone,
+                "type": "text",
+                "text": {"body": message}
+            }
 
-        logger.debug(f"Enviando texto a {clean_phone} → payload: {payload}")
-        resp = requests.post(base_url, headers=headers, json=payload, timeout=timeout)
-        if not resp.ok:
-            logger.error(f"❌ Error {resp.status_code} enviando texto: {resp.text}")
-        resp.raise_for_status()
+            logger.debug(f"Enviando texto a {clean_phone} → payload: {payload}")
+            resp = requests.post(base_url, headers=headers, json=payload, timeout=timeout)
+            if not resp.ok:
+                logger.error(f"❌ Error {resp.status_code} enviando texto: {resp.text}")
+            resp.raise_for_status()
 
-        data = resp.json() or {}
-        msg_id = (data.get("messages") or [{}])[0].get("id")
-        if not msg_id:
-            logger.error(f"WhatsApp API no devolvió WAMID: {data}")
+            data = resp.json() or {}
+            msg_id = (data.get("messages") or [{}])[0].get("id")
+            if not msg_id:
+                logger.error(f"WhatsApp API no devolvió WAMID: {data}")
+                return False, None
+
+            logger.info(f"✅ Texto enviado. ID: {msg_id}")
+            return True, msg_id
+
+        except ValueError as e:
+            logger.error(f"Error de validación: {str(e)}", exc_info=True)
+            return False, None
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error de HTTP: {str(e)}", exc_info=True)
+            return False, None
+        except Exception as e:
+            logger.error(f"❌ Excepción enviando texto: {e}", exc_info=True)
             return False, None
 
-        logger.info(f"✅ Texto enviado. ID: {msg_id}")
-        return True, msg_id
+    def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str) -> dict:
+        """
+        Construye el payload de envío de plantilla para la Cloud API de WhatsApp.
+        - template_name: nombre EXACTO del template en WBM
+        - template_data: dict con datos de la plantilla. Soporta:
+            - language: "es_ES" (por defecto)
+            - cover_url: URL imagen header (si no se pasa, usa default)
+            - first_name, last_name, deal_id, slot_text, new_phone, responsible_name, etc.
+            - body_params: lista[str] para modo genérico
+            - buttons: lista de botones, p.ej:
+                [
+                {"type":"url", "index":0, "text_param":"<valor>"},
+                {"type":"quick_reply", "index":1, "payload":"CONFIRMAR"}
+                ]
+        - to_phone: teléfono destino; se normaliza a E.164 español (34)
+        """
+        def normalize_es(phone: str) -> str:
+            p = PhoneUtils.strip_34(str(phone))
+            return p if p.startswith("34") else f"34{p}"
 
-    except ValueError as e:
-        logger.error(f"Error de validación: {str(e)}", exc_info=True)
-        return False, None
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error de HTTP: {str(e)}", exc_info=True)
-        return False, None
-    except Exception as e:
-        logger.error(f"❌ Excepción enviando texto: {e}", exc_info=True)
-        return False, None
+        # Idioma y cover
+        lang = (template_data or {}).get("language") or "es_ES"
+        cover_url = (
+            (template_data or {}).get("cover_url")
+            or getattr(self, "default_cover_url", None)
+            or "https://app.solvify.es/cover-whats.jpg"
+        )
 
+        to_e164 = normalize_es(to_phone)
+        components = []
 
-def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str) -> dict:
+        # Header (imagen) si hay cover_url
+        if cover_url:
+            components.append({
+                "type": "header",
+                "parameters": [{
+                    "type": "image",
+                    "image": {"link": cover_url}
+                }]
+            })
 
-    """Construye el JSON esperado por WABA"""
-# 🔧 CAMBIO: Obtener cover dinámicamente según el teléfono de destino
-    cover_url = get_cover_wb_for_phone(to_phone)
-    
-    common_header = {
-        "type": "header",
-        "parameters": [{
-            "type": "image",
-            "image": {"link": cover_url}
-        }]
-    }
-    template_name = template_name.strip()
-    if template_name == 'agendar_llamada_inicial':
-        return {
-            "messaging_product": "whatsapp",
-            "to": to_phone,
-            "type": "template",
-            "template": {
-                "name": "agendar_llamada_inicial",
-                "language": {"code": "es_ES"},
-                "components": [
-                    common_header,
-                    {
-                        "type": "body",
-                        "parameters": [{
-                            "type": "text",
-                            "text": template_data.get("first_name", "Cliente")
-                        }]
-                    },
-                    {
+        name = (template_name or "").strip()
+
+        # ======== PLANTILLAS CONOCIDAS (ajusta a tus definiciones reales en WBM) ========
+
+        if name == "agendar_llamada_inicial":
+            # Body: {{1}} = first_name
+            # Botón URL dinámico con {{1}} = deal_id (definido así en WBM)
+            first_name = (template_data or {}).get("first_name") or ""
+            deal_id = (template_data or {}).get("deal_id") or ""
+            components.append({
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": first_name}
+                ]
+            })
+            components.append({
+                "type": "button",
+                "sub_type": "url",
+                "index": 0,
+                "parameters": [
+                    {"type": "text", "text": deal_id}
+                ]
+            })
+
+        elif name == "recordatorio_llamada_agendada":
+            # Body: {{1}} = first_name, {{2}} = slot_text (fecha/hora legible)
+            first_name = (template_data or {}).get("first_name") or ""
+            slot_text = (template_data or {}).get("slot_text") or ""
+            components.append({
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": first_name},
+                    {"type": "text", "text": slot_text}
+                ]
+            })
+
+        elif name == "retomar_contacto":
+            # Body: {{1}} = first_name, {{2}} = responsible_name
+            first_name = (template_data or {}).get("first_name") or ""
+            responsible_name = (template_data or {}).get("responsible_name") or ""
+            components.append({
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": first_name},
+                    {"type": "text", "text": responsible_name}
+                ]
+            })
+
+        elif name == "nuevo_numero":
+            # Body: {{1}} = first_name, {{2}} = new_phone
+            first_name = (template_data or {}).get("first_name") or ""
+            new_phone = (template_data or {}).get("new_phone") or PhoneUtils.strip_34(to_e164)
+            components.append({
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": first_name},
+                    {"type": "text", "text": new_phone}
+                ]
+            })
+
+        elif name == "baja_comercial":
+            # Body: {{1}} = first_name
+            first_name = (template_data or {}).get("first_name") or ""
+            components.append({
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": first_name}
+                ]
+            })
+
+        else:
+            # ======== MODO GENÉRICO ========
+            # Permite construir cualquier template pasando body_params/buttons desde template_data
+            body_params = (template_data or {}).get("body_params") or []
+            if body_params:
+                components.append({
+                    "type": "body",
+                    "parameters": [{"type": "text", "text": str(x)} for x in body_params]
+                })
+
+            buttons = (template_data or {}).get("buttons") or []
+            # Soporta botones URL (con parámetro de texto) y quick_reply (con payload)
+            for i, btn in enumerate(buttons):
+                btype = (btn.get("type") or "").lower()
+                if btype == "url":
+                    components.append({
                         "type": "button",
                         "sub_type": "url",
-                        "index": 0,
-                        "parameters": [{
-                            "type": "text",
-                            "text": str(template_data.get("deal_id", ""))
-                        }]
-                    }
-                ]
-            }
-        }
-
-    elif template_name == 'nuevo_numero':
-        # Firma = nombre de pila del responsable
-        signer = (
-            template_data.get("responsible_first_name")
-            or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
-            or "Equipo"
-        )
-        return {
-            "messaging_product": "whatsapp",
-            "to": to_phone,
-            "type": "template",
-            "template": {
-                "name": "nuevo_numero",
-                "language": {"code": "es_ES"},
-                "components": [
-                    common_header,
-                    {
-                        "type": "body",
+                        "index": int(btn.get("index", i)),
                         "parameters": [
-                            {"type": "text", "text": template_data.get("first_name", "Cliente")},
-                            {"type": "text", "text": signer}
+                            {"type": "text", "text": str(btn.get("text_param", ""))}
                         ]
-                    },
-                    {
+                    })
+                elif btype in ("quick_reply", "quickreply", "quick-reply"):
+                    components.append({
                         "type": "button",
-                        "sub_type": "url",
-                        "index": 0,
+                        "sub_type": "quick_reply",
+                        "index": int(btn.get("index", i)),
                         "parameters": [
-                            {"type": "text", "text": str(template_data.get("deal_id", ""))}
+                            {"type": "payload", "payload": str(btn.get("payload", ""))}
                         ]
-                    }
-                ]
-            }
-        }
-    elif template_name == 'followup_missed_calls':
-        # Firma = nombre de pila del responsable
+                    })
+                # Otros tipos se pueden añadir aquí (COPY_CODE, OTP autofill, etc.)
 
-        return {
+        payload = {
             "messaging_product": "whatsapp",
-            "to": to_phone,
+            "to": to_e164,
             "type": "template",
             "template": {
-                "name": "followup_missed_calls",
-                "language": {"code": "es_ES"},
-                "components": [
-                    {
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": template_data.get("first_name", "Cliente")}
-                        ]
-                    },
-                    {
-                        "type": "button",
-                        "sub_type": "url",
-                        "index": 0,
-                        "parameters": [
-                            {"type": "text", "text": str(template_data.get("deal_id", ""))}
-                        ]
-                    }
-                ]
-            }
-        }            
-    elif template_name == 'recordatorio_llamada_agendada' or template_name == 'despachocalero_recordatorio_llamada_agendada':
-        # Firma = nombre de pila del responsable
-        signer = (
-            template_data.get("responsible_first_name")
-            or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
-            or "Equipo"
-        )
-        
-        # Obtener company_name
-        company_name = template_data.get("company_name", "").strip() or "tu empresa"
-        
-        return {
-            "messaging_product": "whatsapp",
-            "to": to_phone,
-            "type": "template",
-            "template": {
-                "name": "recordatorio_llamada_agendada",
-                "language": {"code": "es_ES"},
-                "components": [
-                    # SIN HEADER - solo body
-                    {
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": template_data.get("first_name", "Cliente")},
-                            {"type": "text", "text": signer},
-                            {"type": "text", "text": company_name}
-                        ]
-                    }
-                ]
+                "name": name,
+                "language": {"code": lang},
+                "components": components
             }
         }
-# Agregar este bloque ANTES del else final en _build_template_payload
-
-    elif template_name in ['retomar_contacto']:
-        # Firma = nombre de pila del responsable
-        signer = (
-            template_data.get("responsible_first_name")
-            or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
-            or "Equipo"
-        )
-        
-        # Obtener company_name
-        company_name = template_data.get("company_name", "").strip() or "tu empresa"
-        
-        return {
-            "messaging_product": "whatsapp",
-            "to": to_phone,
-            "type": "template",
-            "template": {
-                "name": template_name,
-                "language": {"code": "es_ES"},
-                "components": [
-                    # SIN HEADER - solo body
-                    {
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": template_data.get("first_name", "Cliente")},
-                            {"type": "text", "text": signer},
-                            {"type": "text", "text": company_name}
-                        ]
-                    }
-                ]
-            }
-        }
-    elif template_name in ['baja_comercial']:
-        # Firma = nombre de pila del responsable
-        signer = (
-            template_data.get("responsible_first_name")
-            or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
-            or "Equipo"
-        )
-        
-        # Obtener company_name
-        company_name = template_data.get("company_name", "").strip() or "tu empresa"
-        
-        return {
-            "messaging_product": "whatsapp",
-            "to": to_phone,
-            "type": "template",
-            "template": {
-                "name": template_name,
-                "language": {"code": "es_ES"},
-                "components": [
-                    # SIN HEADER - solo body
-                    {
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": template_data.get("first_name", "Cliente")},
-                            {"type": "text", "text": signer},
-                            {"type": "text", "text": company_name}
-                        ]
-                    },
-                    {
-                        "type": "button",
-                        "sub_type": "url",
-                        "index": 0,
-                        "parameters": [
-                            {"type": "text", "text": str(template_data.get("deal_id", ""))}
-                        ]
-                    }
-                ]
-            }
-        }
-    elif template_name in ['contacto_recordatorio_pago','recordatorio_proximo_pago']:
-        # Template sin parámetros - solo cuerpo estático
-        return {
-            "messaging_product": "whatsapp",
-            "to": to_phone,
-            "type": "template",
-            "template": {
-                "name": template_name,
-                "language": {"code": "es_ES"},
-                "components": [
-                    # SIN HEADER - solo body sin parámetros
-                    {
-                        "type": "body"
-                        # No parameters - el texto está definido en WhatsApp
-                    }
-                ]
-            }
-        }
-    else:
-        raise ValueError(f"Template '{template_name}' no configurado")
+        return payload
 
 class AutoReplyService:
     """Auto-reply service for office hours management"""
@@ -6858,197 +6784,6 @@ def send_template_direct():
             'status': 'error',
             'message': f'Internal error: {str(e)}'
         }), 500
-
-
-def _build_template_payload_direct(template_name: str, template_data: dict, to_phone: str) -> dict:
-    """
-    Construye payload de template para envío directo sin depender de BD.
-    Solo templates básicos configurados en código.
-    """
-    # 🔧 CAMBIO: Obtener cover dinámicamente según el teléfono de destino
-    cover_url = get_cover_wb_for_phone(to_phone)
-    
-    common_header = {
-        "type": "header",
-        "parameters": [{
-            "type": "image",
-            "image": {"link": cover_url}
-        }]
-    }
-    
-    template_name = template_name.strip().lower()
-    
-    if template_name == 'agendar_llamada_inicial':
-        return {
-            "messaging_product": "whatsapp",
-            "to": to_phone,
-            "type": "template",
-            "template": {
-                "name": "agendar_llamada_inicial",
-                "language": {"code": "es_ES"},
-                "components": [
-                    common_header,
-                    {
-                        "type": "body",
-                        "parameters": [{
-                            "type": "text",
-                            "text": template_data.get("first_name", "Cliente")
-                        }]
-                    },
-                    {
-                        "type": "button",
-                        "sub_type": "url",
-                        "index": 0,
-                        "parameters": [{
-                            "type": "text",
-                            "text": str(template_data.get("deal_id", ""))
-                        }]
-                    }
-                ]
-            }
-        }
-    
-    elif template_name == 'nuevo_numero':
-        signer = (
-            template_data.get("responsible_first_name")
-            or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
-            or "Equipo"
-        )
-        return {
-            "messaging_product": "whatsapp",
-            "to": to_phone,
-            "type": "template",
-            "template": {
-                "name": "nuevo_numero",
-                "language": {"code": "es_ES"},
-                "components": [
-                    common_header,
-                    {
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": template_data.get("first_name", "Cliente")},
-                            {"type": "text", "text": signer}
-                        ]
-                    },
-                    {
-                        "type": "button",
-                        "sub_type": "url",
-                        "index": 0,
-                        "parameters": [{
-                            "type": "text",
-                            "text": str(template_data.get("deal_id", ""))
-                        }]
-                    }
-                ]
-            }
-        }
-    
-    elif template_name == 'followup_missed_calls':
-        return {
-            "messaging_product": "whatsapp",
-            "to": to_phone,
-            "type": "template",
-            "template": {
-                "name": "followup_missed_calls",
-                "language": {"code": "es_ES"},
-                "components": [
-                    {
-                        "type": "body",
-                        "parameters": [{
-                            "type": "text",
-                            "text": template_data.get("first_name", "Cliente")
-                        }]
-                    },
-                    {
-                        "type": "button",
-                        "sub_type": "url",
-                        "index": 0,
-                        "parameters": [{
-                            "type": "text",
-                            "text": str(template_data.get("deal_id", ""))
-                        }]
-                    }
-                ]
-            }
-        }
-        
-    elif template_name in ['recordatorio_llamada_agendada', 'despachocalero_recordatorio_llamada_agendada']:
-        signer = (
-            template_data.get("responsible_first_name")
-            or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
-            or "Equipo"
-        )
-        company_name = template_data.get("company_name", "").strip() or "tu empresa"
-        
-        return {
-            "messaging_product": "whatsapp",
-            "to": to_phone,
-            "type": "template",
-            "template": {
-                "name": "recordatorio_llamada_agendada",
-                "language": {"code": "es_ES"},
-                "components": [
-                    {
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": template_data.get("first_name", "Cliente")},
-                            {"type": "text", "text": signer},
-                            {"type": "text", "text": company_name}
-                        ]
-                    }
-                ]
-            }
-        }
-        
-    elif template_name == 'retomar_contacto':
-        signer = (
-            template_data.get("responsible_first_name")
-            or (template_data.get("responsible_name", "").split(" ")[0] if template_data.get("responsible_name") else None)
-            or "Equipo"
-        )
-        company_name = template_data.get("company_name", "").strip() or "tu empresa"
-        
-        return {
-            "messaging_product": "whatsapp",
-            "to": to_phone,
-            "type": "template",
-            "template": {
-                "name": "retomar_contacto",
-                "language": {"code": "es_ES"},
-                "components": [
-                    {
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": template_data.get("first_name", "Cliente")},
-                            {"type": "text", "text": signer},
-                            {"type": "text", "text": company_name}
-                        ]
-                    }
-                ]
-            }
-        }
-    
-    elif template_name == 'contacto_recordatorio_pago':
-        # Template sin parámetros - solo cuerpo estático
-        return {
-            "messaging_product": "whatsapp",
-            "to": to_phone,
-            "type": "template",
-            "template": {
-                "name": "contacto_recordatorio_pago",
-                "language": {"code": "es_ES"},
-                "components": [
-                    # SIN HEADER - solo body sin parámetros
-                    {
-                        "type": "body"
-                        # No parameters - el texto está definido en WhatsApp
-                    }
-                ]
-            }
-        }
-    
-    else:
-        raise ValueError(f"Template '{template_name}' no está configurado para envío directo")
 
 
 @app.route('/send_text_direct', methods=['POST'])
