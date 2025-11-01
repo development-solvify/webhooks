@@ -2666,25 +2666,64 @@ class MessageService:
         except Exception:
             logging.exception("Failed to save outgoing message")
             return False
-    def update_outgoing_status(wamid: str, status: str, company_id: str | None):
-        try:
-            if company_id:
-                sql = """
-                    UPDATE public.external_messages
-                    SET status = %s, updated_at = NOW()
-                    WHERE last_message_uid = %s
-                    AND company_id = %s
-                """
-                db_manager.execute_query(sql, [status, wamid, company_id])
-            else:
-                sql = """
-                    UPDATE public.external_messages
-                    SET status = %s, updated_at = NOW()
-                    WHERE last_message_uid = %s
-                """
-                db_manager.execute_query(sql, [status, wamid])
-        except Exception:
-            logging.exception("Failed to update outgoing status")
+    def update_outgoing_status(db, company_id, wamid, new_status, delivered_ts=None):
+        # orden de “progreso”
+        order = {
+            'template_sent': 1, 'sent': 2, 'message_delivered': 3, 'read': 4,
+            'autoresponse_delivered': 3,  # si usas este camino
+        }
+
+        def can_advance(curr, nxt):
+            return order.get(nxt, 0) > order.get(curr, 0)
+
+        # 1) reintento breve por posible carrera
+        tries = 3
+        for i in range(tries):
+            row = db.execute_query(
+                "SELECT status FROM public.external_messages WHERE last_message_uid = %s AND company_id = %s LIMIT 1",
+                [wamid, company_id],
+                fetch_one=True
+            )
+            if row:
+                curr = row[0]
+                if not can_advance(curr, new_status):
+                    # idempotente / sin avance real
+                    logger.debug(f"⏸️ Estado mantenido: {curr} (evento: {new_status} no válido o ya final)")
+                    return False  # no warning
+                # actualizamos
+                affected = db.execute_query(
+                    "UPDATE public.external_messages SET status=%s, updated_at=NOW(), last_message_timestamp=COALESCE(%s,last_message_timestamp) WHERE last_message_uid=%s AND company_id=%s",
+                    [new_status, delivered_ts, wamid, company_id]
+                )
+                if affected is not None:
+                    logger.info(f"✅ Estado actualizado para {wamid}: {curr} → {new_status} (teléfono: …)")
+                    return True
+            # si no hay row aún, dormimos un poco y reintentamos
+            time.sleep(0.25)
+
+        # 2) fallback: buscar solo por wamid (por si insertó con otro company_id)
+        row = db.execute_query(
+            "SELECT company_id, status FROM public.external_messages WHERE last_message_uid = %s LIMIT 2",
+            [wamid], fetch_all=True
+        )
+        if not row:
+            logger.warning(f"⚠️ No se pudo actualizar estado para mensaje {wamid}")
+            return False
+        if len(row) > 1:
+            logger.warning(f"⚠️ {wamid} coincide con múltiples filas; no se actualiza por seguridad")
+            return False
+
+        found_company_id, curr = row[0]
+        if not can_advance(curr, new_status):
+            logger.debug(f"⏸️ Estado mantenido: {curr} (evento: {new_status} no válido o ya final)")
+            return False
+
+        db.execute_query(
+            "UPDATE public.external_messages SET status=%s, updated_at=NOW(), last_message_timestamp=COALESCE(%s,last_message_timestamp) WHERE last_message_uid=%s",
+            [new_status, delivered_ts, wamid]
+        )
+        logger.info(f"✅ Estado actualizado (fallback) para {wamid}: {curr} → {new_status} (fila con company_id={found_company_id})")
+        return True
 
     def save_template_message(
         self,
