@@ -1152,7 +1152,7 @@ class Config:
                     return self.config.get(section, k)
             return default
 
-        level_name = (_opt('LOGGING', 'LOG_LEVEL', 'INFO') or 'INFO').upper()
+        level_name = (_opt('LOGGING', 'LOG_LEVEL', 'DEBUG') or 'INFO').upper()
         fmt        = _opt('LOGGING', 'LOG_FORMAT', '%(asctime)s | %(levelname)s | %(name)s | %(message)s')
         log_file   = _opt('LOGGING', 'LOG_FILE', None)
         console_lv = (_opt('LOGGING', 'CONSOLE_LOG_LEVEL', level_name) or level_name).upper()
