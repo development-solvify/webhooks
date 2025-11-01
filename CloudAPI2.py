@@ -879,6 +879,10 @@ class ExtendedFileService:
         if company_id:
             try:
                 creds = get_whatsapp_credentials_for_company(company_id)
+                logger.info(
+                    "[TENANT CREDS] company_id=%s pnid=%s waba_id=%s token_tail=%s",
+                    company_id, creds["phone_number_id"], creds["waba_id"], creds["access_token"][-8:]
+                )                
                 source = f"company:{company_id}"
             except Exception:
                 logger.exception("get_whatsapp_credentials_for_company() falló")
@@ -2208,6 +2212,7 @@ class WhatsAppService:
             # 1) Resolver credenciales del tenant
             if company_id:
                 creds = get_whatsapp_credentials_for_company(company_id)
+                logger.info("[TENANT CREDS] company_id=%s pnid=%s waba_id=%s token_tail=%s",company_id, creds["phone_number_id"], creds["waba_id"], creds["access_token"][-8:])
             else:
                 creds = get_whatsapp_credentials_for_phone(clean_phone)
 
