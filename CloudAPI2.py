@@ -2641,7 +2641,7 @@ class AutoReplyService:
                 current_time_naive = now_madrid_naive()
 
                 assigned_to_id, responsible_email = message_service.lead_service.get_lead_assigned_info(clean_phone)
-                lead = message_service.lead_service.get_lead_data_by_phone(clean_phone)
+                lead = message_service.lead_service.get_lead_data_by_phone(clean_phone, company_id=company_id)
                 deal_id = (lead.get('deal_id') if lead and lead.get('deal_id') else None)
 
                 chat_id = deal_id              # ✅ chat_id = deal_id (UUID)
@@ -2891,7 +2891,7 @@ class MessageService:
             last_message_ts = timestamp_to_madrid_naive(wa_timestamp) if wa_timestamp else now_madrid_naive()
 
             assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
-            lead = self.lead_service.get_lead_data_by_phone(sender)
+            lead = self.lead_service.get_lead_data_by_phone(sender, company_id=company_id)
 
             # chat_id/chat_url como antes
             chat_id = (lead.get('deal_id') if lead and lead.get('deal_id') else sender)
@@ -2991,7 +2991,7 @@ class MessageService:
             effective_company_id = company_id
             if not effective_company_id:
                 # Resolver por lead si no viene explicitamente
-                lead = self.lead_service.get_lead_data_by_phone(sender)
+                lead = self.lead_service.get_lead_data_by_phone(sender, company_id=effective_company_id)
                 effective_company_id = (lead.get('company_id') if lead else None)
 
             deal_id = lead.get('deal_id') if lead else None
@@ -3125,7 +3125,7 @@ class MessageService:
                     logging.exception("Failed to get lead assigned info for sender=%s", sender)
 
                 try:
-                    lead = self.lead_service.get_lead_data_by_phone(sender)
+                    lead = self.lead_service.get_lead_data_by_phone(sender, company_id=company_id)
                 except Exception:
                     logging.exception("Failed to get lead data for sender=%s", sender)
 
@@ -3245,7 +3245,7 @@ class MessageService:
             # 3) Resolver deal/assigned/responsable para chat_id/responsible_email
             assigned_to_id = None
             responsible_email = ""
-            lead = self.lead_service.get_lead_data_by_phone(clean_phone)
+            lead = self.lead_service.get_lead_data_by_phone(clean_phone, company_id=company_id)
             if lead:
                 deal_id = lead.get('deal_id')
                 chat_id = deal_id if deal_id else clean_phone
@@ -3675,7 +3675,7 @@ def handle_possible_flow_exit_only_if_reply_to_template(msg: dict, lead_service,
 
         # 3) Resolver lead_id desde el teléfono del remitente
         sender_phone = PhoneUtils.strip_34(msg.get('from', ''))
-        lead = lead_service.get_lead_data_by_phone(sender_phone)
+        lead = lead_service.get_lead_data_by_phone(sender_phone, company_id=company_id)
         if not lead or not lead.get('lead_id'):
             logger.warning(f"[FLOW EXIT] no se pudo resolver lead_id para phone={sender_phone}; abortando.")
             return
@@ -4901,7 +4901,7 @@ def get_customer_files(customer_phone):
         clean_phone = PhoneUtils.strip_34(customer_phone)
         
         # Obtener lead
-        lead = lead_service.get_lead_data_by_phone(clean_phone)
+        lead = lead_service.get_lead_data_by_phone(clean_phone, company_id=company_id)
         if not lead:
             return jsonify({'status': 'error', 'message': 'Lead not found'}), 404
 
@@ -5335,7 +5335,7 @@ def get_templates():
         # Obtener lead_info si hay teléfono
         try:
             if resolved_phone:
-                lead_info = lead_service.get_lead_data_by_phone(resolved_phone)
+                lead_info = lead_service.get_lead_data_by_phone(resolved_phone, company_id=query_id)
         except Exception:
             logger.exception("Error obteniendo lead_info desde lead_service")
 
@@ -5672,7 +5672,7 @@ def webhook_company(company_id):
                                     if ya_triggered:
                                         continue
 
-                                    lead = lead_service.get_lead_data_by_phone(sender_phone)
+                                    lead = lead_service.get_lead_data_by_phone(sender_phone, company_id=company_id)
                                     if not lead or not lead.get('lead_id'):
                                         if not auto_reply_service.is_office_hours():
                                             auto_reply_service.send_auto_reply(
@@ -5740,7 +5740,7 @@ def webhook_company(company_id):
                                     continue
 
                                 # Determinar objeto de referencia
-                                lead = lead_service.get_lead_data_by_phone(sender_phone)
+                                lead = lead_service.get_lead_data_by_phone(sender_phone, company_id=company_id)
                                 if lead:
                                     object_ref_type = 'leads'
                                     object_ref_id = lead['lead_id']
@@ -5977,7 +5977,7 @@ def webhook():
                                     if ya_triggered:
                                         continue
 
-                                    lead = lead_service.get_lead_data_by_phone(sender_phone)
+                                    lead = lead_service.get_lead_data_by_phone(sender_phone, company_id=company_id)
                                     if not lead or not lead.get('lead_id'):
                                         if not auto_reply_service.is_office_hours():
                                             auto_reply_service.send_auto_reply(
@@ -6040,7 +6040,7 @@ def webhook():
                                     continue
 
                                 # Determinar objeto de referencia
-                                lead = lead_service.get_lead_data_by_phone(sender_phone)
+                                lead = lead_service.get_lead_data_by_phone(sender_phone, company_id=company_id)
                                 if lead:
                                     object_ref_type = 'leads'
                                     object_ref_id = lead['lead_id']
