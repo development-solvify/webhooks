@@ -2036,6 +2036,73 @@ class WhatsAppService:
             logger.error(f"❌ Excepción enviando texto: {e}", exc_info=True)
             return False, None
 
+    def send_document_message(
+        self,
+        to_phone: str,
+        public_url: str,
+        filename: str | None = None,
+        caption: str | None = None,
+        timeout: int = 15,
+        company_id: str | None = None,
+    ):
+        """
+        Envía un DOCUMENT a WhatsApp usando SIEMPRE credenciales del tenant (por phone o company_id).
+        Devuelve (ok: bool, message_id: str | None, creds: dict)
+        """
+        try:
+            clean_phone = PhoneUtils.strip_34(to_phone)
+            if not PhoneUtils.validate_spanish_phone(clean_phone):
+                raise ValueError(f"Número de teléfono inválido: {to_phone}")
+
+            # 1) Resolver credenciales del tenant
+            if company_id:
+                creds = get_whatsapp_credentials_for_company(company_id)
+            else:
+                creds = get_whatsapp_credentials_for_phone(clean_phone)
+
+            headers = creds["headers"]
+            base_url = creds["base_url"]
+
+            # Log útil para verificar que NO usamos defaults
+            logger.info("=" * 80)
+            logger.info(f"📎 Sending document with tenant creds:")
+            logger.info(f"📱 Company: {creds.get('company_name')}")
+            logger.info(f"🆔 Company ID: {creds.get('company_id')}")
+            logger.info(f"💼 Business ID (WABA): {creds.get('waba_id')}")
+            logger.info(f"📞 Phone Number ID: {creds.get('phone_number_id')}")
+            logger.info(f"🌐 Base URL: {base_url}")
+            logger.info("=" * 80)
+
+            # 2) Payload documento
+            dest = PhoneUtils.add_34(clean_phone)
+            document = {"link": public_url}
+            if filename:
+                document["filename"] = filename
+            if caption:
+                document["caption"] = caption
+
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": dest,
+                "type": "document",
+                "document": document,
+            }
+
+            # 3) Envío
+            logger.debug(f"[document] POST {base_url} json={payload}")
+            resp = requests.post(base_url, headers=headers, json=payload, timeout=timeout)
+            if not resp.ok:
+                logger.error(f"❌ Error {resp.status_code} enviando document: {resp.text}")
+            resp.raise_for_status()
+
+            msg_id = resp.json()["messages"][0]["id"]
+            logger.info(f"✅ Document enviado. ID: {msg_id}")
+            return True, msg_id, creds
+
+        except Exception as e:
+            logger.error(f"❌ Excepción enviando document: {e}", exc_info=True)
+            return False, None, {}
+
     def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str) -> dict:
         """
         Construye el payload de envío de plantilla para la Cloud API de WhatsApp.
@@ -3778,6 +3845,7 @@ def send_file_endpoint():
         def get_wa_credentials():
             token = config.whatsapp_config["access_token"]
             pnid = config.whatsapp_config["phone_number_id"]
+            print(f"Using WhatsApp credentials----------------------------------------------------------------: token={'set' if token else 'unset'}, pnid={pnid}")
             if not token or not pnid:
                 raise RuntimeError("Credenciales WhatsApp no encontradas.")
             return token, pnid
