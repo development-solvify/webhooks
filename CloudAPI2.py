@@ -3049,6 +3049,132 @@ class MessageService:
             logging.exception("Failed to save template message")
             return False
 
+    def save_media_message(
+        self,
+        msg: dict,
+        wa_id: str | None,
+        extra_info: dict | None = None,
+        *,
+        company_id: str | None = None,
+        direction: str = "in",        # "in" (entrante) | "out" (saliente)
+        status: str | None = None     # si no se pasa, autocalcula
+    ) -> None:
+        """
+        Guarda un mensaje de media en external_messages.
+
+        Args:
+            msg: payload del mensaje (lo que recibes de Meta Webhook o tu propio objeto).
+                Debe contener, como mínimo, el teléfono (en "from" si entrante, en "to" si saliente).
+            wa_id: WhatsApp message id (wamid.*) si se conoce.
+            extra_info: dict extra con 'url', 'mime_type', 'filename', 'caption', 'document_id', etc.
+            company_id: tenant/compañía a asociar.
+            direction: "in" para entrante, "out" para saliente.
+            status: estado a guardar (por defecto infiere: in→"message_received", out→"media_sent").
+        """
+        try:
+            dbm = self.db_manager
+
+            # 1) Inferir teléfono
+            raw_phone = None
+            if direction == "in":
+                raw_phone = (msg.get("from")
+                            or msg.get("sender")
+                            or msg.get("sender_phone")
+                            or (msg.get("contacts", [{}])[0].get("wa_id") if isinstance(msg.get("contacts"), list) and msg.get("contacts") else None))
+            else:
+                # para salientes puedes traerlo en msg["to"] o en extra_info["to"]
+                raw_phone = (msg.get("to")
+                            or (extra_info or {}).get("to")
+                            or msg.get("recipient"))
+
+            if not raw_phone:
+                # último recurso: buscar en el mensaje por campos conocidos
+                raw_phone = (msg.get("recipient_id")
+                            or msg.get("phone")
+                            or msg.get("customer_phone"))
+
+            if not raw_phone:
+                raise ValueError("No se pudo inferir el teléfono para guardar el media.")
+
+            clean_phone = PhoneUtils.strip_34(str(raw_phone))
+            display_phone = PhoneUtils.add_34(clean_phone)
+
+            # 2) from_me + status por defecto
+            from_me = 'false' if direction == "in" else 'true'
+            if status is None:
+                status = "message_received" if direction == "in" else "media_sent"
+
+            # 3) Resolver deal/assigned/responsable para chat_id/responsible_email
+            assigned_to_id = None
+            responsible_email = ""
+            lead = self.lead_service.get_lead_data_by_phone(clean_phone)
+            if lead:
+                deal_id = lead.get('deal_id')
+                chat_id = deal_id if deal_id else clean_phone
+                # assigned_to_id y email
+                try:
+                    assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(clean_phone)
+                except Exception:
+                    assigned_to_id, responsible_email = None, ""
+            else:
+                deal_id = None
+                chat_id = clean_phone
+
+            chat_url = f"https://wa.me/{clean_phone}"
+
+            # 4) Construir message JSON con metadatos del media
+            #    Conserva info original y adjunta extra_info
+            message_json = {
+                "type": "media",
+                "direction": direction,
+                "whatsapp_wamid": wa_id,
+                "raw": msg,                         # payload original para trazabilidad
+                "media": {
+                    "url": (extra_info or {}).get("url"),
+                    "mime_type": (extra_info or {}).get("mime_type"),
+                    "filename": (extra_info or {}).get("filename"),
+                    "caption": (extra_info or {}).get("caption"),
+                    "document_id": (extra_info or {}).get("document_id"),
+                    "media_id": (extra_info or {}).get("media_id"),
+                    "whatsapp_type": (extra_info or {}).get("whatsapp_type"),  # 'image', 'video', 'document', 'audio', etc.
+                    "file_size": (extra_info or {}).get("file_size"),
+                    "sha256": (extra_info or {}).get("sha256"),
+                }
+            }
+
+            # 5) Insertar en external_messages (multitenant)
+            #    Columnas según tu esquema actual (con company_id)
+            sql = """
+                INSERT INTO public.external_messages
+                ( id, message, sender_phone, responsible_email, last_message_uid, last_message_timestamp,
+                from_me, status, created_at, updated_at, is_deleted, chat_url, chat_id, assigned_to_id, company_id )
+                VALUES
+                ( gen_random_uuid(), %s, %s, %s, %s, NOW(),
+                %s, %s, NOW(), NOW(), FALSE, %s, %s, %s, %s )
+            """
+
+            params = [
+                json.dumps(message_json, ensure_ascii=False),
+                clean_phone,
+                responsible_email or "",
+                wa_id,
+                from_me,
+                status,
+                chat_url,
+                str(chat_id),
+                assigned_to_id,
+                company_id
+            ]
+
+            dbm.execute_query(sql, params, fetch_one=False, fetch_all=False)
+            logger.info(
+                f"[MEDIA SAVE] Guardado media ({direction}) para {display_phone} | "
+                f"status={status} | wa_id={wa_id} | deal/chat_id={chat_id} | company_id={company_id}"
+            )
+
+        except Exception:
+            logger.exception("[MEDIA SAVE] Error guardando media en external_messages")
+
 # ---------- Gestión de credenciales WhatsApp por company_id (tenant) ----------
 
 # --- Cache opcional para mapear phone -> company_id (simple diccionario en memoria)
@@ -5392,7 +5518,7 @@ def webhook_company(company_id):
 
                                         # MINIMO: pasar company_id
                                         try:
-                                            message_service.save_media_message(msg, wa_id, file_info, company_id=company_id)
+                                            message_service.save_media_message(msg, wa_id, file_info, company_id=company_id, direction="in", status="message_received")
                                         except TypeError:
                                             message_service.save_media_message(msg, wa_id, file_info)
 
@@ -5693,8 +5819,14 @@ def webhook():
                                         }
                                         
                                         # 🔧 IMPORTANTE: Guardar con formato JSON estructurado
-                                        message_service.save_media_message(msg, wa_id, file_info)
-                                        
+                                        message_service.save_media_message(
+                                            {"to": actor_phone},  
+                                            wamid,
+                                            out_info,
+                                            company_id=company_id,
+                                            direction="out",
+                                            status="media_sent"
+                                        )                                       
                                         file_size_mb = file_result['file_size'] / (1024 * 1024)
                                         log_message = f"📎 {file_result['media_type'].title()}: {file_result['filename']} ({file_size_mb:.2f}MB)"
                                         if file_result['content_type']:
