@@ -2586,25 +2586,38 @@ class LeadService:
     def __init__(self, db_manager):
         self.db_manager = db_manager
 
-    def get_lead_data_by_phone(self, phone: str):
-        """Devuelve datos completos del lead + deal + responsable + compañía a partir del teléfono."""
+    def get_lead_data_by_phone(self, phone: str, company_id: str | None = None):
+        """
+        Devuelve datos del lead + deal + responsable + compañía a partir del teléfono.
+        Si se pasa company_id, filtra por esa compañía (multi-tenant seguro).
+        """
         clean_phone = PhoneUtils.strip_34(phone)
-        query = """
+
+        base_sql = """
             SELECT
                 l.id, l.first_name, l.last_name, l.email,
                 d.id, d.user_assigned_id,
                 p.email, p.first_name, p.last_name,
-                c.name , c.id
+                c.name, c.id
             FROM public.leads l
-            JOIN public.deals d ON d.lead_id = l.id
+            JOIN public.deals d      ON d.lead_id = l.id AND d.is_deleted = false
             LEFT JOIN public.profiles p ON p.id = d.user_assigned_id
             LEFT JOIN public.companies c ON d.company_id = c.id
-            WHERE l.phone = %s
-            LIMIT 1
+            WHERE l.phone = %s AND l.is_deleted = false
         """
-        row = self.db_manager.execute_query(query, [clean_phone], fetch_one=True)
+        params = [clean_phone]
+
+        if company_id:
+            base_sql += " AND d.company_id = %s"
+            params.append(company_id)
+
+        # Por si existen varios deals, tomamos el más reciente
+        base_sql += " ORDER BY d.created_at DESC NULLS LAST LIMIT 1"
+
+        row = self.db_manager.execute_query(base_sql, params, fetch_one=True)
         if not row:
             return None
+
         return {
             'lead_id': str(row[0]),
             'first_name': row[1] or '',
@@ -2615,11 +2628,10 @@ class LeadService:
             'responsible_email': row[6] or '',
             'responsible_first_name': row[7] or '',
             'responsible_name': f"{row[7] or ''} {row[8] or ''}".strip(),
-            'company_name': row[9] or '',  # ← NUEVO CAMPO,
+            'company_name': row[9] or '',
             'company_id': str(row[10]) if row[10] else None,
             'phone': clean_phone,
         }
-
     def get_lead_assigned_info(self, phone: str):
         """Devuelve (user_assigned_id, email del responsable) o (None, None)."""
         clean_phone = PhoneUtils.strip_34(phone)
@@ -4944,6 +4956,10 @@ def send_direct_message():
         logger.exception('Error in send_direct_message')
         return jsonify({'status': 'error', 'message': 'Internal error'}), 500
 
+from flask import request, jsonify
+# Asegúrate de tener UUID_RE disponible (ya lo usas en otros endpoints)
+# UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
+
 @app.route('/send_template', methods=['POST'])
 @rate_limit(max_calls=20, window=60)
 def send_template_endpoint():
@@ -4955,21 +4971,36 @@ def send_template_endpoint():
             return jsonify({'status': 'error', 'message': f'Missing fields: {missing}'}), 400
 
         customer_phone = data['customer_phone']
-        template_name = data['template_name']
+        template_name   = data['template_name']
+
+        # company_id es opcional, pero si llega lo validamos
+        company_id = data.get('company_id') or data.get('id')
+        if company_id and not UUID_RE.match(company_id):
+            return jsonify({'status': 'error', 'message': 'Invalid company_id format'}), 400
 
         if not PhoneUtils.validate_spanish_phone(customer_phone):
             return jsonify({'status': 'error', 'message': 'Invalid phone number'}), 400
 
-        lead_data = lead_service.get_lead_data_by_phone(customer_phone)
+        # ✅ Ahora el lead se resuelve dentro del tenant correcto si llega company_id
+        lead_data = lead_service.get_lead_data_by_phone(customer_phone, company_id=company_id)
         if not lead_data:
             return jsonify({'status': 'error', 'message': 'Lead not found'}), 404
 
         destination = PhoneUtils.add_34(customer_phone)
-        success, message_id, payload = whatsapp_service.send_template_message(destination, template_name, lead_data)
+        success, message_id, payload = whatsapp_service.send_template_message(
+            destination,
+            template_name,
+            lead_data
+        )
 
         if success:
             message_service.save_template_message(payload, message_id)
-            return jsonify({'status': 'success', 'message_id': message_id, 'sent_to': f'+{destination}'}), 200
+            return jsonify({
+                'status': 'success',
+                'message_id': message_id,
+                'sent_to': f'+{destination}',
+                'company_id': company_id or lead_data.get('company_id')
+            }), 200
         else:
             return jsonify({'status': 'error', 'message': 'Failed to send template'}), 500
 
