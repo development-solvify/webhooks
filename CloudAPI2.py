@@ -931,73 +931,6 @@ class ExtendedFileService:
         d_headers = self.config.whatsapp_config.get("headers")
         d_url = self.config.whatsapp_config.get("base_url")
         return d_headers, d_url, ("defaults" if creds is None else f"{source}_defaults")
-  
-    def _resolve_wa_creds_for_send_strict(
-        *,
-        company_id: Optional[str],
-        fallback_to_phone: Optional[str] = None,  # opcional
-        headers: Optional[dict] = None,
-        base_url: Optional[str] = None
-    ) -> Tuple[Optional[dict], Optional[str], str, Optional[str], Optional[str]]:
-        """
-        Devuelve (headers, base_url, source, phone_number_id, waba_id) de forma estricta:
-        1) Si headers y base_url vienen dados → úsalo tal cual (source='override').
-        2) Si company_id está definido → usa credenciales del tenant (source='company').
-        3) Si no hay company_id pero hay phone → intenta por teléfono (source='phone').
-        4) Si todo falla → usa DEFAULT_* (source='default').
-
-        Siempre reconstruye base_url = https://graph.facebook.com/v22.0/{pnid}/messages
-        para evitar endpoints inconsistentes.
-        """
-        # 1) Override directo
-        if headers and base_url:
-            return headers, base_url, 'override', None, None
-
-        creds = None
-        source = 'default'
-        pnid = None
-        waba = None
-
-        try:
-            if company_id:
-                # ← estricto: si hay tenant, usamos tenant; no lo pisamos con phone
-                creds = get_whatsapp_credentials_for_company(company_id)
-                source = 'company'
-            elif fallback_to_phone:
-                # opcional: solo si quieres soporte por teléfono cuando no hay company_id
-                creds = get_whatsapp_credentials_for_phone(fallback_to_phone)
-                source = 'phone'
-            else:
-                creds = {
-                    'access_token': ACCESS_TOKEN,
-                    'phone_number_id': PHONE_NUMBER_ID,
-                    'waba_id': WABA_ID,
-                    'headers': {
-                        'Authorization': f'Bearer {ACCESS_TOKEN}',
-                        'Content-Type': 'application/json'
-                    },
-                    'base_url': f"https://graph.facebook.com/{GRAPH_API_VERSION}/{PHONE_NUMBER_ID}/messages"
-                }
-                source = 'default'
-
-            if not creds:
-                return None, None, 'none', None, None
-
-            token = creds.get('access_token') or ACCESS_TOKEN
-            pnid = creds.get('phone_number_id') or PHONE_NUMBER_ID
-            waba = creds.get('waba_id') or WABA_ID
-
-            # reconstruimos base_url SIEMPRE para garantizar endpoint correcto
-            final_base_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{pnid}/messages"
-            final_headers = {
-                'Authorization': f'Bearer {token}',
-                'Content-Type': 'application/json'
-            }
-            return final_headers, final_base_url, source, pnid, waba
-        except Exception:
-            logger.exception("[_resolve_wa_creds_for_send_strict] Error resolviendo credenciales")
-            return None, None, 'error', None, None
-
 
     def _send_whatsapp_media_message_extended(
         self,
@@ -3302,6 +3235,98 @@ def _resolve_company_id_from_phone(phone: str) -> str | None:
     except Exception:
         logging.exception("Failed to resolve company_id from phone")
         return None
+
+import re
+from typing import Optional, Tuple
+
+def _extract_pnid_from_base_url(url: str) -> Optional[str]:
+    """
+    Extrae el phone_number_id de una URL tipo:
+      https://graph.facebook.com/v22.0/<PNID>/messages
+    """
+    if not url:
+        return None
+    m = re.search(r"/v\d+\.\d+/(\d+)/messages/?$", url)
+    return m.group(1) if m else None
+
+def _resolve_wa_creds_for_send_strict(
+    *,
+    company_id: Optional[str] = None,
+    fallback_to_phone: Optional[str] = None,
+    headers: Optional[dict] = None,
+    base_url: Optional[str] = None,
+) -> Tuple[dict, str, str, Optional[str], Optional[str]]:
+    """
+    Devuelve (token_headers, messages_base_url, source, phone_number_id, waba_id)
+    Prioridad:
+      1) Overrides (headers/base_url) si vienen completos
+      2) Credenciales por company_id (multitenant)
+      3) Credenciales por teléfono (lead/deal → company)
+      4) Defaults globales
+
+    source ∈ {'override','company','phone','default'}
+    """
+
+    # 1) Overrides explícitos
+    if headers and base_url:
+        pnid = _extract_pnid_from_base_url(base_url)
+        # waba_id no viene de la URL; lo dejamos en None si no lo podemos deducir
+        return headers, base_url, "override", pnid, None
+
+    # 2) Por tenant (company_id)
+    if company_id:
+        try:
+            creds = get_whatsapp_credentials_for_company(company_id)
+            token = creds.get("access_token")
+            pnid  = creds.get("phone_number_id")
+            waba  = creds.get("waba_id")
+
+            if token and pnid:
+                token_headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                }
+                msg_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{pnid}/messages"
+                return token_headers, msg_url, "company", pnid, waba
+        except Exception:
+            logging.exception("[wa-creds] Error resolviendo por company_id")
+
+    # 3) Por teléfono (fallback)
+    if fallback_to_phone:
+        try:
+            clean = PhoneUtils.strip_34(fallback_to_phone)
+            creds = get_whatsapp_credentials_for_phone(clean)
+            token = creds.get("access_token") or creds.get("token")
+            pnid  = creds.get("phone_number_id")
+            waba  = creds.get("waba_id") or creds.get("business_id")
+
+            if token and pnid:
+                token_headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                }
+                msg_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{pnid}/messages"
+                return token_headers, msg_url, "phone", pnid, waba
+        except Exception:
+            logging.exception("[wa-creds] Error resolviendo por teléfono")
+
+    # 4) Defaults globales
+    try:
+        token = ACCESS_TOKEN
+        pnid  = PHONE_NUMBER_ID
+        waba  = WABA_ID
+        if token and pnid:
+            token_headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+            msg_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{pnid}/messages"
+            return token_headers, msg_url, "default", pnid, waba
+    except Exception:
+        logging.exception("[wa-creds] Error resolviendo defaults")
+
+    # Si todo falla, devolvemos vacío coherente
+    return {}, "", "none", None, None
 
 
 def get_whatsapp_credentials_for_phone(phone: str | None, company_id: str | None = None) -> dict:
