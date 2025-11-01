@@ -1954,7 +1954,7 @@ class WhatsAppService:
             self.base_url        = wc['base_url']
             self.headers         = wc['headers']
             self.api_base_url    = getattr(config, 'api_base_url', "https://test.solvify.es/api")
-    
+
     def send_template_message(
         self,
         to_phone: str,
@@ -1964,57 +1964,62 @@ class WhatsAppService:
         company_id: str | None = None,        # <-- NUEVO
         language: str | None = None,          # <-- opcional
         phone_number_id: str | None = None,   # <-- opcional
-        **kwargs                                # <-- compatibilidad futura
+        **kwargs                               # <-- compatibilidad futura
     ):
         try:
+            # --- Normalización de teléfono ---
             clean_phone = PhoneUtils.strip_34(to_phone)
             if not PhoneUtils.validate_spanish_phone(clean_phone):
                 raise ValueError(f"Número de teléfono inválido: {to_phone}")
+            to_e164 = PhoneUtils.add_34(clean_phone)  # '34XXXXXXXXX' (sin '+')
 
             # 1) Resolver tenant a usar (prioriza parámetro explícito)
             resolved_company_id = company_id or (template_data.get("company_id") if isinstance(template_data, dict) else None)
 
-            # 2) Resolver credenciales de envío (usa tu helper centralizado)
+            # 2) Resolver credenciales (tenant-aware)
             #    Prioridad: phone_number_id explícito > company_id > heurística por teléfono > defaults
-            creds = None
             if phone_number_id:
-                # Si tienes un helper 'get_whatsapp_credentials_for_pnid', úsalo aquí.
-                # Si no, tiramos del helper general con company_id.
-                creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=resolved_company_id)
-                # y forzamos a usar el PNID explícito si vino:
-                if creds:
-                    creds["phone_number_id"] = phone_number_id
+                creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=resolved_company_id) or {}
+                creds["phone_number_id"] = phone_number_id
             else:
-                creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=resolved_company_id)
+                creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=resolved_company_id) or {}
 
             headers = creds.get("headers", self.headers)
-            base_url = creds.get("base_url", self.base_url)
+            base_url = creds.get("base_url", self.base_url)  # ← En tus logs ya es .../{pnid}/messages
+            pnid     = creds.get("phone_number_id")
+
+            # Idioma (si no pasas, respeta payload)
+            lang_code = (language or "es_ES").lower()
 
             logger.info("=" * 80)
             logger.info(f"🔐 Sending template '{template_name}' con tenant:")
-            logger.info(f"📱 Phone: {clean_phone}")
+            logger.info(f"📱 Phone: {clean_phone} -> E164: {to_e164}")
             logger.info(f"🏢 Company ID: {resolved_company_id or 'Default'}")
-            logger.info(f"📞 Phone Number ID: {creds.get('phone_number_id', '')}")
+            logger.info(f"📞 Phone Number ID: {pnid}")
             logger.info(f"🔑 Token: {creds.get('access_token', '')[:20]}...")
             logger.info(f"🌐 Base URL: {base_url}")
             logger.info(f"🧾 Template data preview: {str(template_data)[:300]}")
             logger.info("=" * 80)
 
-            # 3) Construir payload (tu helper actual)
-            payload = self._build_template_payload(template_name, template_data, to_phone)
-            print(payload)
-            # Si quieres forzar idioma por parámetro, puedes ajustar aquí:
-            if language:
-                try:
-                    payload["template"]["language"]["code"] = language.lower()
-                except Exception:
-                    pass
+            # 3) Construir payload (tu helper actual) y forzar 'to' en E.164
+            payload = self._build_template_payload(template_name, template_data, to_e164)
+            try:
+                payload["to"] = to_e164
+                # fuerza idioma si se pasó por parámetro
+                if language:
+                    payload["template"]["language"]["code"] = lang_code
+            except Exception:
+                pass
 
-            # 4) Enviar
+            # 4) Enviar (usa base_url directamente: ya apunta a .../{pnid}/messages)
+            #    Si prefieres, podrías construir: request_url = f"https://graph.facebook.com/v22.0/{pnid}/messages"
+            request_url = base_url
+            print(payload)
             print("Headers:", headers)
             print("Payload:", payload)
-            print("Base URL:", base_url)
-            r = requests.post(base_url, headers=headers, json=payload, timeout=timeout)
+            print("Base URL:", request_url)
+
+            r = self.http.post(request_url, headers=headers, json=payload, timeout=timeout)
 
             if r.status_code // 100 == 2:
                 body = r.json()
@@ -2049,7 +2054,7 @@ class WhatsAppService:
                     if lang == "es_ES":
                         payload["template"]["language"]["code"] = "es"
                         self.logger.info("🔁 Reintentando con language=es (fallback de es_ES)")
-                        r2 = self.http.post(url, headers=headers, json=payload, timeout=timeout)
+                        r2 = self.http.post(request_url, headers=headers, json=payload, timeout=timeout)
                         if r2.status_code // 100 == 2:
                             body2 = r2.json()
                             msg_id2 = None
@@ -2058,7 +2063,7 @@ class WhatsAppService:
                             except Exception:
                                 pass
                             return True, msg_id2, payload
-                        # Si vuelve a fallar, log del segundo intento
+                        # Log segundo intento
                         try:
                             errj2 = r2.json()
                         except Exception:
@@ -2069,7 +2074,7 @@ class WhatsAppService:
                 except Exception:
                     pass
 
-            # --- (Opcional) Fallback si el HEADER no cuadra: quitar header y reintentar ---
+            # --- Fallback opcional: quitar HEADER si la plantilla no lo admite ---
             if r.status_code == 400 and any(x in err_msg for x in ["header", "components", "parameter"]):
                 try:
                     comps = payload["template"].get("components", [])
@@ -2079,7 +2084,7 @@ class WhatsAppService:
                         payload2 = dict(payload)
                         payload2["template"] = dict(payload["template"])
                         payload2["template"]["components"] = comps_sin_header
-                        r3 = self.http.post(url, headers=headers, json=payload2, timeout=timeout)
+                        r3 = self.http.post(request_url, headers=headers, json=payload2, timeout=timeout)
                         if r3.status_code // 100 == 2:
                             body3 = r3.json()
                             msg_id3 = None
@@ -2100,6 +2105,14 @@ class WhatsAppService:
 
             # Devuelve el error para que el endpoint lo propague
             return False, None, {"payload": payload, "meta_error": errj, "status": r.status_code}
+
+        except Exception:
+            # ←←← ESTE except cierra el try externo y evita el SyntaxError
+            self.logger.exception("❌ Excepción en send_template_message", extra={
+                "company_id": company_id, "to": to_phone, "template": template_name
+            })
+            return False, None, {}
+
 
     def _build_template_components(self, template_name: str, lead_data: dict, company_id: str | None):
         """
