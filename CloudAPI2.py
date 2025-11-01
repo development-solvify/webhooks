@@ -4431,7 +4431,6 @@ def get_cover_wb_for_phone(phone: str) -> str:
     except Exception:
         logger.exception(f"[get_whatsapp_credentials_for_phone] Error resolving credentials for phone {phone}")
         return default
-# Helper function to get company credentials
 def get_whatsapp_credentials_for_company(company_id: str) -> dict:
     """
     Lee credenciales de properties/object_property_values para el tenant.
@@ -4447,39 +4446,56 @@ def get_whatsapp_credentials_for_company(company_id: str) -> dict:
               AND p.property_name IN ('WHATSAPP_ACCESS_TOKEN','WHATSAPP_PHONE_NUMBER_ID','WHATSAPP_BUSINESS_ID','COMPANY_NAME')
         """
         rows = db_manager.execute_query(sql, [company_id], fetch_all=True) or []
-        kv = {name: val for (name, val) in rows if name}  # <-- convierte lista de tuplas a dict
+        kv = {name: val for (name, val) in rows if name}
 
-        access_token   = kv.get('WHATSAPP_ACCESS_TOKEN')   or ACCESS_TOKEN
-        phone_number_id= kv.get('WHATSAPP_PHONE_NUMBER_ID')or PHONE_NUMBER_ID
-        business_id    = kv.get('WHATSAPP_BUSINESS_ID')    or WABA_ID
-        company_name   = kv.get('COMPANY_NAME')            or "Default"
+        access_token    = kv.get('WHATSAPP_ACCESS_TOKEN')    or ACCESS_TOKEN
+        phone_number_id = kv.get('WHATSAPP_PHONE_NUMBER_ID') or PHONE_NUMBER_ID
+        business_id     = kv.get('WHATSAPP_BUSINESS_ID')     or WABA_ID
+        company_name    = kv.get('COMPANY_NAME')
+
+        # Fallback para company_name desde tabla companies si no hay property
+        if not company_name:
+            row = db_manager.execute_query(
+                "SELECT name FROM public.companies WHERE id = %s LIMIT 1",
+                [company_id],
+                fetch_one=True
+            )
+            if row:
+                company_name = row[0]
+        if not company_name:
+            company_name = "Default"
 
         base_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{phone_number_id}/messages"
-        headers  = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+        headers  = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
 
         return {
-            "waba_id": business_id,
-            "access_token": access_token,
+            "business_id":   business_id,      # <— antes devolvías 'waba_id'
+            "access_token":  access_token,
             "phone_number_id": phone_number_id,
-            "base_url": base_url,
-            "headers": headers,
-            "company_id": company_id,
-            "company_name": company_name,
+            "base_url":      base_url,
+            "headers":       headers,
+            "company_id":    company_id,
+            "company_name":  company_name,
         }
     except Exception:
         logging.exception("Error getting company credentials")
         # Fallback absoluto a defaults
         base_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{PHONE_NUMBER_ID}/messages"
         return {
-            "waba_id": WABA_ID,
-            "access_token": ACCESS_TOKEN,
+            "business_id":   WABA_ID,          # <— clave alineada con el logging
+            "access_token":  ACCESS_TOKEN,
             "phone_number_id": PHONE_NUMBER_ID,
-            "base_url": base_url,
-            "headers": {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"},
-            "company_id": "Default",
-            "company_name": "Default",
+            "base_url":      base_url,
+            "headers":       {
+                "Authorization": f"Bearer {ACCESS_TOKEN}",
+                "Content-Type": "application/json"
+            },
+            "company_id":    "Default",
+            "company_name":  "Default",
         }
-
 
 @app.route('/get_templates', methods=['GET'])
 def get_templates():
