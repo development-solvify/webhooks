@@ -1952,7 +1952,7 @@ class WhatsAppService:
             self.access_token    = wc['access_token']
             self.phone_number_id = wc['phone_number_id']
             self.base_url        = wc['base_url']
-            self.headers         = wc['headers']
+            self.headers         = wc['headers']``
             self.api_base_url    = getattr(config, 'api_base_url', "https://test.solvify.es/api")
 
     def send_template_message(
@@ -2426,7 +2426,7 @@ class WhatsAppService:
 
         # ======== PLANTILLAS CONOCIDAS (ajusta a tus definiciones reales en WBM) ========
 
-        if name == "agendar_llamada_inicial":
+        if name in ( "agendar_llamada_inicial","agendar_llamada" ):
             # Body: {{1}} = first_name
             # Botón URL dinámico con {{1}} = deal_id (definido así en WBM)
             first_name = (template_data or {}).get("first_name") or ""
