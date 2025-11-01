@@ -1954,96 +1954,90 @@ class WhatsAppService:
             self.base_url        = wc['base_url']
             self.headers         = wc['headers']
             self.api_base_url    = getattr(config, 'api_base_url', "https://test.solvify.es/api")
-
     def send_template_message(
         self,
-        to: str,
+        to_phone: str,
         template_name: str,
-        lead_data: dict,
-        company_id: str | None = None,   # <-- NUEVO
-        language: str | None = None,     # <-- opcional
-        phone_number_id: str | None = None,  # <-- opcional
-        **kwargs,                        # <-- traga cualquier otro arg futuro sin romper
+        template_data: dict,
+        timeout: int = 15,
+        company_id: str | None = None,        # <-- NUEVO
+        language: str | None = None,          # <-- opcional
+        phone_number_id: str | None = None,   # <-- opcional
+        **kwargs                                # <-- compatibilidad futura
     ):
-        """
-        Envía un mensaje de plantilla de WhatsApp.
-        Acepta company_id para resolver credenciales por tenant (multi-tenant).
-        language/phone_number_id son opcionales y **kwargs mantiene compatibilidad.
-        Retorna (success: bool, message_id: str | None, payload_enviado: dict)
-        """
         try:
-            # ---------- Resolución de credenciales por tenant (no invasiva) ----------
-            resolved_company_id = company_id or (lead_data.get("company_id") if isinstance(lead_data, dict) else None)
+            clean_phone = PhoneUtils.strip_34(to_phone)
+            if not PhoneUtils.validate_spanish_phone(clean_phone):
+                raise ValueError(f"Número de teléfono inválido: {to_phone}")
 
-            # Si tienes un gestor de credenciales por compañía, úsalo aquí.
-            # Si no, mantén tu lógica existente (ACCESS_TOKEN/PHONE_NUMBER_ID por defecto).
-            creds_access_token = getattr(self, "access_token", None)
-            creds_phone_number_id = getattr(self, "phone_number_id", None)
+            # 1) Resolver tenant a usar (prioriza parámetro explícito)
+            resolved_company_id = company_id or (template_data.get("company_id") if isinstance(template_data, dict) else None)
 
-            if hasattr(self, "cred_manager"):
-                if phone_number_id:
-                    creds = self.cred_manager.get_by_phone_number_id(phone_number_id)
-                elif resolved_company_id:
-                    creds = self.cred_manager.get_for_company(resolved_company_id)
-                else:
-                    creds = self.cred_manager.get_by_destination_or_default(to)
-
+            # 2) Resolver credenciales de envío (usa tu helper centralizado)
+            #    Prioridad: phone_number_id explícito > company_id > heurística por teléfono > defaults
+            creds = None
+            if phone_number_id:
+                # Si tienes un helper 'get_whatsapp_credentials_for_pnid', úsalo aquí.
+                # Si no, tiramos del helper general con company_id.
+                creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=resolved_company_id)
+                # y forzamos a usar el PNID explícito si vino:
                 if creds:
-                    creds_access_token = getattr(creds, "access_token", creds_access_token)
-                    creds_phone_number_id = getattr(creds, "phone_number_id", creds_phone_number_id)
+                    creds["phone_number_id"] = phone_number_id
+            else:
+                creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=resolved_company_id)
 
-            # ---------- Idioma por defecto si no viene ----------
-            lang_code = (language or "es").lower()
+            headers = creds.get("headers", self.headers)
+            base_url = creds.get("base_url", self.base_url)
 
-            # ---------- Construcción de payload (tu lógica original + mínimos cambios) ----------
-            components = self._build_template_components(template_name, lead_data, resolved_company_id) \
-                if hasattr(self, "_build_template_components") else []
+            logger.info("=" * 80)
+            logger.info(f"🔐 Sending template '{template_name}' con tenant:")
+            logger.info(f"📱 Phone: {clean_phone}")
+            logger.info(f"🏢 Company ID: {resolved_company_id or 'Default'}")
+            logger.info(f"📞 Phone Number ID: {creds.get('phone_number_id', '')}")
+            logger.info(f"🔑 Token: {creds.get('access_token', '')[:20]}...")
+            logger.info(f"🌐 Base URL: {base_url}")
+            logger.info(f"🧾 Template data preview: {str(template_data)[:300]}")
+            logger.info("=" * 80)
 
-            payload = {
-                "messaging_product": "whatsapp",
-                "to": to,
-                "type": "template",
-                "template": {
-                    "name": template_name,
-                    "language": {"code": lang_code},
-                    "components": components or []
-                }
-            }
+            # 3) Construir payload (tu helper actual)
+            payload = self._build_template_payload(template_name, template_data, to_phone)
 
-            url = f"https://graph.facebook.com/v20.0/{creds_phone_number_id}/messages"
-            headers = {
-                "Authorization": f"Bearer {creds_access_token}",
-                "Content-Type": "application/json",
-            }
-
-            resp = self.http.post(url, headers=headers, json=payload)  # usa self.http (Session)
-            if resp.status_code // 100 == 2:
-                body = resp.json()
-                message_id = None
+            # Si quieres forzar idioma por parámetro, puedes ajustar aquí:
+            if language:
                 try:
-                    message_id = (body.get("messages") or [{}])[0].get("id")
+                    payload["template"]["language"]["code"] = language.lower()
                 except Exception:
                     pass
-                return True, message_id, payload
 
-            # Log de error
+            # 4) Enviar
+            r = requests.post(base_url, headers=headers, json=payload, timeout=timeout)
+            if r.status_code // 100 == 2:
+                body = r.json()
+                msg_id = None
+                try:
+                    msg_id = (body.get("messages") or [{}])[0].get("id")
+                except Exception:
+                    pass
+                return True, msg_id, payload
+
+            # Error HTTP → log detallado
             try:
-                err = resp.json()
+                err = r.json()
             except Exception:
-                err = {"raw": resp.text}
-            self.logger.error("❌ Error enviando template", extra={
-                "company_id": resolved_company_id,
-                "status": resp.status_code,
-                "error": err
+                err = {"raw": r.text}
+            logger.error("❌ Error enviando template", extra={
+                "status": r.status_code,
+                "error": err,
+                "company_id": resolved_company_id
             })
             return False, None, payload
 
         except Exception:
-            self.logger.exception("❌ Excepción en send_template_message", extra={
-                "company_id": company_id, "to": to, "template": template_name
+            logger.exception("❌ Excepción en send_template_message", extra={
+                "company_id": company_id, "to": to_phone, "template": template_name
             })
             return False, None, {}
-        
+       
     def _build_template_components(self, template_name: str, lead_data: dict, company_id: str | None):
         """
         Devuelve los 'components' del template (HEADER/BODY/BUTTONS) según tenant/plantilla.
