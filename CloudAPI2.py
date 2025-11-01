@@ -7931,20 +7931,22 @@ def migrate_existing_message_statuses(db_manager) -> dict:
         }
 
 def _get_lead_phone_tenant(dbm, lead_id: str, company_id: str) -> str | None:
-    # Saca el teléfono del lead del tenant correcto
+    # Tabla y columna correctas: public.leads.id
     sql = """
     SELECT phone
-    FROM leads
-    WHERE lead_id = %s AND company_id = %s
+    FROM public.leads
+    WHERE id = %s AND company_id = %s
     LIMIT 1
     """
-    row = dbm.fetch_one(sql, [lead_id, company_id])
-    return row["phone"] if row else None
+    row = dbm.execute_query(sql, [lead_id, company_id], fetch_one=True)
+    return row[0] if row else None
 
 
 def _last_template_sent_ts_tenant(dbm, phone: str, company_id: str):
-    # Busca el último template ENVIADO por este tenant a este teléfono (normalizado)
-    candidates = _normalize_phone_candidates(phone)  # p.ej. ['608684495', '34608684495']
+    # Último template OUT por tenant y teléfono (normalizado)
+    candidates = _normalize_phone_candidates(phone)  # p.ej. ['608684495','34608684495']
+
+    # Opción A: usando ANY con array (si tu driver admite listas -> text[])
     sql = """
     SELECT created_at
     FROM external_messages
@@ -7955,13 +7957,28 @@ def _last_template_sent_ts_tenant(dbm, phone: str, company_id: str):
     ORDER BY created_at DESC
     LIMIT 1
     """
-    row = dbm.fetch_one(sql, [company_id, candidates])
-    return row["created_at"] if row else None
+    row = dbm.execute_query(sql, [company_id, candidates], fetch_one=True)
+    return row[0] if row else None
+
+    # --- Si tuvieras problemas con ANY(list) en pg8000, usa en su lugar esta variante IN (%s,%s):
+    # sql = """
+    # SELECT created_at
+    # FROM external_messages
+    # WHERE company_id = %s
+    #   AND direction = 'out'
+    #   AND type = 'template'
+    #   AND phone IN (%s, %s)
+    # ORDER BY created_at DESC
+    # LIMIT 1
+    # """
+    # cand0, cand1 = (candidates + candidates)[0:2]
+    # row = dbm.execute_query(sql, [company_id, cand0, cand1], fetch_one=True)
+    # return row[0] if row else None
 
 
 def _last_user_message_ts_tenant(dbm, phone: str, company_id: str):
-    # Último mensaje del USUARIO (entrante) en este tenant
     candidates = _normalize_phone_candidates(phone)
+
     sql = """
     SELECT created_at
     FROM external_messages
@@ -7971,8 +7988,10 @@ def _last_user_message_ts_tenant(dbm, phone: str, company_id: str):
     ORDER BY created_at DESC
     LIMIT 1
     """
-    row = dbm.fetch_one(sql, [company_id, candidates])
-    return row["created_at"] if row else None
+    row = dbm.execute_query(sql, [company_id, candidates], fetch_one=True)
+    return row[0] if row else None
+
+    # Variante IN (%s,%s) si hiciera falta (mismo patrón que arriba).
 
 
 def _can_send_template_tenant(dbm, phone: str, company_id: str, last_template_ts):
