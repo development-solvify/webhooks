@@ -3957,6 +3957,7 @@ def send_file_endpoint():
 
         # 3) Resolver deal y company por teléfono si no vienen
         #    (deal más reciente no eliminado)
+        # 3) Resolver deal y company por teléfono si no vienen
         deal_row = _one(db_exec(
             dbm,
             """
@@ -3972,10 +3973,51 @@ def send_file_endpoint():
             (msisdn_db,),
             fetch_one=True
         ))
+
+        deal_id_db = None
+        company_id_db = None
+
         if deal_row:
-            deal_id = _first_scalar(deal_row[0]) if isinstance(deal_row, (list, tuple)) else deal_row.get('deal_id')
-            if not company_id:
-                company_id = deal_row[1] if isinstance(deal_row, (list, tuple)) else deal_row.get('company_id')
+            if isinstance(deal_row, (list, tuple)):
+                # psycopg2/pg return tuples
+                # cuidado: puede venir como (UUID, UUID)
+                deal_id_db = deal_row[0]
+                company_id_db = deal_row[1] if len(deal_row) > 1 else None
+            elif isinstance(deal_row, dict):
+                # por si el driver devuelve dict
+                deal_id_db = deal_row.get('deal_id')
+                company_id_db = deal_row.get('company_id')
+            else:
+                # escalar (ej. UUID) → consideramos que es sólo deal_id
+                deal_id_db = deal_row
+
+        # Normaliza a str si existen
+        deal_id = str(deal_id_db) if deal_id_db else None
+        if not company_id and company_id_db:
+            company_id = str(company_id_db)
+
+        # Si sigue sin company_id, último intento: companies del lead_id explícito
+        if not company_id and actor_is_lead:
+            cid_row = _one(db_exec(
+                dbm,
+                """
+                SELECT d.company_id
+                FROM public.deals d
+                WHERE d.lead_id = %s AND d.is_deleted = false
+                ORDER BY d.created_at DESC NULLS LAST
+                LIMIT 1
+                """,
+                (any_id,),
+                fetch_one=True
+            ))
+            if cid_row:
+                # puede venir como tupla, dict o escalar
+                if isinstance(cid_row, (list, tuple)):
+                    company_id = str(cid_row[0]) if cid_row else None
+                elif isinstance(cid_row, dict):
+                    company_id = str(cid_row.get('company_id')) if cid_row.get('company_id') else None
+                else:
+                    company_id = str(cid_row)
 
         # Si sigue sin company_id, último intento: companies del lead_id explícito
         if not company_id and actor_is_lead:
