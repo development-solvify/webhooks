@@ -1960,49 +1960,44 @@ class WhatsAppService:
         to: str,
         template_name: str,
         lead_data: dict,
-        company_id: str | None = None,
-        language: str | None = None,
-        phone_number_id: str | None = None,
+        company_id: str | None = None,   # <-- NUEVO
+        language: str | None = None,     # <-- opcional
+        phone_number_id: str | None = None,  # <-- opcional
+        **kwargs,                        # <-- traga cualquier otro arg futuro sin romper
     ):
         """
-        Envía un mensaje de plantilla usando el contexto del tenant.
-        - company_id: fuerza la resolución de credenciales por compañía (multi-tenant).
-        - language: opcional; si no se pasa, se resuelve por mapeo del template o default ('es').
-        - phone_number_id: opcional; si se pasa, tiene prioridad sobre las credenciales por company.
+        Envía un mensaje de plantilla de WhatsApp.
+        Acepta company_id para resolver credenciales por tenant (multi-tenant).
+        language/phone_number_id son opcionales y **kwargs mantiene compatibilidad.
         Retorna (success: bool, message_id: str | None, payload_enviado: dict)
         """
-
         try:
-            # 1) Resolver tenant/credenciales
-            resolved_company_id = company_id or lead_data.get('company_id')
-            creds = None
-            if phone_number_id:
-                # Prioridad explícita si ya sabes el PNID
-                creds = self.cred_manager.get_by_phone_number_id(phone_number_id)
-            elif resolved_company_id:
-                creds = self.cred_manager.get_for_company(resolved_company_id)
-            else:
-                # Fallback (último recurso): inferir por número destino o configuración por defecto
-                creds = self.cred_manager.get_by_destination_or_default(to)
+            # ---------- Resolución de credenciales por tenant (no invasiva) ----------
+            resolved_company_id = company_id or (lead_data.get("company_id") if isinstance(lead_data, dict) else None)
 
-            if not creds or not creds.access_token or not creds.phone_number_id:
-                self.logger.error("❌ No credentials resolved for template send", extra={
-                    "company_id": resolved_company_id, "to": to
-                })
-                return False, None, {}
+            # Si tienes un gestor de credenciales por compañía, úsalo aquí.
+            # Si no, mantén tu lógica existente (ACCESS_TOKEN/PHONE_NUMBER_ID por defecto).
+            creds_access_token = getattr(self, "access_token", None)
+            creds_phone_number_id = getattr(self, "phone_number_id", None)
 
-            # 2) Resolver idioma/namespace del template
-            #    - Primero, intenta un mapeo por tenant y template.
-            #    - Si no hay, usa 'es' por defecto.
-            tpl_cfg = self.cred_manager.get_template_config(
-                template_name=template_name,
-                company_id=resolved_company_id
-            ) or {}
-            lang = (language or tpl_cfg.get('language') or 'es').lower()
-            namespace = tpl_cfg.get('namespace')  # opcional; Meta ya no exige namespace en body, pero guárdalo si lo usas en tus logs
+            if hasattr(self, "cred_manager"):
+                if phone_number_id:
+                    creds = self.cred_manager.get_by_phone_number_id(phone_number_id)
+                elif resolved_company_id:
+                    creds = self.cred_manager.get_for_company(resolved_company_id)
+                else:
+                    creds = self.cred_manager.get_by_destination_or_default(to)
 
-            # 3) Construir componentes de la plantilla (variables) por tenant/template
-            components = self._build_template_components(template_name, lead_data, resolved_company_id)
+                if creds:
+                    creds_access_token = getattr(creds, "access_token", creds_access_token)
+                    creds_phone_number_id = getattr(creds, "phone_number_id", creds_phone_number_id)
+
+            # ---------- Idioma por defecto si no viene ----------
+            lang_code = (language or "es").lower()
+
+            # ---------- Construcción de payload (tu lógica original + mínimos cambios) ----------
+            components = self._build_template_components(template_name, lead_data, resolved_company_id) \
+                if hasattr(self, "_build_template_components") else []
 
             payload = {
                 "messaging_product": "whatsapp",
@@ -2010,37 +2005,28 @@ class WhatsAppService:
                 "type": "template",
                 "template": {
                     "name": template_name,
-                    "language": {"code": lang},
+                    "language": {"code": lang_code},
                     "components": components or []
                 }
             }
 
-            url = f"https://graph.facebook.com/v20.0/{creds.phone_number_id}/messages"
+            url = f"https://graph.facebook.com/v20.0/{creds_phone_number_id}/messages"
             headers = {
-                "Authorization": f"Bearer {creds.access_token}",
-                "Content-Type": "application/json"
+                "Authorization": f"Bearer {creds_access_token}",
+                "Content-Type": "application/json",
             }
 
-            self.logger.info("📨 Enviando template", extra={
-                "company_id": resolved_company_id,
-                "to": to,
-                "template": template_name,
-                "language": lang,
-                "phone_number_id": creds.phone_number_id
-            })
-
-            resp = self.http.post(url, headers=headers, json=payload)
+            resp = self.http.post(url, headers=headers, json=payload)  # usa self.http (Session)
             if resp.status_code // 100 == 2:
                 body = resp.json()
                 message_id = None
-                # Meta suele devolver message IDs en 'messages'
                 try:
                     message_id = (body.get("messages") or [{}])[0].get("id")
                 except Exception:
                     pass
                 return True, message_id, payload
 
-            # Error HTTP
+            # Log de error
             try:
                 err = resp.json()
             except Exception:
@@ -2052,12 +2038,12 @@ class WhatsAppService:
             })
             return False, None, payload
 
-        except Exception as e:
+        except Exception:
             self.logger.exception("❌ Excepción en send_template_message", extra={
                 "company_id": company_id, "to": to, "template": template_name
             })
             return False, None, {}
-
+        
     def _build_template_components(self, template_name: str, lead_data: dict, company_id: str | None):
         """
         Devuelve los 'components' del template (HEADER/BODY/BUTTONS) según tenant/plantilla.
