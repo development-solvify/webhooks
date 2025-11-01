@@ -1097,7 +1097,6 @@ class ExtendedFileService:
         except Exception as e:
             logger.error("Error enviando media: %s", e)
             return False, None
-
     def _send_whatsapp_document_message(
         self,
         phone: str,
@@ -1119,9 +1118,12 @@ class ExtendedFileService:
             logger.exception("[_send_whatsapp_document_message] Error normalizando teléfono")
             return False, None
 
-        # 2) Resolver credenciales
-        token_headers, url, source = self._resolve_wa_creds_for_send(
-            phone=clean_phone, company_id=company_id, headers=headers, base_url=base_url
+        # 2) Resolver credenciales estrictamente (prioriza company_id)
+        token_headers, url, source, pnid, waba = _resolve_wa_creds_for_send_strict(
+            company_id=company_id,
+            fallback_to_phone=clean_phone,   # opcional: comenta si no quieres fallback por teléfono
+            headers=headers,
+            base_url=base_url
         )
         if not token_headers or not url:
             logger.error("[_send_whatsapp_document_message] No hay headers/base_url. Abortando.")
@@ -1132,9 +1134,7 @@ class ExtendedFileService:
             "messaging_product": "whatsapp",
             "to": destination,
             "type": "document",
-            "document": {
-                "link": public_url
-            }
+            "document": {"link": public_url}
         }
         if filename:
             payload["document"]["filename"] = filename
@@ -1143,40 +1143,40 @@ class ExtendedFileService:
 
         # 4) Enviar
         try:
-            masked = ""
+            # Mask token para logs
+            masked = "***"
             try:
                 auth = token_headers.get("Authorization", "")
                 if auth.startswith("Bearer "):
                     t = auth[7:]
                     masked = (t[:6] + "..." + t[-6:]) if len(t) > 12 else "***"
             except Exception:
-                masked = "***"
+                pass
 
             logger.info(
-                f"[_send_whatsapp_document_message] Enviando DOC a {destination} "
-                f"(source={source}, base_url={url}, token={masked}) | "
-                f"filename={filename or 'N/A'} | caption={'yes' if caption else 'no'}"
+                "[_send_whatsapp_document_message] Enviando documento a %s "
+                "(source=%s, pnid=%s, waba=%s, base_url=%s, token=%s) | filename=%s | caption=%s",
+                destination, source, pnid, waba, url, masked, (filename or "N/A"), bool(caption)
             )
 
             resp = requests.post(url, headers=token_headers, json=payload, timeout=30)
             if not resp.ok:
-                logger.error(
-                    f"Error {resp.status_code} enviando documento: {resp.text} (source={source})"
-                )
+                logger.error("Error %s enviando documento: %s (source=%s, pnid=%s)",
+                            resp.status_code, resp.text, source, pnid)
             resp.raise_for_status()
 
             body = resp.json()
             lst = body.get("messages") or []
-            message_id = lst[0]["id"] if lst and "id" in lst[0] else None
+            message_id = lst[0]["id"] if lst and isinstance(lst[0], dict) and "id" in lst[0] else None
 
-            logger.info(f"Document message sent successfully: {message_id} (source={source})")
+            logger.info("Document message sent successfully: %s (source=%s, pnid=%s)", message_id, source, pnid)
             return True, message_id
 
         except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTPError enviando documento: {e}")
+            logger.error("HTTPError enviando documento: %s | detail=%s", e, getattr(e.response, "text", ""))
             return False, None
         except Exception as e:
-            logger.error(f"Error enviando documento: {e}")
+            logger.error("Error enviando documento: %s", e)
             return False, None
 
     def get_supported_types_info(self) -> dict:
