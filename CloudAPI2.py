@@ -7952,7 +7952,7 @@ def _last_template_sent_ts_tenant(dbm, phone: str, company_id: str):
     FROM external_messages
     WHERE company_id = %s
       AND from_me = 'true'
-      AND status ILIKE '%'template%'
+      AND status ILIKE '%template%'
       AND sender_phone = ANY(%s)
     ORDER BY created_at DESC
     LIMIT 1
