@@ -2015,6 +2015,7 @@ class WhatsAppService:
             print("Payload:", payload)
             print("Base URL:", base_url)
             r = requests.post(base_url, headers=headers, json=payload, timeout=timeout)
+
             if r.status_code // 100 == 2:
                 body = r.json()
                 msg_id = None
@@ -2024,24 +2025,82 @@ class WhatsAppService:
                     pass
                 return True, msg_id, payload
 
-            # Error HTTP → log detallado
+            # --- LECTURA DETALLADA DEL ERROR ---
+            resp_text = r.text
             try:
-                err = r.json()
+                errj = r.json()
             except Exception:
-                err = {"raw": r.text}
-            logger.error("❌ Error enviando template", extra={
-                "status": r.status_code,
-                "error": err,
-                "company_id": resolved_company_id
-            })
-            return False, None, payload
+                errj = {"raw": resp_text}
 
-        except Exception:
-            logger.exception("❌ Excepción en send_template_message", extra={
-                "company_id": company_id, "to": to_phone, "template": template_name
-            })
-            return False, None, {}
-       
+            self.logger.error(
+                "❌ Error enviando template | status=%s | error=%s | payload=%s",
+                r.status_code, str(errj)[:2000], str(payload)[:1000]
+            )
+
+            # --- Fallback rápido por idioma: es_ES -> es ---
+            try:
+                err_msg = (errj.get("error") or {}).get("message", "").lower()
+            except Exception:
+                err_msg = ""
+
+            if r.status_code == 400 and ("language" in err_msg or "invalid parameter" in err_msg):
+                try:
+                    lang = payload["template"]["language"]["code"]
+                    if lang == "es_ES":
+                        payload["template"]["language"]["code"] = "es"
+                        self.logger.info("🔁 Reintentando con language=es (fallback de es_ES)")
+                        r2 = self.http.post(url, headers=headers, json=payload, timeout=timeout)
+                        if r2.status_code // 100 == 2:
+                            body2 = r2.json()
+                            msg_id2 = None
+                            try:
+                                msg_id2 = (body2.get("messages") or [{}])[0].get("id")
+                            except Exception:
+                                pass
+                            return True, msg_id2, payload
+                        # Si vuelve a fallar, log del segundo intento
+                        try:
+                            errj2 = r2.json()
+                        except Exception:
+                            errj2 = {"raw": r2.text}
+                        self.logger.error("❌ Segundo intento (language=es) falló | status=%s | error=%s",
+                                        r2.status_code, str(errj2)[:2000])
+                        return False, None, {"payload": payload, "meta_error": errj2, "status": r2.status_code}
+                except Exception:
+                    pass
+
+            # --- (Opcional) Fallback si el HEADER no cuadra: quitar header y reintentar ---
+            if r.status_code == 400 and any(x in err_msg for x in ["header", "components", "parameter"]):
+                try:
+                    comps = payload["template"].get("components", [])
+                    comps_sin_header = [c for c in comps if c.get("type") != "header"]
+                    if len(comps) != len(comps_sin_header):
+                        self.logger.info("🔁 Reintentando sin HEADER (posible mismatch de plantilla/imagen)")
+                        payload2 = dict(payload)
+                        payload2["template"] = dict(payload["template"])
+                        payload2["template"]["components"] = comps_sin_header
+                        r3 = self.http.post(url, headers=headers, json=payload2, timeout=timeout)
+                        if r3.status_code // 100 == 2:
+                            body3 = r3.json()
+                            msg_id3 = None
+                            try:
+                                msg_id3 = (body3.get("messages") or [{}])[0].get("id")
+                            except Exception:
+                                pass
+                            return True, msg_id3, payload2
+                        try:
+                            errj3 = r3.json()
+                        except Exception:
+                            errj3 = {"raw": r3.text}
+                        self.logger.error("❌ Reintento sin HEADER falló | status=%s | error=%s",
+                                        r3.status_code, str(errj3)[:2000])
+                        return False, None, {"payload": payload2, "meta_error": errj3, "status": r3.status_code}
+                except Exception:
+                    pass
+
+            # Devuelve el error para que el endpoint lo propague
+            return False, None, {"payload": payload, "meta_error": errj, "status": r.status_code}
+
     def _build_template_components(self, template_name: str, lead_data: dict, company_id: str | None):
         """
         Devuelve los 'components' del template (HEADER/BODY/BUTTONS) según tenant/plantilla.
