@@ -7983,7 +7983,7 @@ def _last_user_message_ts_tenant(dbm, phone: str, company_id: str):
     SELECT created_at
     FROM external_messages
     WHERE company_id = %s
-      AND direction = 'in'
+      AND from_me = 'false'
       AND phone = ANY(%s)
     ORDER BY created_at DESC
     LIMIT 1
