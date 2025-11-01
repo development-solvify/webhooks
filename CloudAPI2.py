@@ -4040,13 +4040,55 @@ def send_file_endpoint():
         # --- Aplicar credenciales del tenant al WhatsApp client de ExtendedFileService ---
         if company_id:
             try:
-                tenant = get_whatsapp_credentials_for_company(company_id)
-                # Pisamos la config en runtime para que ExtendedFileService utilice el tenant correcto
-                config.whatsapp_config['access_token']    = tenant['access_token']
-                config.whatsapp_config['phone_number_id'] = tenant['phone_number_id']
-                config.whatsapp_config['waba_id']         = tenant['waba_id']
-                config.whatsapp_config['base_url']        = tenant['base_url']
-                config.whatsapp_config['headers']         = tenant['headers']
+                # --- Aplicar credenciales por compañía (robusto a claves distintas) ---
+                tenant = get_whatsapp_credentials_for_company(company_id)  # puede devolver dict con varias convenciones
+
+                # Acepta varias keys posibles
+                waba_id = (
+                    (tenant or {}).get('waba_id')
+                    or (tenant or {}).get('business_id')
+                    or (tenant or {}).get('WHATSAPP_BUSINESS_ID')
+                )
+                access_token = (
+                    (tenant or {}).get('access_token')
+                    or (tenant or {}).get('token')
+                    or (tenant or {}).get('WHATSAPP_ACCESS_TOKEN')
+                )
+                phone_number_id = (
+                    (tenant or {}).get('phone_number_id')
+                    or (tenant or {}).get('WHATSAPP_PHONE_NUMBER_ID')
+                )
+
+                # Verificación mínima: necesitamos al menos token y phone_number_id para enviar
+                if access_token and phone_number_id:
+                    config.whatsapp_config['access_token'] = access_token
+                    config.whatsapp_config['phone_number_id'] = phone_number_id
+                    if waba_id:
+                        config.whatsapp_config['waba_id'] = waba_id  # opcional: sólo si viene
+
+                    # Recalcular headers y base_url con las credenciales del tenant
+                    headers = {
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/json",
+                    }
+                    base_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{phone_number_id}/messages"
+
+                    logger.info(
+                        f"[send_file_extended] Credenciales aplicadas para company_id={company_id} "
+                        f"(pnid={phone_number_id}, waba_id={waba_id or 'N/A'})"
+                    )
+                else:
+                    # No tenemos credenciales completas: fallback a defaults
+                    headers = {
+                        "Authorization": f"Bearer {ACCESS_TOKEN}",
+                        "Content-Type": "application/json",
+                    }
+                    base_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{PHONE_NUMBER_ID}/messages"
+                    logger.error(
+                        f"[send_file_extended] No se pudieron aplicar credenciales para company_id={company_id}. "
+                        f"Usando defaults."
+                    )
+
             except Exception:
                 logger.exception(f"[send_file_extended] No se pudieron aplicar credenciales para company_id={company_id}. Usando defaults.")
 
