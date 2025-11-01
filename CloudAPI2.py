@@ -1103,11 +1103,11 @@ class Config:
     """Centralized configuration management with company cache support"""
     def __init__(self, config_path=None, company_id=None, supabase_client=None):
         self._logger = logging.getLogger(__name__)
-        self._init_logging()
         self.config = configparser.ConfigParser()
         if config_path is None:
             config_path = 'scripts.conf'
         self.config.read(config_path)
+        self._init_logging()
         self.company_id = company_id
         self.supabase_client = supabase_client
         self.company_config = None
