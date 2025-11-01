@@ -1103,6 +1103,7 @@ class Config:
     """Centralized configuration management with company cache support"""
     def __init__(self, config_path=None, company_id=None, supabase_client=None):
         self._logger = logging.getLogger(__name__)
+        self._init_logging()
         self.config = configparser.ConfigParser()
         if config_path is None:
             config_path = 'scripts.conf'
@@ -1129,6 +1130,74 @@ class Config:
         
         # Validar config crítica
         self._validate_critical_config()
+
+    def _init_logging(self):
+        import logging
+        from logging.handlers import TimedRotatingFileHandler
+
+        # Lee la sección LOGGING del INI, tolerando mayúsculas/minúsculas
+        def _opt(section, key, default=None):
+            if not self.config.has_section(section):
+                return default
+            # intenta exacto, lower y upper
+            for k in (key, key.lower(), key.upper()):
+                if self.config.has_option(section, k):
+                    return self.config.get(section, k)
+            return default
+
+        level_name = (_opt('LOGGING', 'LOG_LEVEL', 'INFO') or 'INFO').upper()
+        fmt        = _opt('LOGGING', 'LOG_FORMAT', '%(asctime)s | %(levelname)s | %(name)s | %(message)s')
+        log_file   = _opt('LOGGING', 'LOG_FILE', None)
+        console_lv = (_opt('LOGGING', 'CONSOLE_LOG_LEVEL', level_name) or level_name).upper()
+
+        self.log_config = {
+            'level': getattr(logging, level_name, logging.INFO),
+            'file': log_file,
+            'format': fmt,
+            'console_level': getattr(logging, console_lv, logging.INFO),
+        }
+
+        # Handlers
+        handlers = []
+
+        if log_file:
+            fh = TimedRotatingFileHandler(log_file, when="midnight", backupCount=7, encoding="utf-8")
+            fh.setLevel(self.log_config['level'])
+            fh.setFormatter(logging.Formatter(fmt))
+            handlers.append(fh)
+
+        ch = logging.StreamHandler()
+        ch.setLevel(self.log_config['console_level'])
+        ch.setFormatter(logging.Formatter(fmt))
+        handlers.append(ch)
+
+        logging.basicConfig(level=self.log_config['level'], handlers=handlers, format=fmt)
+
+        # Silenciar librerías ruidosas
+        logging.getLogger("werkzeug").setLevel(logging.WARNING)
+        logging.getLogger("urllib3").setLevel(logging.WARNING)
+        logging.getLogger("requests").setLevel(logging.WARNING)
+        # logging.getLogger("sqlalchemy").setLevel(logging.WARNING)  # si la usas
+        logging.getLogger("werkzeug").propagate = False
+        logging.getLogger("urllib3").propagate = False
+        logging.getLogger("requests").propagate = False
+
+        # Redactar secretos en logs (muy recomendable)
+        class _RedactSecrets(logging.Filter):
+            def filter(self, record):
+                msg = record.getMessage()
+                msg = msg.replace("Authorization: Bearer ", "Authorization: Bearer ***")
+                msg = msg.replace("Authorization': 'Bearer ", "Authorization': 'Bearer ***")
+                for key in ("access_token", "ACCESS_TOKEN", "X-Access-Token"):
+                    msg = msg.replace(f"{key}=", f"{key}=***")
+                    msg = msg.replace(f"{key}': '", f"{key}': '***")
+                record.msg = msg
+                record.args = ()
+                return True
+
+        root = logging.getLogger()
+        for h in root.handlers:
+            h.addFilter(_RedactSecrets())
 
     def _apply_company_config(self):
         """Apply cached company configuration"""
