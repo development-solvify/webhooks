@@ -1926,7 +1926,6 @@ except Exception:
 
 class WhatsAppService:
     """WhatsApp API service con templates y logging de errores"""
-
     def __init__(self, config=None, http_client=None, logger=None):
         # === Compatibilidad hacia atrás ===
         # Si no pasan http_client/logger, se auto-configuran.
