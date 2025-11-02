@@ -2481,8 +2481,7 @@ class WhatsAppService:
             to_phone=to_phone,
             template_data=template_data,
             template_name=template_name,
-            company_id=company_id or (template_data or {}).get("company_id"),
-            phone_number_id=phone_number_id
+            company_id=company_id or (template_data or {}).get("company_id")
         )
 
         to_e164 = normalize_es(to_phone)
