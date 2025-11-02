@@ -1105,7 +1105,7 @@ class ExtendedFileService:
     def process_whatsapp_media(self, media_id: str, object_reference_type: str, 
                               object_reference_id: str, original_filename: str = None) -> dict:
         """Compatibility method"""
-        return self.process_whatsapp_media_extended(media_id, object_reference_type, object_reference_id, original_filename)
+        return self.process_whatsapp_media_extended(media_id, object_reference_type, object_reference_id, original_filename,company_id=None)
 
     def send_media_to_whatsapp(self, phone: str, file_path: str, 
                               media_type: str, caption: str = None) -> tuple[bool, str]:
@@ -5719,7 +5719,7 @@ def webhook_company(company_id):
                                 if file_service:
                                     try:
                                         file_result = file_service.process_whatsapp_media_extended(
-                                            media_id, object_ref_type, object_ref_id, original_filename, sender_phone
+                                            media_id, object_ref_type, object_ref_id, original_filename, sender_phone, company_id=company_id
                                         )
                                         file_info = {
                                             'document_id': file_result['document_id'],
@@ -6020,7 +6020,7 @@ def webhook():
                                     try:
                                         # PASAR sender_phone para que get_whatsapp_media_url reciba el teléfono correcto
                                         file_result = file_service.process_whatsapp_media_extended(
-                                            media_id, object_ref_type, object_ref_id, original_filename, sender_phone
+                                            media_id, object_ref_type, object_ref_id, original_filename, sender_phone, company_id=company_id
                                         )
                                         # 🔧 MEJORAR: Construir file_info más completo para el JSON
                                         file_info = {
