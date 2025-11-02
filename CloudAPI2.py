@@ -382,7 +382,7 @@ class ExtendedFileService:
         try:
             # Generate file path with date organization
             date_folder = datetime.now().strftime("%Y/%m/%d")
-            safe_filename = self._sanitize_filename(filename)
+            safe_filename = filename
             file_hash = hashlib.md5(file_content).hexdigest()[:8]
             file_path = f"whatsapp-media/{date_folder}/{file_hash}_{safe_filename}"
             
