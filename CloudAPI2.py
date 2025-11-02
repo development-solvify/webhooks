@@ -2349,6 +2349,7 @@ class WhatsAppService:
 
     def _resolve_cover_url(self, to_phone: str, template_data: dict | None) -> str | None:
 
+        cover = None
         try:
             # Intenta por phone -> company -> custom_properties
             custom_props, _, _ = company_cache.get_config_by_phone(to_phone)
