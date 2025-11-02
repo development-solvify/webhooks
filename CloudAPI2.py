@@ -445,7 +445,7 @@ class ExtendedFileService:
             # Resolver credenciales por teléfono si se pasa
             if phone:
                 logger.info(f"[MEDIA DEBUG] Phone provided: {phone}, getting credentials...")
-                creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=company_id or (template_data.get("company_id") if isinstance(template_data, dict) else None))
+                creds = get_whatsapp_credentials_for_phone(phone, company_id=company_id or (template_data.get("company_id") if isinstance(template_data, dict) else None))
                 logger.info(f"[MEDIA DEBUG] Credentials result: {creds}")
                 token = creds.get('access_token')
                 logger.info(f"[MEDIA DEBUG] Token from credentials: {token[:20] if token else 'None'}...")
