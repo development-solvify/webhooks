@@ -2347,6 +2347,32 @@ class WhatsAppService:
             logger.error(f"❌ Excepción enviando document: {e}", exc_info=True)
             return False, None, {}
 
+    def _resolve_cover_url(self, to_phone: str, template_data: dict | None) -> str | None:
+        # 1) Si viene desde la llamada, gana
+        if template_data and template_data.get("cover_url"):
+            return template_data.get("cover_url")
+
+        cover = None
+        try:
+            # Intenta por phone -> company -> custom_properties
+            custom_props, _, _ = company_cache.get_config_by_phone(to_phone)
+            if isinstance(custom_props, dict):
+                # Prioridades y alias
+                cover = (
+                    custom_props.get("WHATSAPP_COVER")
+                    or custom_props.get("COVER_WB")
+                    or custom_props.get("COVER_URL")
+                )
+        except Exception:
+            pass
+
+        # 3) Default configurado en la instancia
+        if not cover:
+            cover = getattr(self, "default_cover_url", None)
+
+        # 4) Fallback final
+        return cover or "https://app.solvify.es/cover-whats.jpg"
+    
     def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str) -> dict:
         """
         Construye el payload de envío de plantilla para la Cloud API de WhatsApp.
@@ -2369,11 +2395,9 @@ class WhatsAppService:
 
         # Idioma y cover
         lang = (template_data or {}).get("language") or "es_ES"
-        cover_url = (
-            (template_data or {}).get("cover_url")
-            or getattr(self, "default_cover_url", None)
-            or "https://app.solvify.es/cover-whats.jpg"
-        )
+
+        # ⬇️ NUEVO: resolver cover con prioridad (payload → tenant → default → fallback)
+        cover_url = self._resolve_cover_url(to_phone, template_data)
 
         to_e164 = normalize_es(to_phone)
         components = []
