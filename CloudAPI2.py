@@ -1968,7 +1968,7 @@ class WhatsAppService:
             logger.info("=" * 80)
 
             # 3) Construir payload (tu helper actual) y forzar 'to' en E.164
-            payload = self._build_template_payload(template_name, template_data, to_e164)
+            payload = self._build_template_payload(template_name, template_data, to_e164, company_id=company_id, phone_number_id=phone_number_id)
             try:
                 payload["to"] = to_e164
                 # fuerza idioma si se pasó por parámetro
@@ -2347,25 +2347,110 @@ class WhatsAppService:
             logger.error(f"❌ Excepción enviando document: {e}", exc_info=True)
             return False, None, {}
 
-    def _resolve_cover_url(self, to_phone: str, template_data: dict | None) -> str | None:
-        cover = None
+    def _resolve_cover_url(
+        self,
+        to_phone: str,
+        template_data: dict | None,
+        *,
+        template_name: str | None = None,
+        company_id: str | None = None,
+        phone_number_id: str | None = None
+    ) -> str | None:
+        """
+        Prioridades (primera que exista y no vacía):
+        1) template_data.cover_url
+        2) WHATSAPP_COVER__TEMPLATE_{TEMPLATE_NAME}
+        3) WHATSAPP_COVER__PNID_{PHONE_NUMBER_ID}
+        4) WHATSAPP_COVER__{COMPANY_ID}
+        5) WHATSAPP_COVER
+        6) COVER_WB / COVER_URL
+        7) self.default_cover_url
+        8) fallback hardcoded
+        """
+        # 1) Override ad-hoc en la llamada
+        if template_data and template_data.get("cover_url"):
+            logger.info(f"[COVER] Using cover from template_data.cover_url: {template_data.get('cover_url')}")
+            return template_data.get("cover_url")
+
+        # Preparar claves a probar
+        keys_tried = []
+        chosen = None
+        chosen_key = None
+
         try:
             clean = PhoneUtils.strip_34(str(to_phone))
-            # get_config_by_phone(phone, db_manager) devuelve (custom_props, company_name, company_id)
-            custom_props, _, _ = company_cache.get_config_by_phone(clean, db_manager)
+
+            # Obtener custom_properties del tenant. Si tenemos company_id, intentamos por company;
+            # si no, por teléfono. Si no tienes un helper 'get_config_by_company', caemos al phone.
+            custom_props = None
+            if company_id and hasattr(company_cache, "get_config_by_company"):
+                try:
+                    # Debe devolver (custom_props, company_name, company_id)
+                    custom_props, _, _ = company_cache.get_config_by_company(company_id, db_manager)
+                except Exception:
+                    custom_props = None
+
+            if custom_props is None:
+                # Fallback por teléfono
+                custom_props, _, _ = company_cache.get_config_by_phone(clean, db_manager)
+
             if isinstance(custom_props, dict):
-                cover = (
-                    custom_props.get("WHATSAPP_COVER")
-                    or custom_props.get("COVER_WB")
-                    or custom_props.get("COVER_URL")
-                )
-        except Exception:
-            pass
+                # 2) Por plantilla
+                if template_name:
+                    k = f"WHATSAPP_COVER__TEMPLATE_{template_name}"
+                    keys_tried.append(k)
+                    chosen = custom_props.get(k)
+                    if chosen: chosen_key = k
 
-        if not cover:
-            cover = getattr(self, "default_cover_url", None)
+                # 3) Por phone_number_id
+                if not chosen and phone_number_id:
+                    k = f"WHATSAPP_COVER__PNID_{phone_number_id}"
+                    keys_tried.append(k)
+                    chosen = custom_props.get(k)
+                    if chosen: chosen_key = k
 
-        return cover or "https://app.solvify.es/cover-whats.jpg"
+                # 4) Por company_id explícito
+                if not chosen and company_id:
+                    k = f"WHATSAPP_COVER__{company_id}"
+                    keys_tried.append(k)
+                    chosen = custom_props.get(k)
+                    if chosen: chosen_key = k
+
+                # 5) Genérico del tenant
+                if not chosen:
+                    k = "WHATSAPP_COVER"
+                    keys_tried.append(k)
+                    chosen = custom_props.get(k)
+                    if chosen: chosen_key = k
+
+                # 6) Aliases
+                if not chosen:
+                    for k in ("COVER_WB", "COVER_URL"):
+                        keys_tried.append(k)
+                        chosen = custom_props.get(k)
+                        if chosen:
+                            chosen_key = k
+                            break
+
+        except Exception as e:
+            logger.warning(f"[COVER] Error leyendo propiedades de tenant: {e}")
+
+        # 7) Default de la instancia
+        if not chosen:
+            chosen = getattr(self, "default_cover_url", None)
+            if chosen:
+                chosen_key = "default_cover_url"
+
+        # 8) Fallback final
+        if not chosen:
+            chosen = "https://app.solvify.es/cover-whats.jpg"
+            chosen_key = "fallback"
+
+        logger.info(
+            f"[COVER] chosen='{chosen}' via='{chosen_key}' "
+            f"(company_id={company_id}, pnid={phone_number_id}, tmpl={template_name}, tried={keys_tried})"
+        )
+        return chosen
 
     
     def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str) -> dict:
@@ -2391,15 +2476,18 @@ class WhatsAppService:
         # Idioma y cover
         lang = (template_data or {}).get("language") or "es_ES"
 
-        # ⬇️ NUEVO: resolver cover con prioridad (payload → tenant → default → fallback)
-        cover_url = self._resolve_cover_url(to_phone, template_data)
-        print("Using cover_url:", cover_url)
-        print("Template data:", template_data)
-        print("Template name:", template_name)
+        # ⬇️ Resolver cover con prioridades finas y logging
+        cover_url = self._resolve_cover_url(
+            to_phone=to_phone,
+            template_data=template_data,
+            template_name=template_name,
+            company_id=company_id or (template_data or {}).get("company_id"),
+            phone_number_id=phone_number_id
+        )
+
         to_e164 = normalize_es(to_phone)
         components = []
 
-        # Header (imagen) si hay cover_url
         if cover_url:
             components.append({
                 "type": "header",
@@ -2408,6 +2496,7 @@ class WhatsAppService:
                     "image": {"link": cover_url}
                 }]
             })
+            
 
         name = (template_name or "").strip()
 
