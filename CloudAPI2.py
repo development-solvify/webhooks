@@ -2348,11 +2348,7 @@ class WhatsAppService:
             return False, None, {}
 
     def _resolve_cover_url(self, to_phone: str, template_data: dict | None) -> str | None:
-        # 1) Si viene desde la llamada, gana
-        if template_data and template_data.get("cover_url"):
-            return template_data.get("cover_url")
 
-        cover = None
         try:
             # Intenta por phone -> company -> custom_properties
             custom_props, _, _ = company_cache.get_config_by_phone(to_phone)
