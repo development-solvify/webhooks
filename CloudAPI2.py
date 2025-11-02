@@ -3401,7 +3401,7 @@ def _resolve_wa_creds_for_send_strict(
     # 3) Por teléfono (fallback)
     if fallback_to_phone:
         try:
-            clean = PhoneUtils.strip_34(fallback_to_phone)
+            clean_phone = PhoneUtils.strip_34(fallback_to_phone)
             creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=company_id or (template_data.get("company_id") if isinstance(template_data, dict) else None))
             token = creds.get("access_token") or creds.get("token")
             pnid  = creds.get("phone_number_id")
