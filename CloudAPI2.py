@@ -2349,22 +2349,25 @@ class WhatsAppService:
 
     def _resolve_cover_url(self, company_id: str | None) -> str | None:
         """
-        Devuelve el WHATSAPP_COVER definido en los settings de la compañía.
-        No aplica fallback ni alias.
+        Devuelve la URL del WHATSAPP_COVER para la compañía indicada.
+        Solo busca en la caché de compañías.
+        Sin fallback ni alias.
         """
         if not company_id:
-            logger.warning("[COVER] No company_id provided, skipping cover resolution")
+            logger.warning("[COVER] No company_id provided")
             return None
 
         try:
-            custom_props, _, _ = company_cache.get_config_by_company(company_id, db_manager)
-            if isinstance(custom_props, dict):
-                cover = custom_props.get("WHATSAPP_COVER")
-                logger.info(f"[COVER] company_id={company_id} -> {cover}")
-                return cover
-            else:
-                logger.warning(f"[COVER] No custom_props found for company_id={company_id}")
+            company_entry = company_cache.get(company_id)
+            if not company_entry:
+                logger.warning(f"[COVER] Company {company_id} not found in cache")
                 return None
+
+            custom_props = company_entry.get("config", {}).get("custom_properties", {})
+            cover = custom_props.get("WHATSAPP_COVER")
+            logger.info(f"[COVER] company_id={company_id} cover={cover}")
+            return cover
+
         except Exception as e:
             logger.error(f"[COVER] Error resolving cover for company_id={company_id}: {e}")
             return None
