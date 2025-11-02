@@ -2348,13 +2348,12 @@ class WhatsAppService:
             return False, None, {}
 
     def _resolve_cover_url(self, to_phone: str, template_data: dict | None) -> str | None:
-
         cover = None
         try:
-            # Intenta por phone -> company -> custom_properties
-            custom_props, _, _ = company_cache.get_config_by_phone(to_phone)
+            clean = PhoneUtils.strip_34(str(to_phone))
+            # get_config_by_phone(phone, db_manager) devuelve (custom_props, company_name, company_id)
+            custom_props, _, _ = company_cache.get_config_by_phone(clean, db_manager)
             if isinstance(custom_props, dict):
-                # Prioridades y alias
                 cover = (
                     custom_props.get("WHATSAPP_COVER")
                     or custom_props.get("COVER_WB")
@@ -2363,12 +2362,11 @@ class WhatsAppService:
         except Exception:
             pass
 
-        # 3) Default configurado en la instancia
         if not cover:
             cover = getattr(self, "default_cover_url", None)
 
-        # 4) Fallback final
         return cover or "https://app.solvify.es/cover-whats.jpg"
+
     
     def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str) -> dict:
         """
