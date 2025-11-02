@@ -2398,7 +2398,9 @@ class WhatsAppService:
 
         # ⬇️ NUEVO: resolver cover con prioridad (payload → tenant → default → fallback)
         cover_url = self._resolve_cover_url(to_phone, template_data)
-
+        print("Using cover_url:", cover_url)
+        print("Template data:", template_data)
+        print("Template name:", template_name)
         to_e164 = normalize_es(to_phone)
         components = []
 
