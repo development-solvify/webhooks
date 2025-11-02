@@ -2347,110 +2347,27 @@ class WhatsAppService:
             logger.error(f"❌ Excepción enviando document: {e}", exc_info=True)
             return False, None, {}
 
-    def _resolve_cover_url(
-        self,
-        to_phone: str,
-        template_data: dict | None,
-        *,
-        template_name: str | None = None,
-        company_id: str | None = None,
-        phone_number_id: str | None = None
-    ) -> str | None:
+    def _resolve_cover_url(self, company_id: str | None) -> str | None:
         """
-        Prioridades (primera que exista y no vacía):
-        1) template_data.cover_url
-        2) WHATSAPP_COVER__TEMPLATE_{TEMPLATE_NAME}
-        3) WHATSAPP_COVER__PNID_{PHONE_NUMBER_ID}
-        4) WHATSAPP_COVER__{COMPANY_ID}
-        5) WHATSAPP_COVER
-        6) COVER_WB / COVER_URL
-        7) self.default_cover_url
-        8) fallback hardcoded
+        Devuelve el WHATSAPP_COVER definido en los settings de la compañía.
+        No aplica fallback ni alias.
         """
-        # 1) Override ad-hoc en la llamada
-        if template_data and template_data.get("cover_url"):
-            logger.info(f"[COVER] Using cover from template_data.cover_url: {template_data.get('cover_url')}")
-            return template_data.get("cover_url")
-
-        # Preparar claves a probar
-        keys_tried = []
-        chosen = None
-        chosen_key = None
+        if not company_id:
+            logger.warning("[COVER] No company_id provided, skipping cover resolution")
+            return None
 
         try:
-            clean = PhoneUtils.strip_34(str(to_phone))
-
-            # Obtener custom_properties del tenant. Si tenemos company_id, intentamos por company;
-            # si no, por teléfono. Si no tienes un helper 'get_config_by_company', caemos al phone.
-            custom_props = None
-            if company_id and hasattr(company_cache, "get_config_by_company"):
-                try:
-                    # Debe devolver (custom_props, company_name, company_id)
-                    custom_props, _, _ = company_cache.get_config_by_company(company_id, db_manager)
-                except Exception:
-                    custom_props = None
-
-            if custom_props is None:
-                # Fallback por teléfono
-                custom_props, _, _ = company_cache.get_config_by_phone(clean, db_manager)
-
+            custom_props, _, _ = company_cache.get_config_by_company(company_id, db_manager)
             if isinstance(custom_props, dict):
-                # 2) Por plantilla
-                if template_name:
-                    k = f"WHATSAPP_COVER__TEMPLATE_{template_name}"
-                    keys_tried.append(k)
-                    chosen = custom_props.get(k)
-                    if chosen: chosen_key = k
-
-                # 3) Por phone_number_id
-                if not chosen and phone_number_id:
-                    k = f"WHATSAPP_COVER__PNID_{phone_number_id}"
-                    keys_tried.append(k)
-                    chosen = custom_props.get(k)
-                    if chosen: chosen_key = k
-
-                # 4) Por company_id explícito
-                if not chosen and company_id:
-                    k = f"WHATSAPP_COVER__{company_id}"
-                    keys_tried.append(k)
-                    chosen = custom_props.get(k)
-                    if chosen: chosen_key = k
-
-                # 5) Genérico del tenant
-                if not chosen:
-                    k = "WHATSAPP_COVER"
-                    keys_tried.append(k)
-                    chosen = custom_props.get(k)
-                    if chosen: chosen_key = k
-
-                # 6) Aliases
-                if not chosen:
-                    for k in ("COVER_WB", "COVER_URL"):
-                        keys_tried.append(k)
-                        chosen = custom_props.get(k)
-                        if chosen:
-                            chosen_key = k
-                            break
-
+                cover = custom_props.get("WHATSAPP_COVER")
+                logger.info(f"[COVER] company_id={company_id} -> {cover}")
+                return cover
+            else:
+                logger.warning(f"[COVER] No custom_props found for company_id={company_id}")
+                return None
         except Exception as e:
-            logger.warning(f"[COVER] Error leyendo propiedades de tenant: {e}")
-
-        # 7) Default de la instancia
-        if not chosen:
-            chosen = getattr(self, "default_cover_url", None)
-            if chosen:
-                chosen_key = "default_cover_url"
-
-        # 8) Fallback final
-        if not chosen:
-            chosen = "https://app.solvify.es/cover-whats.jpg"
-            chosen_key = "fallback"
-
-        logger.info(
-            f"[COVER] chosen='{chosen}' via='{chosen_key}' "
-            f"(company_id={company_id}, pnid={phone_number_id}, tmpl={template_name}, tried={keys_tried})"
-        )
-        return chosen
+            logger.error(f"[COVER] Error resolving cover for company_id={company_id}: {e}")
+            return None
 
 
     def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str, company_id: str) -> dict:
@@ -2477,12 +2394,7 @@ class WhatsAppService:
         lang = (template_data or {}).get("language") or "es_ES"
 
         # ⬇️ Resolver cover con prioridades finas y logging
-        cover_url = self._resolve_cover_url(
-            to_phone=to_phone,
-            template_data=template_data,
-            template_name=template_name,
-            company_id=company_id or (template_data or {}).get("company_id")
-        )
+        cover_url = self._resolve_cover_url(company_id=company_id or (template_data or {}).get("company_id"))
 
         to_e164 = normalize_es(to_phone)
         components = []
@@ -7698,108 +7610,12 @@ def test_status_update():
         }), 500
 
 ###WARM UP SYSTEM
-
-@app.route('/send_template_direct', methods=['POST'])
-def send_template_direct():
-    """
-    Envía un template directamente a WhatsApp sin guardar nada en base de datos.
-    
-    Payload esperado:
-    {
-        "phone": "679609016",
-        "template_name": "agendar_llamada_inicial", 
-        "template_data": {
-            "first_name": "Juan",
-            "deal_id": "123",
-            "responsible_first_name": "Ana",
-            "company_name": "Mi Empresa"
-        }
-    }
-    """
-    try:
-        data = request.get_json(force=True)
-        
-        # Validar parámetros requeridos
-        phone = data.get('phone')
-        template_name = data.get('template_name')
-        template_data = data.get('template_data', {})
-        company_id = data.get('company_id')
-        if not phone:
-            return jsonify({
-                'status': 'error',
-                'message': 'phone es requerido'
-            }), 400
-            
-        if not template_name:
-            return jsonify({
-                'status': 'error', 
-                'message': 'template_name es requerido'
-            }), 400
-
-        # Normalizar teléfono a formato internacional
-        destination = PhoneUtils.add_34(phone)
-        
-        logger.info(f"[DIRECT TEMPLATE] Enviando '{template_name}' a {destination}")
-        logger.info(f"[DIRECT TEMPLATE] Template data: {template_data}")
-        
-        # Construir payload del template
-        payload = _build_template_payload(template_name, template_data, destination, company_id=company_id)
-        
-        # Enviar directamente a WhatsApp
-        response = requests.post(
-            config.whatsapp_config['base_url'],
-            headers=config.whatsapp_config['headers'],
-            json=payload,
-            timeout=15
-        )
-        
-        logger.info(f"[DIRECT TEMPLATE] WhatsApp response: {response.status_code}")
-        
-        if response.ok:
-            result = response.json()
-            message_id = result.get('messages', [{}])[0].get('id')
-            
-            logger.info(f"[DIRECT TEMPLATE] ✅ Enviado exitosamente. ID: {message_id}")
-            
-            return jsonify({
-                'status': 'success',
-                'message_id': message_id,
-                'sent_to': destination,
-                'template_name': template_name,
-                'whatsapp_response': result
-            }), 200
-        else:
-            error_detail = response.text
-            logger.error(f"[DIRECT TEMPLATE] ❌ Error {response.status_code}: {error_detail}")
-            
-            return jsonify({
-                'status': 'error',
-                'message': f'WhatsApp API error: {response.status_code}',
-                'details': error_detail,
-                'sent_to': destination,
-                'template_name': template_name
-            }), response.status_code
-
-    except ValueError as e:
-        logger.error(f"[DIRECT TEMPLATE] Template validation error: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': f'Template error: {str(e)}'
-        }), 400
-        
-    except requests.exceptions.RequestException as e:
-        logger.error(f"[DIRECT TEMPLATE] Request error: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': f'Network error: {str(e)}'
-        }), 500
-        
-    except Exception as e:
-        logger.exception(f"[DIRECT TEMPLATE] Unexpected error: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': f'Internal error: {str(e)}'
-        }), 500
+ok, msg_id = whatsapp_service.send_text_message(
+    to_phone   = phone,
+    message    = message,
+    company_id = company_id,   # opcional
+    timeout    = 10
+)
 
 
 @app.route('/send_text_direct', methods=['POST'])
