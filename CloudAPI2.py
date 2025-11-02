@@ -7609,13 +7609,6 @@ def test_status_update():
             'message': f'Test error: {str(e)}'
         }), 500
 
-###WARM UP SYSTEM
-ok, msg_id = whatsapp_service.send_text_message(
-    to_phone   = phone,
-    message    = message,
-    company_id = company_id,   # opcional
-    timeout    = 10
-)
 
 
 @app.route('/send_text_direct', methods=['POST'])
