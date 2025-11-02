@@ -1968,7 +1968,7 @@ class WhatsAppService:
             logger.info("=" * 80)
 
             # 3) Construir payload (tu helper actual) y forzar 'to' en E.164
-            payload = self._build_template_payload(template_name, template_data, to_e164, company_id=company_id, phone_number_id=phone_number_id)
+            payload = self._build_template_payload(template_name, template_data, to_e164, company_id=company_id)
             try:
                 payload["to"] = to_e164
                 # fuerza idioma si se pasó por parámetro
@@ -2452,8 +2452,8 @@ class WhatsAppService:
         )
         return chosen
 
-    
-    def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str) -> dict:
+
+    def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str, company_id: str) -> dict:
         """
         Construye el payload de envío de plantilla para la Cloud API de WhatsApp.
         - template_name: nombre EXACTO del template en WBM
@@ -7724,7 +7724,7 @@ def send_template_direct():
         phone = data.get('phone')
         template_name = data.get('template_name')
         template_data = data.get('template_data', {})
-        
+        company_id = data.get('company_id')
         if not phone:
             return jsonify({
                 'status': 'error',
@@ -7744,7 +7744,7 @@ def send_template_direct():
         logger.info(f"[DIRECT TEMPLATE] Template data: {template_data}")
         
         # Construir payload del template
-        payload = _build_template_payload_direct(template_name, template_data, destination)
+        payload = _build_template_payload(template_name, template_data, destination, company_id=company_id)
         
         # Enviar directamente a WhatsApp
         response = requests.post(
