@@ -2364,7 +2364,7 @@ class WhatsAppService:
                 return None
 
             custom_props = company_entry.get("config", {}).get("custom_properties", {})
-            cover = custom_props.get("WHATSAPP_COVER")
+            cover = custom_props.get("COVER_WB")
             logger.info(f"[COVER] company_id={company_id} cover={cover}")
             return cover
 
