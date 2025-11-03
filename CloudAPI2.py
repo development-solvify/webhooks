@@ -2437,9 +2437,8 @@ class WhatsAppService:
             })
 
         elif name == "recordatorio_llamada_agendada":
-            # Body: {{1}} = first_name, {{2}} = slot_text (fecha/hora legible)
             first_name = (template_data or {}).get("first_name") or ""
-            slot_text = (template_data or {}).get("slot_text") or ""
+            slot_text = (template_data or {}).get("slot_text") or "próximamente"  # ← Valor por defecto
             components.append({
                 "type": "body",
                 "parameters": [
