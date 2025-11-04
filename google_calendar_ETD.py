@@ -51,7 +51,7 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 # Profile de pruebas para /google/login (para el OAuth inicial de tokens)
 DEMO_PROFILE_ID = os.environ.get(
     "DEMO_PROFILE_ID",
-    "6cb53711-d871-4f7d-91be-14aa6d8782cb"
+    "d20d2784-84eb-4495-9ba7-244d062f1d18"
 )
 
 # ============================================================
