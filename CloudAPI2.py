@@ -2485,16 +2485,8 @@ class WhatsAppService:
             # Body: {{1}} = first_name
 
             #quitamos el header
-            components = [
-                c for c in components
-                if c.get("type") != "header"
-            ]
-            components.append({
-                "type": "body",
-                "parameters": [
-                    {"type": "text"}
-                ]
-            })
+            components = []
+            
         else:
             # ======== MODO GENÉRICO ========
             # Permite construir cualquier template pasando body_params/buttons desde template_data
