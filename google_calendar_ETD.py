@@ -51,7 +51,7 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 # Profile de pruebas (cámbialo por un profile_id real de tu tabla profiles)
 DEMO_PROFILE_ID = os.environ.get(
     "DEMO_PROFILE_ID",
-    "00000000-0000-0000-0000-000000000001"
+    "d20d2784-84eb-4495-9ba7-244d062f1d18"
 )
 
 # ============================================================
