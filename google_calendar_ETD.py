@@ -4,36 +4,58 @@ from datetime import datetime, timedelta, timezone
 
 import psycopg2
 import requests
+import configparser
 from flask import Flask, redirect, request, session
 
 # ============================================================
-# CONFIGURACIÓN BÁSICA
+# CONFIGURACIÓN: scripts.conf + entorno
 # ============================================================
 
-# Variables de entorno necesarias:
-#   GOOGLE_CLIENT_ID
-#   GOOGLE_CLIENT_SECRET
-#   DATABASE_URL      (postgres://user:pass@host:port/dbname)
-#   SECRET_KEY        (para la sesión de Flask)
-#
-# Asegúrate también de que en Google Cloud Console tienes
-# el redirect URI configurado como:
-#   https://scheduler.solvify.es/google/oauth2callback
-#
-# Tabla recomendada en Postgres:
-#
-#   CREATE TABLE profile_google_tokens (
-#     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-#     profile_id UUID NOT NULL UNIQUE, -- IMPORTANTE: UNIQUE
-#     access_token TEXT NOT NULL,
-#     refresh_token TEXT NOT NULL,
-#     token_type TEXT NOT NULL,
-#     scope TEXT,
-#     token_expiry TIMESTAMPTZ NOT NULL,
-#     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-#     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-#   );
-#
+# Ruta del fichero de config.
+# Puedes sobrescribirla con la variable SCRIPTS_CONF_PATH si quieres.
+DEFAULT_CONF_PATH = os.path.join(os.path.dirname(__file__), "scripts.conf")
+CONF_PATH = os.environ.get("SCRIPTS_CONF_PATH", DEFAULT_CONF_PATH)
+
+config = configparser.ConfigParser()
+read_files = config.read(CONF_PATH)
+
+if not read_files:
+    raise RuntimeError(f"No se ha podido leer scripts.conf en: {CONF_PATH}")
+
+# ------- GOOGLE -------
+if "GOOGLE" not in config:
+    raise RuntimeError("No se ha encontrado la sección [GOOGLE] en scripts.conf")
+
+GOOGLE_CLIENT_ID = config.get("GOOGLE", "GOOGLE_CLIENT_ID", fallback=None)
+GOOGLE_CLIENT_SECRET = config.get("GOOGLE", "GOOGLE_CLIENT_SECRET", fallback=None)
+GOOGLE_REDIRECT_URI = config.get("GOOGLE", "GOOGLE_REDIRECT_URI", fallback=None)
+
+if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI):
+    raise RuntimeError("Faltan GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REDIRECT_URI en [GOOGLE]")
+
+GOOGLE_SCOPES = "https://www.googleapis.com/auth/calendar.events"
+
+# ------- DB (SUPABASE POSTGRES) -------
+if "DB" not in config:
+    raise RuntimeError("No se ha encontrado la sección [DB] en scripts.conf")
+
+DB_HOST = config.get("DB", "DB_HOST")
+DB_PORT = config.getint("DB", "DB_PORT", fallback=5432)
+DB_NAME = config.get("DB", "DB_NAME")
+DB_USER = config.get("DB", "DB_USER")
+DB_PASS = config.get("DB", "DB_PASS")
+
+# SECRET_KEY para Flask (puede ir también a scripts.conf si quieres)
+SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me")
+
+# Profile de pruebas (cámbialo por un profile_id real de tu tabla profiles)
+DEMO_PROFILE_ID = os.environ.get(
+    "DEMO_PROFILE_ID",
+    "00000000-0000-0000-0000-000000000001"
+)
+
+# ============================================================
+# LOGGING
 # ============================================================
 
 logging.basicConfig(
@@ -42,28 +64,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger("google-calendar-demo")
 
+# ============================================================
+# APP FLASK
+# ============================================================
+
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
-
-GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
-GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
-GOOGLE_REDIRECT_URI = "https://scheduler.solvify.es/google/oauth2callback"
-GOOGLE_SCOPES = "https://www.googleapis.com/auth/calendar.events"
-
-# Profile de pruebas (cámbialo por un profile_id real de tu tabla profiles)
-DEMO_PROFILE_ID = os.environ.get(
-    "DEMO_PROFILE_ID",
-    "00000000-0000-0000-0000-000000000001"
-)
+app.secret_key = SECRET_KEY
 
 
 def get_db_conn():
     """
-    Abre una conexión a la BD.
-    Usa DATABASE_URL (formato Postgres/Supabase).
+    Abre una conexión a la BD Supabase (Postgres) usando [DB] de scripts.conf.
     """
-    db_url = os.environ["DATABASE_URL"]
-    return psycopg2.connect(db_url)
+    conn = psycopg2.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASS,
+        sslmode="require",  # Supabase requiere SSL
+    )
+    return conn
+
 
 
 def build_google_auth_url(state: str) -> str:
@@ -325,7 +347,6 @@ def create_demo_calendar_event(profile_id: str, task: dict):
             "dateTime": end_dt.isoformat(),
             "timeZone": "Europe/Madrid",
         },
-        # Invitamos a este email como asistente
         "attendees": [
             {"email": "isidoro@gmail.com"}
         ]
@@ -351,9 +372,6 @@ def create_demo_calendar_event(profile_id: str, task: dict):
 # ============================================================
 
 if __name__ == "__main__":
-    # Para pruebas locales:
-    #   export FLASK_APP=google_calendar_demo.py
-    #   python google_calendar_demo.py
-    #
-    # En producción, lo normal es usar gunicorn/uwsgi + nginx.
+    # Asegúrate de tener scripts.conf en el mismo directorio
+    # y que NGiNX ya está proxy_pass /google/ -> 127.0.0.1:3000
     app.run(host="0.0.0.0", port=3000, debug=True)
