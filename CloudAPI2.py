@@ -5300,6 +5300,20 @@ def get_whatsapp_credentials_for_company(company_id: str) -> dict:
             "company_name":  "Default",
         }
 
+def pretty_print_template_name(name: str) -> str:
+    """
+    Convierte 'mi_template_de_prueba' -> 'Mi template de prueba'
+    """
+    if not name:
+        return ""
+    pretty = name.replace('_', ' ').strip()
+    # Solo primera letra en mayúscula, resto igual
+    return pretty[0].upper() + pretty[1:] if pretty else ""
+    # Si quisieras cada palabra capitalizada:
+    # return pretty.title()
+
+
+
 @app.route('/get_templates', methods=['GET'])
 def get_templates():
     try:
@@ -5335,10 +5349,8 @@ def get_templates():
         except Exception:
             logger.exception("Error obteniendo lead_info desde lead_service")
 
-        # RESOLVER CREDENCIALES por teléfono (usa cache/company config) -> helper
-        creds = get_whatsapp_credentials_for_phone(clean_phone, company_id=company_id or (template_data.get("company_id") if isinstance(template_data, dict) else None))
 
-
+        creds = get_whatsapp_credentials_for_phone(resolved_phone, company_id=query_id)
         used_company_name = creds.get('company_name')
         used_company_id = creds.get('company_id')
         headers = creds.get('headers') or WHATSAPP_HEADERS
@@ -5355,7 +5367,7 @@ def get_templates():
         )
 
         logger.info(f"📊 Templates response status: {templates_resp.status_code}")
-
+    
         if templates_resp.status_code != 200:
             error_detail = templates_resp.text
             logger.error(f"❌ Error obteniendo templates: {error_detail}")
@@ -5374,16 +5386,17 @@ def get_templates():
 
         processed = []
         for t in data_js:
+            raw_name = t.get('name') or ''
             processed.append({
                 'id': t.get('id'),
-                'name': t.get('name'),
+                'name': raw_name,
+                'pretty_print_template': pretty_print_template_name(raw_name),
                 'status': t.get('status'),
                 'category': t.get('category'),
                 'language': t.get('language'),
                 'components': t.get('components', []),
                 'rejected_reason': t.get('rejected_reason')
             })
-
         stats = {
             'approved': sum(1 for t in processed if t['status'] == 'APPROVED'),
             'pending': sum(1 for t in processed if t['status'] == 'PENDING'),
