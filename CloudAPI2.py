@@ -5024,6 +5024,7 @@ def send_direct_message():
         message_text = data['message_text']
         assigned_to_id = data.get('assigned_to_id')
         responsible_email = data.get('responsible_email')
+        company_id = data.get('company_id')
 
         if not PhoneUtils.validate_spanish_phone(customer_phone):
             return jsonify({'status': 'error', 'message': 'Invalid phone number'}), 400
@@ -5032,7 +5033,7 @@ def send_direct_message():
             lead_service.update_deal_assignee(customer_phone, assigned_to_id)
 
         destination = PhoneUtils.add_34(customer_phone)
-        success, message_id = whatsapp_service.send_text_message(destination, message_text)
+        success, message_id = whatsapp_service.send_text_message(destination, message_text,company_id)
 
         if success:
             message_service.save_outgoing_message(customer_phone, message_text, message_id, responsible_email, assigned_to_id)
@@ -5367,7 +5368,7 @@ def get_templates():
         )
 
         logger.info(f"📊 Templates response status: {templates_resp.status_code}")
-    
+
         if templates_resp.status_code != 200:
             error_detail = templates_resp.text
             logger.error(f"❌ Error obteniendo templates: {error_detail}")
