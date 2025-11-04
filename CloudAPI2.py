@@ -2484,6 +2484,11 @@ class WhatsAppService:
         elif name == "contacto_recordatorio_pago":
             # Body: {{1}} = first_name
 
+            #quitamos el header
+            components = [
+                c for c in components
+                if c.get("type") != "header"
+            ]
             components.append({
                 "type": "body",
                 "parameters": [
