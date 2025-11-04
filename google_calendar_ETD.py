@@ -1,18 +1,18 @@
 import os
 import logging
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import psycopg2
 import requests
 import configparser
-from flask import Flask, redirect, request, session
+from flask import Flask, redirect, request, session, jsonify
 
 # ============================================================
 # CONFIGURACIÓN: scripts.conf + entorno
 # ============================================================
 
 # Ruta del fichero de config.
-# Puedes sobrescribirla con la variable SCRIPTS_CONF_PATH si quieres.
 DEFAULT_CONF_PATH = os.path.join(os.path.dirname(__file__), "scripts.conf")
 CONF_PATH = os.environ.get("SCRIPTS_CONF_PATH", DEFAULT_CONF_PATH)
 
@@ -48,10 +48,10 @@ DB_PASS = config.get("DB", "DB_PASS")
 # SECRET_KEY para Flask (puede ir también a scripts.conf si quieres)
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 
-# Profile de pruebas (cámbialo por un profile_id real de tu tabla profiles)
+# Profile de pruebas para /google/login (para el OAuth inicial de tokens)
 DEMO_PROFILE_ID = os.environ.get(
     "DEMO_PROFILE_ID",
-    "d20d2784-84eb-4495-9ba7-244d062f1d18"
+    "00000000-0000-0000-0000-000000000001"
 )
 
 # ============================================================
@@ -62,7 +62,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
-logger = logging.getLogger("google-calendar-demo")
+logger = logging.getLogger("google-calendar-etd")
 
 # ============================================================
 # APP FLASK
@@ -87,7 +87,6 @@ def get_db_conn():
     return conn
 
 
-
 def build_google_auth_url(state: str) -> str:
     """
     Construye la URL de autorización de Google OAuth 2.0.
@@ -108,7 +107,262 @@ def build_google_auth_url(state: str) -> str:
 
 
 # ============================================================
-# RUTAS
+# HELPERS BD Y GOOGLE TOKENS
+# ============================================================
+
+def get_fresh_access_token(profile_id: str):
+    """
+    Obtiene un access_token válido para el profile_id.
+    Si está caducado (o cerca de caducar), lo renueva con el refresh_token.
+    """
+    conn = get_db_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, access_token, refresh_token, token_type, scope, token_expiry
+        FROM profile_google_tokens
+        WHERE profile_id = %s
+        """,
+        (profile_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        cur.close()
+        conn.close()
+        return None, "No hay tokens para este profile_id"
+
+    id_, access_token, refresh_token, token_type, scope, token_expiry = row
+    now = datetime.now(timezone.utc)
+
+    # Si aún no caduca en menos de 2 minutos, lo usamos
+    if token_expiry and token_expiry > now + timedelta(minutes=2):
+        cur.close()
+        conn.close()
+        return access_token, None
+
+    # Renovar access_token con el refresh_token
+    token_url = "https://oauth2.googleapis.com/token"
+    data = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token",
+    }
+    resp = requests.post(token_url, data=data)
+    if resp.status_code != 200:
+        cur.close()
+        conn.close()
+        return None, f"Error renovando token: {resp.text}"
+
+    tdata = resp.json()
+    new_access = tdata["access_token"]
+    expires_in = tdata.get("expires_in", 3600)
+    new_expiry = now + timedelta(seconds=expires_in)
+
+    cur.execute(
+        """
+        UPDATE profile_google_tokens
+        SET access_token = %s,
+            token_expiry = %s,
+            updated_at   = now()
+        WHERE id = %s
+        """,
+        (new_access, new_expiry, id_),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    logger.info("Access token renovado para profile_id=%s", profile_id)
+    return new_access, None
+
+
+def fetch_task_context(annotation_task_id: str):
+    """
+    Recupera toda la info necesaria de BD a partir de annotation_task_id:
+      - annotation_tasks
+      - annotations
+      - deals
+      - leads
+      - profiles (usuario asignado)
+    """
+    sql = """
+    SELECT
+        at.id AS annotation_task_id,
+        at.annotation_type,
+        at.content AS task_content,
+        at.status AS task_status,
+        at.due_date,
+        at.user_assigned_id AS profile_id,
+
+        a.id AS annotation_id,
+        a.object_reference_type,
+        a.object_reference_id AS deal_id,
+
+        d.lead_id,
+
+        l.first_name AS lead_first_name,
+        l.last_name AS lead_last_name,
+        l.email AS lead_email,
+        l.phone AS lead_phone,
+
+        p.email AS profile_email,
+        p.first_name AS profile_first_name,
+        p.last_name AS profile_last_name
+    FROM annotation_tasks at
+    JOIN annotations a ON a.id = at.annotation_id
+    JOIN deals d ON d.id = a.object_reference_id
+    JOIN leads l ON l.id = d.lead_id
+    LEFT JOIN profiles p ON p.id = at.user_assigned_id
+    WHERE at.id = %s
+      AND a.is_deleted = false
+      AND at.is_deleted = false
+      AND d.is_deleted = false
+      AND l.is_deleted = false
+    LIMIT 1;
+    """
+
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (annotation_task_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+
+            columns = [desc[0] for desc in cur.description]
+            task = dict(zip(columns, row))
+            return task
+    finally:
+        conn.close()
+
+
+def create_calendar_event_from_task_context(task: dict):
+    """
+    A partir del contexto de la tarea (dict de fetch_task_context),
+    crea el evento en Google Calendar del usuario asignado (profile_id).
+    """
+    profile_id = task.get("profile_id")
+    if not profile_id:
+        return None, "La tarea no tiene user_assigned_id (profile_id) asignado"
+
+    access_token, err = get_fresh_access_token(str(profile_id))
+    if err or not access_token:
+        return None, err or "No access token disponible"
+
+    # =======================
+    # Construir fechas
+    # =======================
+    due_date = task.get("due_date")
+    if not isinstance(due_date, datetime):
+        return None, "La tarea no tiene due_date válido"
+
+    # due_date viene como timestamp sin tz en hora de Madrid -> le añadimos tz
+    tz = ZoneInfo("Europe/Madrid")
+    if due_date.tzinfo is None:
+        start_dt = due_date.replace(tzinfo=tz)
+    else:
+        start_dt = due_date.astimezone(tz)
+
+    # Duración por defecto: 30 minutos
+    end_dt = start_dt + timedelta(minutes=30)
+
+    # =======================
+    # Título y descripción
+    # =======================
+    lead_first_name = task.get("lead_first_name") or ""
+    lead_last_name = task.get("lead_last_name") or ""
+    lead_name = (lead_first_name + " " + lead_last_name).strip() or "Cliente"
+
+    annotation_type = task.get("annotation_type") or "Llamada programada"
+    summary = f"{annotation_type} - {lead_name}"
+
+    task_content = task.get("task_content") or ""
+    lead_email = task.get("lead_email") or ""
+    lead_phone = task.get("lead_phone") or ""
+    deal_id = task.get("deal_id")
+    annotation_task_id = task.get("annotation_task_id")
+
+    description_lines = []
+    if task_content:
+        description_lines.append(task_content)
+        description_lines.append("")
+
+    description_lines.append(f"Cliente: {lead_name}")
+    if lead_email:
+        description_lines.append(f"Email cliente: {lead_email}")
+    if lead_phone:
+        description_lines.append(f"Teléfono cliente: {lead_phone}")
+
+    description_lines.append("")
+    if deal_id:
+        description_lines.append(f"Deal ID: {deal_id}")
+    if annotation_task_id:
+        description_lines.append(f"Tarea (annotation_task_id): {annotation_task_id}")
+
+    description = "\n".join(description_lines)
+
+    # =======================
+    # Attendees
+    # =======================
+    attendees = []
+
+    profile_email = task.get("profile_email")
+    profile_first_name = task.get("profile_first_name") or ""
+    profile_last_name = task.get("profile_last_name") or ""
+    profile_name = (profile_first_name + " " + profile_last_name).strip()
+
+    if profile_email:
+        att = {"email": profile_email}
+        if profile_name:
+            att["displayName"] = profile_name
+        attendees.append(att)
+
+    if lead_email:
+        att = {"email": lead_email}
+        if lead_name:
+            att["displayName"] = lead_name
+        attendees.append(att)
+
+    event_body = {
+        "summary": summary,
+        "description": description,
+        "start": {
+            "dateTime": start_dt.isoformat(),
+            "timeZone": "Europe/Madrid",
+        },
+        "end": {
+            "dateTime": end_dt.isoformat(),
+            "timeZone": "Europe/Madrid",
+        },
+        "attendees": attendees,
+        "reminders": {
+            "useDefault": True
+        }
+    }
+
+    url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+
+    logger.info(
+        "Creando evento en Calendar para profile_id=%s, tarea=%s, lead=%s",
+        profile_id,
+        annotation_task_id,
+        lead_name,
+    )
+    resp = requests.post(url, headers=headers, json=event_body)
+    if resp.status_code not in (200, 201):
+        logger.error("Error creando evento: %s %s", resp.status_code, resp.text)
+        return None, f"Error creando evento: {resp.status_code} {resp.text}"
+
+    return resp.json(), None
+
+
+# ============================================================
+# RUTAS: HEALTHCHECK + OAUTH + WEBHOOK
 # ============================================================
 
 @app.route("/")
@@ -117,8 +371,9 @@ def index():
     Healthcheck simple.
     """
     return (
-        "<h1>Google Calendar Demo</h1>"
-        "<p>Ve a <a href='/google/login'>/google/login</a> para probar el flujo OAuth y crear un evento de prueba.</p>"
+        "<h1>Google Calendar integración ETD</h1>"
+        "<p>/google/login para conectar Google Calendar (OAuth).</p>"
+        "<p>POST /google/calendar/from_task con annotation_task_id para crear evento.</p>"
     )
 
 
@@ -127,6 +382,7 @@ def google_login():
     """
     Inicia el flujo OAuth con Google.
     Para la demo, usamos DEMO_PROFILE_ID como profile_id del usuario.
+    En producción, esto debería venir del login de tu portal.
     """
     profile_id = DEMO_PROFILE_ID
     session["profile_id"] = profile_id
@@ -143,8 +399,6 @@ def google_oauth2callback():
       - Recibe ?code=...
       - Intercambia por tokens
       - Guarda/actualiza en profile_google_tokens
-      - Crea un evento de prueba en el Calendar
-      - Muestra info por pantalla
     """
     error = request.args.get("error")
     if error:
@@ -220,151 +474,48 @@ def google_oauth2callback():
 
     logger.info("Tokens guardados/actualizados para profile_id=%s", profile_id)
 
-    # 3) Creamos una "tarea de pruebas" para verificar que todo funciona
-    demo_task = {
-        "title": "Tarea programada de PRUEBA",
-        "description": "Creada desde Sicuel/Solvify para probar integración con Google Calendar.",
-    }
-
-    event, error_msg = create_demo_calendar_event(profile_id, demo_task)
-    if error_msg:
-        logger.error("Tokens guardados, pero error creando evento: %s", error_msg)
-        return f"Tokens guardados, pero error creando evento: {error_msg}", 500
-
-    logger.info("Evento de prueba creado correctamente: %s", event.get("id"))
-
-    # 4) Mostrar info por pantalla
     html = f"""
     <h1>Google Calendar conectado correctamente ✅</h1>
-    <p>Profile ID (demo): <code>{profile_id}</code></p>
-
-    <h2>Evento de prueba creado</h2>
-    <ul>
-      <li><strong>Resumen:</strong> {event.get('summary')}</li>
-      <li><strong>Inicio:</strong> {event.get('start')}</li>
-      <li><strong>Fin:</strong> {event.get('end')}</li>
-      <li><strong>Link:</strong> <a href="{event.get('htmlLink')}" target="_blank">Abrir en Google Calendar</a></li>
-    </ul>
-
-    <h3>Detalles técnicos</h3>
-    <pre>{event}</pre>
+    <p>Profile ID: <code>{profile_id}</code></p>
+    <p>Ya puedes llamar al webhook <code>POST /google/calendar/from_task</code> pasando <code>annotation_task_id</code> para crear eventos.</p>
     """
     return html
 
 
-# ============================================================
-# HELPERS PARA TOKENS Y EVENTOS
-# ============================================================
-
-def get_fresh_access_token(profile_id: str):
+@app.route("/google/calendar/from_task", methods=["POST"])
+def create_event_from_task():
     """
-    Obtiene un access_token válido para el profile_id.
-    Si está caducado (o cerca de caducar), lo renueva con el refresh_token.
+    Webhook:
+      POST /google/calendar/from_task
+      Body JSON: { "annotation_task_id": "..." }
+
+    Este endpoint:
+      - Recupera el contexto de la tarea desde BD
+      - Usa profile_id -> profile_google_tokens para conseguir el access_token
+      - Crea el evento en el Calendar del usuario asignado
     """
-    conn = get_db_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT id, access_token, refresh_token, token_type, scope, token_expiry
-        FROM profile_google_tokens
-        WHERE profile_id = %s
-        """,
-        (profile_id,),
-    )
-    row = cur.fetchone()
-    if not row:
-        cur.close()
-        conn.close()
-        return None, "No hay tokens para este profile_id"
+    data = request.get_json(silent=True) or {}
+    annotation_task_id = data.get("annotation_task_id")
 
-    id_, access_token, refresh_token, token_type, scope, token_expiry = row
-    now = datetime.now(timezone.utc)
+    if not annotation_task_id:
+        return jsonify({"error": "annotation_task_id es requerido"}), 400
 
-    # Si aún no caduca en menos de 2 minutos, lo usamos
-    if token_expiry and token_expiry > now + timedelta(minutes=2):
-        cur.close()
-        conn.close()
-        return access_token, None
+    logger.info("Recibida petición para crear evento desde annotation_task_id=%s", annotation_task_id)
 
-    # Renovar access_token con el refresh_token
-    token_url = "https://oauth2.googleapis.com/token"
-    data = {
-        "client_id": GOOGLE_CLIENT_ID,
-        "client_secret": GOOGLE_CLIENT_SECRET,
-        "refresh_token": refresh_token,
-        "grant_type": "refresh_token",
-    }
-    resp = requests.post(token_url, data=data)
-    if resp.status_code != 200:
-        cur.close()
-        conn.close()
-        return None, f"Error renovando token: {resp.text}"
+    task = fetch_task_context(annotation_task_id)
+    if not task:
+        return jsonify({"error": "No se ha encontrado la tarea o sus datos asociados"}), 404
 
-    tdata = resp.json()
-    new_access = tdata["access_token"]
-    expires_in = tdata.get("expires_in", 3600)
-    new_expiry = now + timedelta(seconds=expires_in)
+    event, err = create_calendar_event_from_task_context(task)
+    if err or not event:
+        return jsonify({"error": err or "Error desconocido creando el evento"}), 500
 
-    cur.execute(
-        """
-        UPDATE profile_google_tokens
-        SET access_token = %s,
-            token_expiry = %s,
-            updated_at   = now()
-        WHERE id = %s
-        """,
-        (new_access, new_expiry, id_),
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    logger.info("Access token renovado para profile_id=%s", profile_id)
-    return new_access, None
-
-
-def create_demo_calendar_event(profile_id: str, task: dict):
-    """
-    Crea un evento de prueba en el calendario 'primary' del usuario autenticado,
-    invitando a isidoro@gmail.com como asistente.
-    """
-    access_token, err = get_fresh_access_token(profile_id)
-    if err or not access_token:
-        return None, err or "No access token disponible"
-
-    # Evento: ahora + 1h, duración 30 minutos
-    start_dt = datetime.now(timezone.utc) + timedelta(hours=1)
-    end_dt = start_dt + timedelta(minutes=30)
-
-    event_body = {
-        "summary": task["title"],
-        "description": task.get("description", ""),
-        "start": {
-            "dateTime": start_dt.isoformat(),
-            "timeZone": "Europe/Madrid",
-        },
-        "end": {
-            "dateTime": end_dt.isoformat(),
-            "timeZone": "Europe/Madrid",
-        },
-        "attendees": [
-            {"email": "isidoro@gmail.com"}
-        ]
-    }
-
-    url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-    }
-
-    logger.info("Creando evento de prueba en Calendar para profile_id=%s", profile_id)
-    resp = requests.post(url, headers=headers, json=event_body)
-    if resp.status_code not in (200, 201):
-        logger.error("Error creando evento: %s %s", resp.status_code, resp.text)
-        return None, f"Error creando evento: {resp.status_code} {resp.text}"
-
-    return resp.json(), None
+    return jsonify({
+        "status": "ok",
+        "google_event_id": event.get("id"),
+        "htmlLink": event.get("htmlLink"),
+        "summary": event.get("summary"),
+    }), 200
 
 
 # ============================================================
