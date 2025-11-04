@@ -2481,6 +2481,15 @@ class WhatsAppService:
                 ]
             })
 
+        elif name == "contacto_recordatorio_pago":
+            # Body: {{1}} = first_name
+
+            components.append({
+                "type": "body",
+                "parameters": [
+                    {"type": "text"}
+                ]
+            })
         else:
             # ======== MODO GENÉRICO ========
             # Permite construir cualquier template pasando body_params/buttons desde template_data
