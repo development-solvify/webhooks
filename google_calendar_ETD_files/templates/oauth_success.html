@@ -1,30 +1,31 @@
 {% extends "base.html" %}
-{% block title %}Google Calendar conectado{% endblock %}
+{% block title %}SICUEL CalendarSYNC · Google Calendar conectado{% endblock %}
 
 {% block content %}
-  <h1 class="card-title">Google Calendar conectado correctamente ✅</h1>
+  <h1 class="card-title">Google Calendar conectado ✅</h1>
 
   <p class="card-text">
-    Hemos guardado los permisos de acceso a Google Calendar para este usuario.
+    La integración <strong>SICUEL CalendarSYNC</strong> se ha configurado correctamente
+    para este usuario.
   </p>
 
   <div class="info-box">
     <div class="info-row">
-      <span class="info-label">Profile ID:</span>
+      <span class="info-label">Profile ID</span>
       <span class="info-value"><code>{{ profile_id }}</code></span>
     </div>
 
     {% if profile_email %}
     <div class="info-row">
-      <span class="info-label">Email:</span>
+      <span class="info-label">Email</span>
       <span class="info-value">{{ profile_email }}</span>
     </div>
     {% endif %}
   </div>
 
   <p class="card-text">
-    A partir de ahora, las <strong>llamadas programadas</strong> asignadas a este usuario
-    se podrán crear como eventos en su calendario con el endpoint:
+    A partir de ahora, las tareas programadas en SICUEL asignadas a este usuario
+    se podrán crear como eventos en su <strong>Google Calendar</strong> mediante el endpoint:
   </p>
 
   <code class="code-block">
@@ -33,6 +34,6 @@
   </code>
 
   <p class="card-text-muted">
-    Puedes cerrar esta ventana y volver al portal.
+    Puedes cerrar esta ventana y volver al portal SICUEL.
   </p>
 {% endblock %}
