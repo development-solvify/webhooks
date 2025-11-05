@@ -7,7 +7,7 @@
 body {
   margin: 0;
   font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: radial-gradient(circle at top, #1d4ed8 0, #020617 45%, #000 100%);
+  background: radial-gradient(circle at top, #0f172a 0, #020617 45%, #000 100%);
   color: #0f172a;
 }
 
@@ -16,6 +16,8 @@ body {
   display: flex;
   flex-direction: column;
 }
+
+/* HEADER / BRAND */
 
 .header {
   padding: 16px 24px 0;
@@ -30,16 +32,17 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
-  background: rgba(15, 23, 42, 0.7);
+  padding: 10px 16px;
+  background: rgba(15, 23, 42, 0.85);
   border-radius: 999px;
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(148, 163, 184, 0.4);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  text-decoration: none;
 }
 
 .brand-logo {
-  height: 32px;
-  width: 32px;
+  height: 30px;
+  width: auto;
   object-fit: contain;
 }
 
@@ -59,6 +62,8 @@ body {
   color: #9ca3af;
 }
 
+/* MAIN / CARD */
+
 .main {
   flex: 1;
   display: flex;
@@ -74,9 +79,11 @@ body {
   border-radius: 20px;
   padding: 24px 24px 28px;
   box-shadow:
-    0 24px 60px rgba(15, 23, 42, 0.7),
-    0 0 0 1px rgba(148, 163, 184, 0.4);
+    0 24px 60px rgba(15, 23, 42, 0.55),
+    0 0 0 1px rgba(148, 163, 184, 0.25);
 }
+
+/* TEXT */
 
 .card-title {
   margin-top: 0;
@@ -115,6 +122,8 @@ body {
   margin-bottom: 4px;
 }
 
+/* CTA / CODE */
+
 .card-cta {
   margin-top: 16px;
   padding-top: 12px;
@@ -132,6 +141,8 @@ body {
   border-radius: 10px;
   white-space: pre-wrap;
 }
+
+/* INFO BOX */
 
 .info-box {
   margin: 16px 0;
@@ -159,6 +170,8 @@ body {
   text-align: right;
 }
 
+/* ERROR DETAIL */
+
 .error-detail {
   margin-top: 8px;
   padding: 8px 10px;
@@ -170,6 +183,8 @@ body {
   max-height: 200px;
   overflow: auto;
 }
+
+/* FOOTER */
 
 .footer {
   padding: 8px 24px 16px;

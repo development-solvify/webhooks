@@ -368,6 +368,14 @@ def create_calendar_event_from_task_context(task: dict):
 def index():
     return render_template("index.html")
 
+# 🔹 NUEVO: para que /google/ también funcione
+@app.route("/google/")
+def google_root():
+    # puedes enseñar la misma landing
+    return render_template("index.html")
+    # o si prefieres redirigir:
+    # from flask import url_for
+    # return redirect(url_for("index"))
 
 @app.route("/google/login")
 def google_login():

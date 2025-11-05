@@ -2,24 +2,27 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <title>{% block title %}Solvify Scheduler{% endblock %}</title>
+  <title>{% block title %}Sicuel · Solvify Scheduler{% endblock %}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Fuente -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
 </head>
 <body>
   <div class="page">
     <header class="header">
       <div class="header-inner">
-        <div class="brand">
-          <img src="{{ url_for('static', filename='img/solvify-logo.svg') }}" alt="Solvify" class="brand-logo">
+        <a href="https://sicuel.com" class="brand" target="_blank" rel="noopener noreferrer">
+          <img src="{{ url_for('static', filename='img/sicuel-logo.svg') }}" alt="Sicuel" class="brand-logo">
           <div class="brand-text">
-            <span class="brand-title">Solvify Scheduler</span>
-            <span class="brand-subtitle">Integración Google Calendar</span>
+            <span class="brand-title">Sicuel</span>
+            <span class="brand-subtitle">Solvify Scheduler · Google Calendar</span>
           </div>
-        </div>
+        </a>
       </div>
     </header>
 
@@ -30,7 +33,7 @@
     </main>
 
     <footer class="footer">
-      <small>© 2025 Solvify · Integración Calendar</small>
+      <small>© 2025 Sicuel · Integración Calendar con Solvify</small>
     </footer>
   </div>
 </body>
