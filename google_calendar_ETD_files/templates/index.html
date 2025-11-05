@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Conexión Google Calendar · Solvify{% endblock %}
+
+{% block content %}
+  <h1 class="card-title">Integración con Google Calendar</h1>
+  <p class="card-text">
+    Este servicio conecta las tareas de tu portal con el calendario de Google de cada usuario.
+  </p>
+
+  <ul class="card-list">
+    <li>✅ Cada usuario conecta su Google Calendar una sola vez.</li>
+    <li>✅ Las llamadas programadas se crean como eventos en su agenda.</li>
+    <li>✅ Futuro: sincronización bidireccional de cambios.</li>
+  </ul>
+
+  <div class="card-cta">
+    <p class="card-text-muted">
+      Si has llegado aquí directamente, este endpoint se usa normalmente desde el portal.
+    </p>
+    <p class="card-text-muted">
+      Para conectar manualmente un usuario, puedes usar una URL como:
+    </p>
+    <code class="code-block">
+      https://scheduler.solvify.es/google/login?profile_id=&lt;uuid-del-profile&gt;
+    </code>
+  </div>
+{% endblock %}

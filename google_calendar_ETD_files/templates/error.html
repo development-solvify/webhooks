@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Ha ocurrido un error{% endblock %}
+
+{% block content %}
+  <h1 class="card-title card-title-error">Ups, algo ha fallado 😕</h1>
+
+  <p class="card-text">
+    {{ message }}
+  </p>
+
+  {% if detail %}
+  <div class="error-detail">
+    <pre>{{ detail }}</pre>
+  </div>
+  {% endif %}
+
+  <p class="card-text-muted">
+    Si el problema persiste, contacta con soporte y adjunta este mensaje.
+  </p>
+{% endblock %}

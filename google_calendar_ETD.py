@@ -1,3 +1,4 @@
+
 import os
 import logging
 from datetime import datetime, timedelta, timezone
@@ -6,13 +7,12 @@ from zoneinfo import ZoneInfo
 import psycopg2
 import requests
 import configparser
-from flask import Flask, redirect, request, session, jsonify
+from flask import Flask, redirect, request, session, jsonify, render_template
 
 # ============================================================
 # CONFIGURACIÓN: scripts.conf + entorno
 # ============================================================
 
-# Ruta del fichero de config.
 DEFAULT_CONF_PATH = os.path.join(os.path.dirname(__file__), "scripts.conf")
 CONF_PATH = os.environ.get("SCRIPTS_CONF_PATH", DEFAULT_CONF_PATH)
 
@@ -22,7 +22,6 @@ read_files = config.read(CONF_PATH)
 if not read_files:
     raise RuntimeError(f"No se ha podido leer scripts.conf en: {CONF_PATH}")
 
-# ------- GOOGLE -------
 if "GOOGLE" not in config:
     raise RuntimeError("No se ha encontrado la sección [GOOGLE] en scripts.conf")
 
@@ -35,7 +34,6 @@ if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI):
 
 GOOGLE_SCOPES = "https://www.googleapis.com/auth/calendar.events"
 
-# ------- DB (SUPABASE POSTGRES) -------
 if "DB" not in config:
     raise RuntimeError("No se ha encontrado la sección [DB] en scripts.conf")
 
@@ -45,53 +43,49 @@ DB_NAME = config.get("DB", "DB_NAME")
 DB_USER = config.get("DB", "DB_USER")
 DB_PASS = config.get("DB", "DB_PASS")
 
-# SECRET_KEY para Flask (puede ir también a scripts.conf si quieres)
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 
-# Profile de pruebas para /google/login (para el OAuth inicial de tokens)
 DEMO_PROFILE_ID = os.environ.get(
     "DEMO_PROFILE_ID",
-    "d20d2784-84eb-4495-9ba7-244d062f1d18"
+    "00000000-0000-0000-0000-000000000001"
 )
 
-# ============================================================
-# LOGGING
-# ============================================================
-
 logging.basicConfig(
-    level=logging.DEBUG,  # LOG: subimos a DEBUG para ver todo
+    level=logging.DEBUG,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger("google-calendar-etd")
 
-# ============================================================
-# APP FLASK
-# ============================================================
+BASE_FILES_DIR = os.path.join(os.path.dirname(__file__), "google_calendar_ETD_files")
 
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    template_folder=os.path.join(BASE_FILES_DIR, "templates"),
+    static_folder=os.path.join(BASE_FILES_DIR, "static"),
+)
 app.secret_key = SECRET_KEY
 
 
 def get_db_conn():
-    """
-    Abre una conexión a la BD Supabase (Postgres) usando [DB] de scripts.conf.
-    """
-    logger.debug("LOG: Abriendo conexión a BD %s@%s:%s/%s", DB_USER, DB_HOST, DB_PORT, DB_NAME)
+    logger.debug(
+        "LOG: Abriendo conexión a BD %s@%s:%s/%s",
+        DB_USER,
+        DB_HOST,
+        DB_PORT,
+        DB_NAME,
+    )
     conn = psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
         dbname=DB_NAME,
         user=DB_USER,
         password=DB_PASS,
-        sslmode="require",  # Supabase requiere SSL
+        sslmode="require",
     )
     return conn
 
 
 def build_google_auth_url(state: str) -> str:
-    """
-    Construye la URL de autorización de Google OAuth 2.0.
-    """
     from urllib.parse import urlencode
 
     params = {
@@ -99,9 +93,9 @@ def build_google_auth_url(state: str) -> str:
         "redirect_uri": GOOGLE_REDIRECT_URI,
         "response_type": "code",
         "scope": GOOGLE_SCOPES,
-        "access_type": "offline",          # importante para refresh_token
+        "access_type": "offline",
         "include_granted_scopes": "true",
-        "prompt": "consent",               # fuerza consentimiento y refresh_token
+        "prompt": "consent",
         "state": state,
     }
     url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
@@ -109,15 +103,7 @@ def build_google_auth_url(state: str) -> str:
     return url
 
 
-# ============================================================
-# HELPERS BD Y GOOGLE TOKENS
-# ============================================================
-
 def get_fresh_access_token(profile_id: str):
-    """
-    Obtiene un access_token válido para el profile_id.
-    Si está caducado (o cerca de caducar), lo renueva con el refresh_token.
-    """
     logger.info("LOG: Buscando tokens para profile_id=%s", profile_id)
     conn = get_db_conn()
     cur = conn.cursor()
@@ -139,12 +125,10 @@ def get_fresh_access_token(profile_id: str):
         now = datetime.now(timezone.utc)
         logger.debug("LOG: token_expiry=%s ahora=%s", token_expiry, now)
 
-        # Si aún no caduca en menos de 2 minutos, lo usamos
         if token_expiry and token_expiry > now + timedelta(minutes=2):
             logger.info("LOG: Access token aún válido para profile_id=%s", profile_id)
             return access_token, None
 
-        # Renovar access_token con el refresh_token
         logger.info("LOG: Renovando access token para profile_id=%s", profile_id)
         token_url = "https://oauth2.googleapis.com/token"
         data = {
@@ -185,14 +169,6 @@ def get_fresh_access_token(profile_id: str):
 
 
 def fetch_task_context(annotation_task_id: str):
-    """
-    Recupera toda la info necesaria de BD a partir de annotation_task_id:
-      - annotation_tasks
-      - annotations
-      - deals
-      - leads
-      - profiles (usuario asignado)
-    """
     logger.info("LOG: Recuperando contexto de tarea para annotation_task_id=%s", annotation_task_id)
 
     sql = """
@@ -253,10 +229,6 @@ def fetch_task_context(annotation_task_id: str):
 
 
 def create_calendar_event_from_task_context(task: dict):
-    """
-    A partir del contexto de la tarea (dict de fetch_task_context),
-    crea el evento en Google Calendar del usuario asignado (profile_id).
-    """
     logger.debug("LOG: Creando evento desde contexto de tarea: %s", task)
 
     profile_id = task.get("profile_id")
@@ -271,9 +243,6 @@ def create_calendar_event_from_task_context(task: dict):
         logger.error("LOG: No se pudo obtener access_token para profile_id=%s: %s", profile_id, err)
         return None, err or "No access token disponible"
 
-    # =======================
-    # Construir fechas
-    # =======================
     due_date = task.get("due_date")
     logger.debug("LOG: due_date recuperado de BD: %s (%s)", due_date, type(due_date))
 
@@ -291,9 +260,6 @@ def create_calendar_event_from_task_context(task: dict):
 
     logger.debug("LOG: start_dt=%s end_dt=%s", start_dt.isoformat(), end_dt.isoformat())
 
-    # =======================
-    # Título y descripción
-    # =======================
     lead_first_name = task.get("lead_first_name") or ""
     lead_last_name = task.get("lead_last_name") or ""
     lead_name = (lead_first_name + " " + lead_last_name).strip() or "Cliente"
@@ -329,9 +295,6 @@ def create_calendar_event_from_task_context(task: dict):
     logger.debug("LOG: summary=%s", summary)
     logger.debug("LOG: description=%s", description)
 
-    # =======================
-    # Attendees
-    # =======================
     attendees = []
 
     profile_email = task.get("profile_email")
@@ -367,6 +330,11 @@ def create_calendar_event_from_task_context(task: dict):
         "attendees": attendees,
         "reminders": {
             "useDefault": True
+        },
+        "extendedProperties": {
+            "private": {
+                "annotation_task_id": str(annotation_task_id)
+            }
         }
     }
 
@@ -396,30 +364,14 @@ def create_calendar_event_from_task_context(task: dict):
         return None, f"Excepción hablando con Google Calendar: {e}"
 
 
-# ============================================================
-# RUTAS: HEALTHCHECK + OAUTH + WEBHOOK
-# ============================================================
-
 @app.route("/")
 def index():
-    """
-    Healthcheck simple.
-    """
-    return (
-        "<h1>Google Calendar integración ETD</h1>"
-        "<p>/google/login para conectar Google Calendar (OAuth).</p>"
-        "<p>POST /google/calendar/from_task con annotation_task_id para crear evento.</p>"
-    )
+    return render_template("index.html")
 
 
 @app.route("/google/login")
 def google_login():
-    """
-    Inicia el flujo OAuth con Google.
-    Para la demo, usamos DEMO_PROFILE_ID como profile_id del usuario.
-    En producción, esto debería venir del login de tu portal.
-    """
-    profile_id = DEMO_PROFILE_ID
+    profile_id = request.args.get("profile_id") or DEMO_PROFILE_ID
     session["profile_id"] = profile_id
 
     logger.info("LOG: Iniciando OAuth para profile_id=%s", profile_id)
@@ -429,34 +381,27 @@ def google_login():
 
 @app.route("/google/oauth2callback")
 def google_oauth2callback():
-    """
-    Callback de Google OAuth:
-      - Recibe ?code=...
-      - Intercambia por tokens
-      - Guarda/actualiza en profile_google_tokens
-    """
     try:
         logger.debug("LOG: Query string en oauth2callback: %s", dict(request.args))
         error = request.args.get("error")
         if error:
             logger.error("LOG: Error en OAuth: %s", error)
-            return f"Error en OAuth: {error}", 400
+            return render_template("error.html", message=f"Error en OAuth: {error}", detail=""), 400
 
         code = request.args.get("code")
         state = request.args.get("state")
 
         if not code:
             logger.error("LOG: Falta 'code' en la respuesta de Google")
-            return "Falta 'code' en la respuesta de Google", 400
+            return render_template("error.html", message="Falta 'code' en la respuesta de Google", detail=""), 400
 
         profile_id = state or session.get("profile_id")
         if not profile_id:
             logger.error("LOG: No se ha podido determinar el profile_id en callback")
-            return "No se ha podido determinar el profile_id", 400
+            return render_template("error.html", message="No se ha podido determinar el profile_id", detail=""), 400
 
         logger.info("LOG: Recibido callback OAuth para profile_id=%s", profile_id)
 
-        # 1) Intercambiar code por tokens
         token_url = "https://oauth2.googleapis.com/token"
         data = {
             "code": code,
@@ -472,7 +417,7 @@ def google_oauth2callback():
 
         if token_resp.status_code != 200:
             logger.error("LOG: Error al obtener tokens: %s", token_resp.text)
-            return f"Error al obtener tokens: {token_resp.text}", 400
+            return render_template("error.html", message="Error al obtener tokens de Google", detail=token_resp.text), 400
 
         token_data = token_resp.json()
         access_token = token_data["access_token"]
@@ -483,12 +428,15 @@ def google_oauth2callback():
 
         if not refresh_token:
             logger.error("LOG: No se recibió refresh_token.")
-            return "No se recibió refresh_token. Revisa 'prompt=consent' y 'access_type=offline'.", 400
+            return render_template(
+                "error.html",
+                message="No se recibió refresh_token de Google",
+                detail="Revisa 'prompt=consent' y 'access_type=offline' en la configuración de OAuth."
+            ), 400
 
         expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
         logger.debug("LOG: Tokens recibidos. Expira en: %s", expiry)
 
-        # 2) Guardar/actualizar tokens en la tabla profile_google_tokens
         conn = get_db_conn()
         conn.autocommit = True
         cur = conn.cursor()
@@ -518,24 +466,24 @@ def google_oauth2callback():
 
         logger.info("LOG: Tokens guardados/actualizados para profile_id=%s", profile_id)
 
-        html = f"""
-        <h1>Google Calendar conectado correctamente ✅</h1>
-        <p>Profile ID: <code>{profile_id}</code></p>
-        <p>Ya puedes llamar al webhook <code>POST /google/calendar/from_task</code> pasando <code>annotation_task_id</code> para crear eventos.</p>
-        """
-        return html
+        profile_email = None
+
+        return render_template(
+            "oauth_success.html",
+            profile_id=profile_id,
+            profile_email=profile_email,
+        )
     except Exception as e:
         logger.exception("LOG: Excepción en oauth2callback: %s", e)
-        return f"Error interno en oauth2callback: {e}", 500
+        return render_template(
+            "error.html",
+            message="Ha ocurrido un error al conectar con Google Calendar.",
+            detail=str(e),
+        ), 500
 
 
 @app.route("/google/calendar/from_task", methods=["POST"])
 def create_event_from_task():
-    """
-    Webhook:
-      POST /google/calendar/from_task
-      Body JSON: { "annotation_task_id": "..." }
-    """
     try:
         raw_data = request.data.decode("utf-8", errors="replace")
         logger.info("LOG: Petición /google/calendar/from_task body RAW: %s", raw_data)
@@ -573,10 +521,6 @@ def create_event_from_task():
         logger.exception("LOG: Excepción en /google/calendar/from_task: %s", e)
         return jsonify({"error": f"Excepción interna: {e}"}), 500
 
-
-# ============================================================
-# MAIN
-# ============================================================
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000, debug=True)
