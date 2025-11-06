@@ -785,8 +785,6 @@ def create_portal_user(data, source, config=None):
         origin = 'gads'
     elif source=='ETD':
         origin = 'fb'
-
-    app.logger.info(f"🌍 Origen procesado----------------------: '{source}'")
     app.logger.info(f"🌍 Origen procesado: '{origin}'")
 #mappeo específico de origen
 
@@ -1221,7 +1219,6 @@ def receive_b2b_lead():
 
     # 1) source obligatorio (coincide con company_name)
     source = (raw.get("source") or raw.get("Source") or "").strip()
-    origen = (raw.get("origen") or raw.get("Origen") or "").strip()
     if not source:
         return jsonify({"error": "Falta 'source'/'Source' en el payload"}), 400
 
