@@ -224,92 +224,88 @@
         "required_fields": ["nombre_y_apellidos", "correo_electrónico", "número_de_teléfono"]
       }
     },
-"APTD": {
-  "description": "Mapping para Abogados Typeform / n8n",
-  "company_name": "APTD",
-  "fields": {
-    "Nombre": "nombre_y_apellidos",
-    "Mail": "correo_electrónico",
-    "Teléfono": "número_de_teléfono",
-    "Lead ID": "lead_gen_id",
-    "leadgen_id": "lead_gen_id",
-    
-    "P1": "tipo_de_deuda",
-    "P2": "cantidad_acreedores",
-    "P3": "vivienda_propiedad",
-    "P4": "vehiculo_propiedad",
-    "P5": "ingresos_familiares",
-    "P6": "consentimiento"
+  "APTD": {
+    "description": "Mapping para Abogados Typeform / n8n",
+    "company_name": "APTD",
+    "fields": {
+      "Nombre": "nombre_y_apellidos",
+      "Mail": "correo_electrónico",
+      "Teléfono": "número_de_teléfono",
+      "Lead ID": "lead_gen_id",
+      "leadgen_id": "lead_gen_id",
+      
+      "P1": "tipo_de_deuda",
+      "P2": "cantidad_acreedores",
+      "P3": "vivienda_propiedad",
+      "P4": "vehiculo_propiedad",
+      "P5": "ingresos_familiares",
+      "P6": "consentimiento"
+    },
+    "labels": {
+      "tipo_de_deuda": "Tipo de deuda",
+      "cantidad_acreedores": "Cantidad de deudas",
+      "vivienda_propiedad": "Vivienda en propiedad",
+      "vehiculo_propiedad": "Vehículo en propiedad",
+      "ingresos_familiares": "Ingresos familiares",
+      "consentimiento": "Consentimiento cesión datos"
+    },
+    "validations": {
+      "check_debt_questions": false,
+      "required_fields": ["nombre_y_apellidos", "correo_electrónico", "número_de_teléfono"]
+    }
   },
-  "labels": {
-    "tipo_de_deuda": "Tipo de deuda",
-    "cantidad_acreedores": "Cantidad de deudas",
-    "vivienda_propiedad": "Vivienda en propiedad",
-    "vehiculo_propiedad": "Vehículo en propiedad",
-    "ingresos_familiares": "Ingresos familiares",
-    "consentimiento": "Consentimiento cesión datos"
-  },
-  "validations": {
-    "check_debt_questions": false,
-    "required_fields": ["nombre_y_apellidos", "correo_electrónico", "número_de_teléfono"]
-  }
-},
-"ETD": {
-  "description": "Mapping para Eliminamos Tu Deuda desde Google Sheets / n8n",
-  "company_name": "Eliminamos Tu Deuda",
-  "fields": {
-    "Fecha": "created_time",
-    "Nombre": "nombre_y_apellidos",
-    "Teléfono": "número_de_teléfono",
-    "Mail": "correo_electrónico",
+  "ETD": {
+    "description": "Mapping para Eliminamos Tu Deuda desde Google Sheets / n8n",
+    "company_name": "Eliminamos Tu Deuda",
+    "fields": {
+      "Fecha": "created_time",
+      "Nombre": "nombre_y_apellidos",
+      "Teléfono": "número_de_teléfono",
+      "Mail": "correo_electrónico",
 
-    "Lead ID": "lead_gen_id",
-    "leadgen_id": "lead_gen_id",
+      "Lead ID": "lead_gen_id",
+      "leadgen_id": "lead_gen_id",
 
-    "P1": "P1",
-    "P2": "P2",
-    "P3": "P3",
-    "P4": "P4",
-    "P5": "P5",
-    "P6": "P6"
+      "P1": "P1",
+      "P2": "P2",
+      "P3": "P3",
+      "P4": "P4",
+      "P5": "P5",
+      "P6": "P6"
+    },
+    "labels": {
+      "P1": "Tipo de Cita",
+      "P2": "Oficina Seleccionada"
+    },
+    "validations": {
+      "check_debt_questions": false,
+      "required_fields": ["correo_electrónico", "número_de_teléfono"]
+    }
   },
-  "labels": {
-    "P1": "Tipo de Cita",
-    "P2": "Oficina Seleccionada"
-  },
-  "validations": {
-    "check_debt_questions": false,
-    "required_fields": ["correo_electrónico", "número_de_teléfono"]
-  }
-},
-"ETD2": {
-  "description": "Mapping para Eliminamos Tu Deuda desde Google Sheets / n8n",
-  "company_name": "Eliminamos Tu Deuda",
-  "fields": {
-    "Fecha": "created_time",
-    "Nombre": "nombre_y_apellidos",
-    "Teléfono": "número_de_teléfono",
-    "Mail": "correo_electrónico",
+  "ETD2": {
+    "description": "Mapping para Eliminamos Tu Deuda desde Google Sheets / n8n",
+    "company_name": "Eliminamos Tu Deuda",
+    "fields": {
+      "Fecha": "created_time",
+      "Nombre": "nombre_y_apellidos",
+      "Teléfono": "número_de_teléfono",
+      "Mail": "correo_electrónico",
 
-    "Lead ID": "lead_gen_id",
-    "leadgen_id": "lead_gen_id",
+      "Lead ID": "lead_gen_id",
+      "leadgen_id": "lead_gen_id",
 
-    "P1": "P1",
-    "P2": "P2",
-    "P3": "P3",
-    "P4": "P4",
-    "P5": "P5",
-    "P6": "P6"
-  },
-  "labels": {
-    "P1": "Oficina Seleccionada"
-  },
-  "validations": {
-    "check_debt_questions": false,
-    "required_fields": ["correo_electrónico", "número_de_teléfono"]
+      "P1": "P1"
+
+    },
+    "labels": {
+      "P1": "Oficina Seleccionada"
+    },
+    "validations": {
+      "check_debt_questions": false,
+      "required_fields": ["correo_electrónico", "número_de_teléfono"]
+    }
   }
-}
-  }
-} 
+    }
+  } 
 
 
