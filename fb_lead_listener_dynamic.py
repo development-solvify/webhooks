@@ -779,7 +779,17 @@ def create_portal_user(data, source, config=None):
     last = ' '.join(parts[1:]) if len(parts) > 1 else ''
     email = data.get('correo_electrónico','') or data.get('email','')
 
-    print(f"DEBUG ------------------------------: '{origin}'")
+    
+    #mappeo específico de origen
+    
+    if source=='ETD2':
+        origin = 'gads'
+    elif source=='ETD':
+        origin = 'fb'
+
+#mappeo específico de origen
+
+    
     payload = {
         'first_name': first,
         'last_name':  last,
