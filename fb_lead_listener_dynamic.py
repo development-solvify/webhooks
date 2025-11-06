@@ -778,6 +778,8 @@ def create_portal_user(data, source, config=None):
     first = parts[0] if parts else ''
     last = ' '.join(parts[1:]) if len(parts) > 1 else ''
     email = data.get('correo_electrónico','') or data.get('email','')
+
+    print(f"DEBUG ------------------------------: '{channel}'")
     payload = {
         'first_name': first,
         'last_name':  last,
