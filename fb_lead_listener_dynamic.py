@@ -547,6 +547,196 @@ def c_lead_assigment_ETD(source: str, data: dict):
         except Exception:
             pass
 
+def c_assign_deal_ETD(deal_id: str, source: str, data: dict, config: dict | None = None):
+    """
+    Asigna company_id y user_assigned_id al deal:
+      - company_id: según company_name (config/source)
+      - user_assigned_id: comercial de la oficina (ETD/ETD2) con menos deals activos
+
+    Usa:
+      - c_lead_assigment_ETD(source, data) para resolver oficina -> company_address_id
+    """
+    if not deal_id:
+        app.logger.warning("[ASSIGN_ETD] No se puede asignar: deal_id vacío o None")
+        return None
+
+    # 1) Resolver oficina y oficina->company_address_id + comerciales
+    office_info = c_lead_assigment_ETD(source, data)
+    app.logger.info(f"[ASSIGN_ETD] office_info: {office_info}")
+
+    company_address_id = None
+    if office_info and office_info.get("company_address_id"):
+        company_address_id = office_info["company_address_id"]
+
+    # 2) Determinar company_name igual que en create_portal_user
+    if config and config.get("company_name"):
+        company_name = config["company_name"]
+        app.logger.debug(f"[ASSIGN_ETD] company_name desde config: '{company_name}'")
+    elif source in ('Backup_FB', 'Alianza_FB', 'MARTIN', 'fb'):
+        company_name = 'Solvify'
+        app.logger.debug("[ASSIGN_ETD] company_name asignado: 'Solvify'")
+    else:
+        company_name = source
+        app.logger.debug(f"[ASSIGN_ETD] company_name asignado desde source: '{company_name}'")
+
+    company_id = None
+    user_assigned_id = None
+
+    conn = None
+    cur = None
+    try:
+        conn = get_supabase_connection()
+        cur = conn.cursor()
+
+        # 3) Buscar company_id en companies por nombre
+        try:
+            cur.execute(
+                """
+                SELECT id
+                FROM public.companies
+                WHERE lower("name") = lower(%s)
+                  AND (is_deleted = FALSE OR is_deleted IS NULL)
+                LIMIT 1;
+                """,
+                (company_name,),
+            )
+            row = cur.fetchone()
+            if row:
+                company_id = row[0]
+                app.logger.info(
+                    f"[ASSIGN_ETD] company_id encontrado para '{company_name}': {company_id}"
+                )
+            else:
+                app.logger.warning(
+                    f"[ASSIGN_ETD] No se encontró company_id para '{company_name}' "
+                    f"en companies. Usando posibles fallbacks."
+                )
+                # 3b) Fallback: mantener el existing company_id del deal si ya lo tiene
+                cur.execute(
+                    """
+                    SELECT company_id
+                    FROM public.deals
+                    WHERE id = %s
+                      AND is_deleted = FALSE;
+                    """,
+                    (deal_id,),
+                )
+                row_deal = cur.fetchone()
+                if row_deal and row_deal[0]:
+                    company_id = row_deal[0]
+                    app.logger.info(
+                        f"[ASSIGN_ETD] Usando company_id ya existente en deal {deal_id}: {company_id}"
+                    )
+                # 3c) Fallback estático específico (por ejemplo para Eliminamos Tu Deuda)
+                elif company_name == "Eliminamos Tu Deuda":
+                    company_id = "a9242a58-4f5d-494c-8a74-45f8cee150e6"
+                    app.logger.warning(
+                        f"[ASSIGN_ETD] Usando company_id estático para '{company_name}': {company_id}"
+                    )
+        except Exception as e_lookup:
+            app.logger.error(f"[ASSIGN_ETD] Error resolviendo company_id: {e_lookup}", exc_info=True)
+
+        # 4) Elegir comercial de la oficina (si tenemos company_address_id)
+        if company_address_id:
+            try:
+                cur.execute(
+                    """
+                    SELECT p.id AS user_id
+                    FROM public.profile_comp_addresses pca
+                    JOIN public.profiles p
+                      ON p.id = pca.user_id
+                     AND p.is_deleted = FALSE
+                    LEFT JOIN public.deals d
+                      ON d.user_assigned_id = p.id
+                     AND d.is_deleted = FALSE
+                    WHERE pca.company_address_id = %s
+                      AND pca.is_deleted = FALSE
+                    GROUP BY p.id
+                    ORDER BY COUNT(d.id) ASC, MIN(p.created_at) ASC
+                    LIMIT 1;
+                    """,
+                    (company_address_id,),
+                )
+                row_rep = cur.fetchone()
+                if row_rep:
+                    user_assigned_id = row_rep[0]
+                    app.logger.info(
+                        f"[ASSIGN_ETD] Comercial elegido para company_address_id={company_address_id}: "
+                        f"{user_assigned_id}"
+                    )
+                else:
+                    app.logger.warning(
+                        f"[ASSIGN_ETD] Sin comerciales activos para company_address_id={company_address_id}"
+                    )
+            except Exception as e_rep:
+                app.logger.error(
+                    f"[ASSIGN_ETD] Error buscando comercial para company_address_id={company_address_id}: {e_rep}",
+                    exc_info=True,
+                )
+        else:
+            app.logger.info(
+                f"[ASSIGN_ETD] Sin company_address_id resuelto; no se puede elegir comercial por oficina."
+            )
+
+        # 5) Construir y ejecutar UPDATE sobre deals
+        set_clauses = ["updated_at = now()"]
+        params = []
+
+        if company_id:
+            set_clauses.append("company_id = %s")
+            params.append(company_id)
+
+        if user_assigned_id:
+            set_clauses.append("user_assigned_id = %s")
+            params.append(user_assigned_id)
+
+        if len(set_clauses) > 1:  # algo más que updated_at
+            sql = (
+                "UPDATE public.deals "
+                "SET " + ", ".join(set_clauses) +
+                " WHERE id = %s AND is_deleted = FALSE;"
+            )
+            params.append(deal_id)
+
+            app.logger.info(
+                f"[ASSIGN_ETD] Ejecutando UPDATE deals para deal_id={deal_id} "
+                f"(company_id={company_id}, user_assigned_id={user_assigned_id})"
+            )
+            cur.execute(sql, tuple(params))
+            conn.commit()
+        else:
+            app.logger.info(
+                f"[ASSIGN_ETD] No hay cambios que aplicar en deal {deal_id} "
+                f"(ni company_id ni user_assigned_id resueltos)"
+            )
+
+        return {
+            "deal_id": deal_id,
+            "company_id": str(company_id) if company_id else None,
+            "user_assigned_id": str(user_assigned_id) if user_assigned_id else None,
+            "office_info": office_info,
+        }
+
+    except Exception as e:
+        app.logger.error(
+            f"[ASSIGN_ETD] Error general asignando deal {deal_id}: {e}",
+            exc_info=True,
+        )
+        return {
+            "deal_id": deal_id,
+            "company_id": None,
+            "user_assigned_id": None,
+            "office_info": office_info,
+        }
+    finally:
+        try:
+            if cur:
+                cur.close()
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
 def strip_country_code(phone):
     return re.sub(r'^(?:\+?34)', '', str(phone).strip())
 
@@ -1190,21 +1380,26 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
 
 
     task = create_info_lead_task(deal_id, data, content=info_content)
-
-    # DEBUG: probar asignación por oficina SOLO EN LOG
-    try:
-        if source in ("ETD", "ETD2"):
-            asign_debug = c_lead_assigment_ETD(source, data)
-            app.logger.info(f"[ASSIGN_ETD_DEBUG] Resultado asignación: {asign_debug}")
-    except Exception as e:
-        app.logger.error(f"[ASSIGN_ETD_DEBUG] Error: {e}", exc_info=True)    
-
     app.logger.info(f"Tarea Info lead creada para {source}: {task}")
+
+    # 4️⃣ Asignación final de deal (solo ETD / ETD2 de momento)
+    assignment_result = None
+    try:
+        if deal_id and source in ("ETD", "ETD2"):
+            assignment_result = assign_deal_ETD(deal_id, source, data, config)
+            app.logger.info(f"[ASSIGN_ETD] Resultado asignación: {assignment_result}")
+    except Exception as e:
+        app.logger.error(
+            f"[ASSIGN_ETD] Error inesperado al asignar deal {deal_id} para source={source}: {e}",
+            exc_info=True,
+        )
+
     return {
         "portal_user_created": True,
         "info_lead_created": task is not None,
         "deal_id": deal_id,
         "task": task,
+        "assignment": assignment_result,  # útil para debug en logs/respuesta
     }
 
 # ----------------------------------------------------------------------------
