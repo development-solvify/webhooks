@@ -670,11 +670,11 @@ def create_portal_user(data, source, config=None):
     
     full = data.get('nombre_y_apellidos', '').strip()
     phone = strip_country_code(data.get('número_de_teléfono','') or data.get('phone_number',''))
-    
+    origin = data.get('origen', '').strip()
     app.logger.info(f"👤 Nombre procesado: '{full}'")
     app.logger.info(f"📞 Teléfono original: '{data.get('número_de_teléfono', '') or data.get('phone_number', '')}'")
     app.logger.info(f"📞 Teléfono procesado: '{phone}'")
-    
+    app.logger.info(f"🌍 Origen procesado: '{origin}'")
     # 1️⃣ Validar datos usando configuración específica
     if config:
         is_valid, rejection_reason = validate_lead_data(data, config, source)
@@ -783,7 +783,7 @@ def create_portal_user(data, source, config=None):
         'last_name':  last,
         'email':      email,
         **({'phone': phone} if phone else {}),
-        'channel':    'fb',
+        'channel':    origin,
         'form_name':  data.get('form_name',''),
         'campaign':   data.get('campaign_name',''),
         'lead_gen_id':data.get('lead_gen_id') or data.get('leadgen_id',''),
@@ -1208,6 +1208,7 @@ def receive_b2b_lead():
 
     # 1) source obligatorio (coincide con company_name)
     source = (raw.get("source") or raw.get("Source") or "").strip()
+    origen = (raw.get("origen") or raw.get("Origen") or "").strip()
     if not source:
         return jsonify({"error": "Falta 'source'/'Source' en el payload"}), 400
 
@@ -1260,150 +1261,6 @@ def receive_b2b_lead():
     result = process_lead_common(source, data, raw, config)
 
     # 8) Respuesta
-    return jsonify({
-        "message": f"Lead de {source} procesado",
-        "source": source,
-        "portal_user_created": result["portal_user_created"],
-        "info_lead_created": result["info_lead_created"],
-        "deal_id": result["deal_id"],
-        "task": result["task"],
-    }), 200
-
-
-@app.route('/B2B1', methods=['POST'])
-def receive_b2b_lead1():
-    """
-    Endpoint genérico para recibir leads B2B desde n8n
-    Acepta 'source' y usa lógica común: crear PortalUser -> (si OK) deal_id -> tarea Info lead
-    """
-    raw = request.json or {}
-    if isinstance(raw, list):
-        if not raw:
-            return jsonify({"error": "lista vacía"}), 400
-        raw = raw[0]
-
-    # --- Normalización de alias del source ---
-    alias_map = {
-        "despacho calero": "DespCaldero",
-        "despcaldero": "DespCaldero",
-        "despcalero": "DespCaldero",
-        "economis": "economis",  
-        "lexcorner": "lexcorner",  # Nuevo
-        "lexcorner": "Lex C",  # Nuevo
-        "buenalex": "buenalex",  
-    }
-    src_in = (raw.get("source") or raw.get("Source") or "").strip()
-    src_norm_l = src_in.lower()
-   
-    source = alias_map.get(src_norm_l, src_in or "")
-    
-    app.logger.debug(f"Source normalizado: '{source}'")
-
-    app.logger.debug("="*50)
-    app.logger.debug("RAW GENERIC B2B LEAD:")
-    for key, value in raw.items():
-        app.logger.debug(f"  '{key}': '{value}'")
-    app.logger.debug("="*50)
-    app.logger.debug(f"Source detectado: '{source}'")
-
-    # 1) Mapping dinámico para el source
-    config = form_mapping_manager.get_mapping_for_form(source=source)
-    mapping = config.get("fields", {})
-    app.logger.debug(f"Config {source}: {config.get('description', 'Configuración dinámica')}")
-    app.logger.debug("MAPPING APLICADO:")
-    for orig, dest in mapping.items():
-        app.logger.debug(f"  '{orig}' → '{dest}'")
-
-    # 2) Mapear datos usando mapping dinámico
-    data = {}
-
-    # 2.1 Aplicar mapping específico
-    for original_key, mapped_key in mapping.items():
-        value = raw.get(original_key)
-        if value is not None:
-            data[mapped_key] = str(value) if not isinstance(value, str) else value
-            app.logger.debug(f"MAPEADO: '{original_key}' → '{mapped_key}' = '{value}' (tipo: {type(value)})")
-
-    # 2.2 Fallback inteligente para críticos
-    critical_fields = {
-        'nombre_y_apellidos': [
-            'name', 'full_name', 'fullname', 'nombre', 'nombre_completo', 
-            'full name', 'Full Name', 'Nombre', 'Nombre '  # ← Agregado "Nombre " con espacio
-        ],
-        'correo_electrónico': [
-            'email', 'correo', 'mail', 'Email', 'e-mail', 'Mail'  # ← Agregado "Mail"
-        ],
-        'número_de_teléfono': [
-            'phone', 'telefono', 'teléfono', 'phone_number', 'Phone Number', 
-            'tel', 'mobile', 'Teléfono'  # ← Agregado "Teléfono"
-        ]
-    }
-    for target_field, possible_sources in critical_fields.items():
-        current_value = str(data.get(target_field, '')).strip()
-        if not current_value:
-            app.logger.debug(f"FALLBACK: Buscando '{target_field}' (actual: '{current_value}')")
-            for possible_source in possible_sources:
-                raw_value_original = raw.get(possible_source, '')
-                raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''
-                if raw_value:
-                    data[target_field] = raw_value
-                    app.logger.debug(f"FALLBACK MAPEADO: '{possible_source}' → '{target_field}' = '{raw_value}' (tipo original: {type(raw_value_original)})")
-                    break
-                else:
-                    app.logger.debug(f"FALLBACK: '{possible_source}' no encontrado o vacío")
-        else:
-            app.logger.debug(f"FALLBACK: '{target_field}' ya tiene valor: '{current_value}'")
-
-    # 2.3 Agregar campos no mapeados (compatibilidad), excluyendo 'source'
-    for k, v in raw.items():
-        mapped_key = mapping.get(k)
-        if not mapped_key and k not in data and k != 'source':
-            data[k] = str(v) if not isinstance(v, str) else v
-            app.logger.debug(f"SIN MAPEAR: '{k}' = '{v}' (tipo: {type(v)})")
-
-    # 2.4 Debug final
-    app.logger.debug(f"DATOS FINALES MAPEADOS {source}:")
-    for key, value in data.items():
-        app.logger.debug(f"  '{key}': '{value}' (tipo: {type(value)})")
-
-    # --- Blindaje Despacho calero: completar campos críticos desde RAW si faltan ---
-    src_norm = (source or "").strip().lower()
-    app.logger.debug(f"=== BLINDAJE DEBUG: source='{source}', src_norm='{src_norm}' ===")
-    app.logger.debug(f"¿src_norm en lista?: {src_norm in ('despacho calero', 'despcaldero', 'despcalero')}")
-
-    if src_norm in ("despacho calero", "despcaldero", "despcalero"):
-        app.logger.debug("ENTRANDO EN BLINDAJE DESPCALDERO")
-
-
-    if src_norm in ("despacho calero", "despcaldero", "despcalero"):
-        # Deuda
-        if not data.get("monto_total_deudas"):
-            v = raw.get("Deuda") or raw.get("deuda")
-            if v is not None:
-                data["monto_total_deudas"] = str(v)
-
-        # Cantidad de deudas
-        if not data.get("cantidad_acreedores"):
-            v = (raw.get("Cantidad deudas") or raw.get("Cantidad de deudas")
-                 or raw.get("cantidad_deudas") or raw.get("cantidad deudas"))
-            if v is not None:
-                data["cantidad_acreedores"] = str(v)
-
-        # Dispuesto
-        if not data.get("dispuesto"):
-            v = raw.get("Dispuesto") or raw.get("dispuesto")
-            if v is not None:
-                data["dispuesto"] = str(v)
-
-        app.logger.debug("AFTER FILL (DespCaldero): " +
-                         f"monto_total_deudas={data.get('monto_total_deudas')}, " +
-                         f"cantidad_acreedores={data.get('cantidad_acreedores')}, " +
-                         f"dispuesto={data.get('dispuesto')}")
-
-
-    # 3) Lógica COMÚN: portal user -> (si OK) deal_id -> tarea Info lead
-    result = process_lead_common(source, data, raw, config)
-
     return jsonify({
         "message": f"Lead de {source} procesado",
         "source": source,
