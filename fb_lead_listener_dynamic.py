@@ -349,15 +349,15 @@ def _normalize_office_token(raw: str) -> str:
     text = text.replace(" ", "_")
 
     return text
-
 def c_lead_assigment_ETD(source: str, data: dict):
     """
     1) Lee la oficina del formulario:
        - ETD  -> P2 (Oficina Seleccionada)
        - ETD2 -> P1 (Oficina Seleccionada)
     2) Mapea el valor del formulario a un alias de company_addresses.alias
-    3) Busca la oficina en company_addresses y la saca por log.
-    4) Devuelve info básica (sin asignar todavía comerciales).
+    3) Busca la oficina en company_addresses.
+    4) Saca los comerciales (profiles) ligados a esa oficina vía profile_comp_addresses.
+    5) Devuelve info básica + lista de comerciales.
     """
     # 1) Leer oficina desde el payload normalizado
     office_raw = None
@@ -422,6 +422,7 @@ def c_lead_assigment_ETD(source: str, data: dict):
             "office_raw": office_raw,
             "alias": None,
             "company_address_id": None,
+            "sales_reps": [],
         }
 
     alias = OFFICE_TOKEN_TO_ALIAS.get(token)
@@ -435,15 +436,16 @@ def c_lead_assigment_ETD(source: str, data: dict):
             "office_raw": office_raw,
             "alias": None,
             "company_address_id": None,
+            "sales_reps": [],
         }
 
-    # 4) Buscar la oficina en company_addresses por alias
     conn = None
     cur = None
     try:
         conn = get_supabase_connection()
         cur = conn.cursor()
 
+        # 4) Buscar la oficina en company_addresses por alias
         cur.execute(
             """
             SELECT id, alias
@@ -465,6 +467,7 @@ def c_lead_assigment_ETD(source: str, data: dict):
                 "office_raw": office_raw,
                 "alias": alias,
                 "company_address_id": None,
+                "sales_reps": [],
             }
 
         company_address_id, alias_db = row
@@ -474,15 +477,58 @@ def c_lead_assigment_ETD(source: str, data: dict):
             f"→ alias '{alias_db}' → company_address_id={company_address_id}"
         )
 
+        # 5) Obtener comerciales (profiles) ligados a esa oficina
+        cur.execute(
+            """
+            SELECT p.id,
+                   p.first_name,
+                   p.last_name,
+                   p.email
+            FROM public.profile_comp_addresses pca
+            JOIN public.profiles p
+              ON p.id = pca.user_id
+            WHERE pca.company_address_id = %s
+              AND pca.is_deleted = FALSE
+              AND p.is_deleted = FALSE;
+            """,
+            (company_address_id,),
+        )
+        reps = cur.fetchall()
+
+        sales_reps = []
+        for rep in reps:
+            rep_id, first_name, last_name, email = rep
+            full_name = f"{first_name} {last_name}".strip()
+            sales_reps.append(
+                {
+                    "id": str(rep_id),
+                    "full_name": full_name,
+                    "email": email,
+                }
+            )
+
+        if sales_reps:
+            app.logger.info(
+                f"[ASSIGN_ETD] {source}: comerciales para alias '{alias_db}' "
+                f"(company_address_id={company_address_id}): "
+                + ", ".join([f"{r['full_name']} <{r['email']}>" for r in sales_reps])
+            )
+        else:
+            app.logger.warning(
+                f"[ASSIGN_ETD] {source}: sin comerciales activos para "
+                f"company_address_id={company_address_id} (alias='{alias_db}')"
+            )
+
         return {
             "office_raw": office_raw,
             "alias": alias_db,
             "company_address_id": str(company_address_id),
+            "sales_reps": sales_reps,
         }
 
     except Exception as e:
         app.logger.error(
-            f"[ASSIGN_ETD] Error buscando oficina para '{office_raw}' "
+            f"[ASSIGN_ETD] Error buscando oficina/comerciales para '{office_raw}' "
             f"(token='{token}', alias='{alias}') : {e}",
             exc_info=True,
         )
@@ -490,6 +536,7 @@ def c_lead_assigment_ETD(source: str, data: dict):
             "office_raw": office_raw,
             "alias": alias,
             "company_address_id": None,
+            "sales_reps": [],
         }
     finally:
         try:
@@ -499,7 +546,6 @@ def c_lead_assigment_ETD(source: str, data: dict):
                 conn.close()
         except Exception:
             pass
-
 
 def strip_country_code(phone):
     return re.sub(r'^(?:\+?34)', '', str(phone).strip())
