@@ -783,7 +783,7 @@ def create_portal_user(data, source, config=None):
         'last_name':  last,
         'email':      email,
         **({'phone': phone} if phone else {}),
-        'channel':    company_name,
+        'channel':    'fb',
         'form_name':  data.get('form_name',''),
         'campaign':   data.get('campaign_name',''),
         'lead_gen_id':data.get('lead_gen_id') or data.get('leadgen_id',''),
