@@ -350,7 +350,6 @@ def _normalize_office_token(raw: str) -> str:
 
     return text
 
-
 def c_lead_assigment_ETD(source: str, data: dict):
     """
     1) Lee la oficina del formulario:
@@ -447,7 +446,7 @@ def c_lead_assigment_ETD(source: str, data: dict):
 
         cur.execute(
             """
-            SELECT id, name, alias
+            SELECT id, alias
             FROM public.company_addresses
             WHERE alias = %s
               AND (is_deleted = FALSE OR is_deleted IS NULL)
@@ -468,7 +467,7 @@ def c_lead_assigment_ETD(source: str, data: dict):
                 "company_address_id": None,
             }
 
-        company_address_id, name_db, alias_db = row
+        company_address_id, alias_db = row
 
         app.logger.info(
             f"[ASSIGN_ETD] {source}: oficina formulario '{office_raw}' "
@@ -479,7 +478,6 @@ def c_lead_assigment_ETD(source: str, data: dict):
             "office_raw": office_raw,
             "alias": alias_db,
             "company_address_id": str(company_address_id),
-            "name": name_db,
         }
 
     except Exception as e:
@@ -501,7 +499,6 @@ def c_lead_assigment_ETD(source: str, data: dict):
                 conn.close()
         except Exception:
             pass
-
 
 
 def strip_country_code(phone):
