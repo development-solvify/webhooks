@@ -670,11 +670,10 @@ def create_portal_user(data, source, config=None):
     
     full = data.get('nombre_y_apellidos', '').strip()
     phone = strip_country_code(data.get('número_de_teléfono','') or data.get('phone_number',''))
-    origin = data.get('origen', '').strip()
     app.logger.info(f"👤 Nombre procesado: '{full}'")
     app.logger.info(f"📞 Teléfono original: '{data.get('número_de_teléfono', '') or data.get('phone_number', '')}'")
     app.logger.info(f"📞 Teléfono procesado: '{phone}'")
-    app.logger.info(f"🌍 Origen procesado: '{origin}'")
+
     # 1️⃣ Validar datos usando configuración específica
     if config:
         is_valid, rejection_reason = validate_lead_data(data, config, source)
@@ -787,6 +786,8 @@ def create_portal_user(data, source, config=None):
     elif source=='ETD':
         origin = 'fb'
 
+    app.logger.info(f"🌍 Origen procesado----------------------: '{source}'")
+    app.logger.info(f"🌍 Origen procesado: '{origin}'")
 #mappeo específico de origen
 
     
