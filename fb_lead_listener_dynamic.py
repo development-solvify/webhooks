@@ -1386,7 +1386,7 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
     assignment_result = None
     try:
         if deal_id and source in ("ETD", "ETD2"):
-            assignment_result = assign_deal_ETD(deal_id, source, data, config)
+            assignment_result = c_assign_deal_ETD(deal_id, source, data, config)
             app.logger.info(f"[ASSIGN_ETD] Resultado asignación: {assignment_result}")
     except Exception as e:
         app.logger.error(
