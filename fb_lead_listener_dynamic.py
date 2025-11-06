@@ -320,6 +320,190 @@ def get_supabase_connection():
     }
     return pg8000.connect(**params)
 
+
+def _normalize_office_token(raw: str) -> str:
+    """
+    Normaliza el texto de la oficina a un token simple:
+    - minúsculas
+    - sin tildes/ñ
+    - espacios → '_'
+    """
+    if raw is None:
+        return ""
+    text = str(raw).strip().lower()
+
+    # quitar tildes y ñ
+    replacements = {
+        "á": "a", "à": "a",
+        "é": "e", "è": "e",
+        "í": "i", "ì": "i",
+        "ó": "o", "ò": "o",
+        "ú": "u", "ù": "u",
+        "ü": "u",
+        "ñ": "n",
+    }
+    for orig, repl in replacements.items():
+        text = text.replace(orig, repl)
+
+    # espacios → guiones bajos
+    text = text.replace(" ", "_")
+
+    return text
+
+
+def c_lead_assigment_ETD(source: str, data: dict):
+    """
+    1) Lee la oficina del formulario:
+       - ETD  -> P2 (Oficina Seleccionada)
+       - ETD2 -> P1 (Oficina Seleccionada)
+    2) Mapea el valor del formulario a un alias de company_addresses.alias
+    3) Busca la oficina en company_addresses y la saca por log.
+    4) Devuelve info básica (sin asignar todavía comerciales).
+    """
+    # 1) Leer oficina desde el payload normalizado
+    office_raw = None
+    if source == "ETD":
+        office_raw = data.get("P2") or data.get("p2")
+    elif source == "ETD2":
+        office_raw = data.get("P1") or data.get("p1")
+    else:
+        app.logger.debug(
+            f"[ASSIGN_ETD] Source '{source}' no usa lógica de oficinas (solo ETD / ETD2)."
+        )
+        return None
+
+    office_raw = (office_raw or "").strip()
+    if not office_raw:
+        app.logger.info(
+            f"[ASSIGN_ETD] {source}: sin oficina en formulario, no se hace nada."
+        )
+        return None
+
+    # 2) Normalizar valor de oficina a un token
+    token = _normalize_office_token(office_raw)
+
+    # 3) Mapeo de token → alias de company_addresses.alias
+    OFFICE_TOKEN_TO_ALIAS = {
+        # ciudades directas
+        "alicante": "Alicante",
+        "jerez": "Jerez",
+        "las_palmas_de_gran_canaria": "Las Palmas",
+        "las_palmas": "Las Palmas",
+        "madrid": "Madrid",
+        "malaga": "Málaga",
+        "palma_de_mallorca": "Palma de Mallorca",
+        "mallorca": "Palma de Mallorca",
+        "murcia": "Murcia",
+        "tenerife": "Tenerife",
+        "santa_cruz_de_tenerife": "Tenerife",
+        "barcelona": "Barcelona",
+        "badalona": "Badalona",
+        "hospitalet": "Hospitalet del Llobregat",
+        "hospitalet_del_llobregat": "Hospitalet del Llobregat",
+        "sevilla": "Sevilla",
+        "terrassa": "Terrassa",
+        "tarragona": "Tarragona",
+        "zaragoza": "Zaragoza",
+        "valencia": "Valencia",
+        "bilbao": "Bilbao",
+
+        # casos de "no tengo ninguna cerca"
+        "no_tengo_ninguna_cerca_(te_llamaremos)": None,
+        "no_tengo_ninguna_cerca_te_llamaremos": None,
+        "no_tengo_ninguna_cerca": None,
+    }
+
+    # Caso especial: "no tengo ninguna cerca..."
+    if token.startswith("no_tengo_ninguna_cerca"):
+        app.logger.info(
+            f"[ASSIGN_ETD] {source}: el cliente no tiene oficina cercana "
+            f"('{office_raw}'), de momento no asignamos a ninguna oficina."
+        )
+        return {
+            "office_raw": office_raw,
+            "alias": None,
+            "company_address_id": None,
+        }
+
+    alias = OFFICE_TOKEN_TO_ALIAS.get(token)
+
+    if not alias:
+        app.logger.warning(
+            f"[ASSIGN_ETD] {source}: oficina '{office_raw}' "
+            f"(token='{token}') no mapeada a ningún alias de company_addresses."
+        )
+        return {
+            "office_raw": office_raw,
+            "alias": None,
+            "company_address_id": None,
+        }
+
+    # 4) Buscar la oficina en company_addresses por alias
+    conn = None
+    cur = None
+    try:
+        conn = get_supabase_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT id, name, alias
+            FROM public.company_addresses
+            WHERE alias = %s
+              AND (is_deleted = FALSE OR is_deleted IS NULL)
+            LIMIT 1;
+            """,
+            (alias,),
+        )
+        row = cur.fetchone()
+
+        if not row:
+            app.logger.warning(
+                f"[ASSIGN_ETD] {source}: alias '{alias}' no encontrado "
+                f"en company_addresses (office_raw='{office_raw}', token='{token}')."
+            )
+            return {
+                "office_raw": office_raw,
+                "alias": alias,
+                "company_address_id": None,
+            }
+
+        company_address_id, name_db, alias_db = row
+
+        app.logger.info(
+            f"[ASSIGN_ETD] {source}: oficina formulario '{office_raw}' "
+            f"→ alias '{alias_db}' → company_address_id={company_address_id}"
+        )
+
+        return {
+            "office_raw": office_raw,
+            "alias": alias_db,
+            "company_address_id": str(company_address_id),
+            "name": name_db,
+        }
+
+    except Exception as e:
+        app.logger.error(
+            f"[ASSIGN_ETD] Error buscando oficina para '{office_raw}' "
+            f"(token='{token}', alias='{alias}') : {e}",
+            exc_info=True,
+        )
+        return {
+            "office_raw": office_raw,
+            "alias": alias,
+            "company_address_id": None,
+        }
+    finally:
+        try:
+            if cur:
+                cur.close()
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+
+
 def strip_country_code(phone):
     return re.sub(r'^(?:\+?34)', '', str(phone).strip())
 
@@ -963,6 +1147,14 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
 
 
     task = create_info_lead_task(deal_id, data, content=info_content)
+
+    # DEBUG: probar asignación por oficina SOLO EN LOG
+    try:
+        if source in ("ETD", "ETD2"):
+            asign_debug = c_lead_assigment_ETD(source, data)
+            app.logger.info(f"[ASSIGN_ETD_DEBUG] Resultado asignación: {asign_debug}")
+    except Exception as e:
+        app.logger.error(f"[ASSIGN_ETD_DEBUG] Error: {e}", exc_info=True)    
 
     app.logger.info(f"Tarea Info lead creada para {source}: {task}")
     return {
