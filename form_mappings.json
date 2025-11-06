@@ -302,7 +302,7 @@
     "P6": "P6"
   },
   "labels": {
-    "P1": "Oficina Seleccionada",
+    "P1": "Oficina Seleccionada"
   },
   "validations": {
     "check_debt_questions": false,
