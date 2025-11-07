@@ -1333,14 +1333,14 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
     assignment_result = None
     try:
         if deal_id and source in ("ETD", "ETD2"):
-            assignment_result = c_assign_deal_ETD(deal_id, source, data, config)
-            app.logger.info(f"[ASSIGN_ETD] Resultado asignación: {assignment_result}")
+            # ❌ antes: c_assign_deal_ETD(deal_id, source, data, config)
+            assignment_result = c_assign_deal_ETD(deal_id, source, data)
+            app.logger.info(f"[ASSIGN_ETD] Resultado final: {assignment_result}")
     except Exception as e:
         app.logger.error(
             f"[ASSIGN_ETD] Error inesperado al asignar deal {deal_id} para source={source}: {e}",
             exc_info=True,
         )
-
     return {
         "portal_user_created": True,
         "info_lead_created": task is not None,
