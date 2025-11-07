@@ -1202,7 +1202,8 @@ def create_portal_user(data, source, config=None):
         origin = 'gads'
     elif source=='ETD':
         origin = 'fb'
-    app.logger.info(f"🌍 Origen procesado: '{origin}'")
+    else:
+        origin = 'fb'   
 #mappeo específico de origen
 
     
