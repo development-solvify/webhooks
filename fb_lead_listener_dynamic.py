@@ -19,6 +19,9 @@ TOKEN = os.getenv('SOLVIFY_API_TOKEN',
 app = Flask(__name__)
 app.logger.setLevel(logging.DEBUG)
 
+FALLBACK_COMPANY_ID = "9d4c6ef7-b5fa-4890-893f-51cafc247875"  # SICUEL
+
+
 # ----------------------------------------------------------------------------
 # Carga de configuración DB
 # ----------------------------------------------------------------------------
@@ -547,168 +550,110 @@ def c_lead_assigment_ETD(source: str, data: dict):
         except Exception:
             pass
 
-def c_assign_deal_ETD(deal_id: str, source: str, data: dict, config: dict | None = None):
+def c_assign_deal_ETD(deal_id: str, source: str, data: dict):
     """
-    Asigna company_id y user_assigned_id al deal:
-      - company_id: según company_name (config/source)
-      - user_assigned_id: comercial de la oficina (ETD/ETD2) con menos deals activos
+    Asigna el deal al comercial de la oficina y a la compañía
+    a la que pertenece ese comercial (vía company_addresses.company_id).
 
-    Usa:
-      - c_lead_assigment_ETD(source, data) para resolver oficina -> company_address_id
+    - Si algo falla, NO toca company_id (se queda el fallback SICUEL).
     """
+
     if not deal_id:
-        app.logger.warning("[ASSIGN_ETD] No se puede asignar: deal_id vacío o None")
+        app.logger.warning("[ASSIGN_ETD] deal_id vacío, no se puede asignar.")
         return None
 
-    # 1) Resolver oficina y oficina->company_address_id + comerciales
+    # 1) Resolver oficina -> company_address_id
     office_info = c_lead_assigment_ETD(source, data)
     app.logger.info(f"[ASSIGN_ETD] office_info: {office_info}")
 
-    company_address_id = None
-    if office_info and office_info.get("company_address_id"):
-        company_address_id = office_info["company_address_id"]
+    if not office_info or not office_info.get("company_address_id"):
+        app.logger.warning(
+            f"[ASSIGN_ETD] No se ha podido resolver company_address_id "
+            f"para source={source}, deal_id={deal_id}. Se mantiene company_id (fallback SICUEL)."
+        )
+        return {
+            "deal_id": deal_id,
+            "company_id": None,
+            "user_assigned_id": None,
+            "office_info": office_info,
+        }
 
-    # 2) Determinar company_name igual que en create_portal_user
-    if config and config.get("company_name"):
-        company_name = config["company_name"]
-        app.logger.debug(f"[ASSIGN_ETD] company_name desde config: '{company_name}'")
-    elif source in ('Backup_FB', 'Alianza_FB', 'MARTIN', 'fb'):
-        company_name = 'Solvify'
-        app.logger.debug("[ASSIGN_ETD] company_name asignado: 'Solvify'")
-    else:
-        company_name = source
-        app.logger.debug(f"[ASSIGN_ETD] company_name asignado desde source: '{company_name}'")
-
-    company_id = None
-    user_assigned_id = None
+    company_address_id = office_info["company_address_id"]
 
     conn = None
     cur = None
+    user_assigned_id = None
+    company_id = None
+
     try:
         conn = get_supabase_connection()
         cur = conn.cursor()
 
-        # 3) Buscar company_id en companies por nombre
-        try:
-            cur.execute(
-                """
-                SELECT id
-                FROM public.companies
-                WHERE lower("name") = lower(%s)
-                  AND (is_deleted = FALSE OR is_deleted IS NULL)
-                LIMIT 1;
-                """,
-                (company_name,),
+        # 2) Elegir comercial de esa oficina + compañía de la oficina
+        #    - perfil no borrado
+        #    - pca no borrado
+        #    - office -> company_id vía company_addresses
+        #    - repartimos por nº de deals activos (menos cargado primero)
+        cur.execute(
+            """
+            SELECT p.id AS user_id,
+                   ca.company_id AS company_id
+            FROM public.profile_comp_addresses pca
+            JOIN public.profiles p
+              ON p.id = pca.user_id
+             AND p.is_deleted = FALSE
+            JOIN public.company_addresses ca
+              ON ca.id = pca.company_address_id
+             AND (ca.is_deleted = FALSE OR ca.is_deleted IS NULL)
+            LEFT JOIN public.deals d
+              ON d.user_assigned_id = p.id
+             AND d.is_deleted = FALSE
+            WHERE pca.company_address_id = %s
+              AND pca.is_deleted = FALSE
+            GROUP BY p.id, ca.company_id
+            ORDER BY COUNT(d.id) ASC, MIN(p.created_at) ASC
+            LIMIT 1;
+            """,
+            (company_address_id,),
+        )
+        row = cur.fetchone()
+
+        if not row:
+            app.logger.warning(
+                f"[ASSIGN_ETD] Sin comerciales activos para company_address_id={company_address_id}. "
+                f"Se mantiene company_id actual (probablemente SICUEL)."
             )
-            row = cur.fetchone()
-            if row:
-                company_id = row[0]
-                app.logger.info(
-                    f"[ASSIGN_ETD] company_id encontrado para '{company_name}': {company_id}"
-                )
-            else:
-                app.logger.warning(
-                    f"[ASSIGN_ETD] No se encontró company_id para '{company_name}' "
-                    f"en companies. Usando posibles fallbacks."
-                )
-                # 3b) Fallback: mantener el existing company_id del deal si ya lo tiene
-                cur.execute(
-                    """
-                    SELECT company_id
-                    FROM public.deals
-                    WHERE id = %s
-                      AND is_deleted = FALSE;
-                    """,
-                    (deal_id,),
-                )
-                row_deal = cur.fetchone()
-                if row_deal and row_deal[0]:
-                    company_id = row_deal[0]
-                    app.logger.info(
-                        f"[ASSIGN_ETD] Usando company_id ya existente en deal {deal_id}: {company_id}"
-                    )
-                # 3c) Fallback estático específico (por ejemplo para Eliminamos Tu Deuda)
-                elif company_name == "Eliminamos Tu Deuda":
-                    company_id = "a9242a58-4f5d-494c-8a74-45f8cee150e6"
-                    app.logger.warning(
-                        f"[ASSIGN_ETD] Usando company_id estático para '{company_name}': {company_id}"
-                    )
-        except Exception as e_lookup:
-            app.logger.error(f"[ASSIGN_ETD] Error resolviendo company_id: {e_lookup}", exc_info=True)
+            return {
+                "deal_id": deal_id,
+                "company_id": None,
+                "user_assigned_id": None,
+                "office_info": office_info,
+            }
 
-        # 4) Elegir comercial de la oficina (si tenemos company_address_id)
-        if company_address_id:
-            try:
-                cur.execute(
-                    """
-                    SELECT p.id AS user_id
-                    FROM public.profile_comp_addresses pca
-                    JOIN public.profiles p
-                      ON p.id = pca.user_id
-                     AND p.is_deleted = FALSE
-                    LEFT JOIN public.deals d
-                      ON d.user_assigned_id = p.id
-                     AND d.is_deleted = FALSE
-                    WHERE pca.company_address_id = %s
-                      AND pca.is_deleted = FALSE
-                    GROUP BY p.id
-                    ORDER BY COUNT(d.id) ASC, MIN(p.created_at) ASC
-                    LIMIT 1;
-                    """,
-                    (company_address_id,),
-                )
-                row_rep = cur.fetchone()
-                if row_rep:
-                    user_assigned_id = row_rep[0]
-                    app.logger.info(
-                        f"[ASSIGN_ETD] Comercial elegido para company_address_id={company_address_id}: "
-                        f"{user_assigned_id}"
-                    )
-                else:
-                    app.logger.warning(
-                        f"[ASSIGN_ETD] Sin comerciales activos para company_address_id={company_address_id}"
-                    )
-            except Exception as e_rep:
-                app.logger.error(
-                    f"[ASSIGN_ETD] Error buscando comercial para company_address_id={company_address_id}: {e_rep}",
-                    exc_info=True,
-                )
-        else:
-            app.logger.info(
-                f"[ASSIGN_ETD] Sin company_address_id resuelto; no se puede elegir comercial por oficina."
-            )
+        user_assigned_id, company_id = row
+        app.logger.info(
+            f"[ASSIGN_ETD] Comercial elegido para office={company_address_id}: "
+            f"user_assigned_id={user_assigned_id}, company_id={company_id}"
+        )
 
-        # 5) Construir y ejecutar UPDATE sobre deals
-        set_clauses = ["updated_at = now()"]
-        params = []
+        # 3) Actualizar deal: asignar comercial + compañía del comercial
+        cur.execute(
+            """
+            UPDATE public.deals
+               SET user_assigned_id = %s,
+                   company_id       = %s,
+                   updated_at       = now()
+             WHERE id = %s
+               AND is_deleted = FALSE;
+            """,
+            (user_assigned_id, company_id, deal_id),
+        )
+        conn.commit()
 
-        if company_id:
-            set_clauses.append("company_id = %s")
-            params.append(company_id)
-
-        if user_assigned_id:
-            set_clauses.append("user_assigned_id = %s")
-            params.append(user_assigned_id)
-
-        if len(set_clauses) > 1:  # algo más que updated_at
-            sql = (
-                "UPDATE public.deals "
-                "SET " + ", ".join(set_clauses) +
-                " WHERE id = %s AND is_deleted = FALSE;"
-            )
-            params.append(deal_id)
-
-            app.logger.info(
-                f"[ASSIGN_ETD] Ejecutando UPDATE deals para deal_id={deal_id} "
-                f"(company_id={company_id}, user_assigned_id={user_assigned_id})"
-            )
-            cur.execute(sql, tuple(params))
-            conn.commit()
-        else:
-            app.logger.info(
-                f"[ASSIGN_ETD] No hay cambios que aplicar en deal {deal_id} "
-                f"(ni company_id ni user_assigned_id resueltos)"
-            )
+        app.logger.info(
+            f"[ASSIGN_ETD] Deal {deal_id} actualizado: "
+            f"user_assigned_id={user_assigned_id}, company_id={company_id}"
+        )
 
         return {
             "deal_id": deal_id,
@@ -722,6 +667,7 @@ def c_assign_deal_ETD(deal_id: str, source: str, data: dict, config: dict | None
             f"[ASSIGN_ETD] Error general asignando deal {deal_id}: {e}",
             exc_info=True,
         )
+        # No tocamos company_id → se queda el fallback SICUEL
         return {
             "deal_id": deal_id,
             "company_id": None,
@@ -1216,7 +1162,7 @@ def create_portal_user(data, source, config=None):
         'form_name':  data.get('form_name',''),
         'campaign':   data.get('campaign_name',''),
         'lead_gen_id':data.get('lead_gen_id') or data.get('leadgen_id',''),
-        'company_id' : company_id or 'a9242a58-4f5d-494c-8a74-45f8cee150e6'
+        'company_id': company_id or FALLBACK_COMPANY_ID,
     }
     app.logger.debug(f"Payload PortalUser para {company_name}: {payload}")
 
