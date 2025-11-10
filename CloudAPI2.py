@@ -2847,6 +2847,7 @@ class LeadService:
         base_sql += " ORDER BY d.created_at DESC NULLS LAST LIMIT 1"
 
         row = self.db_manager.execute_query(base_sql, params, fetch_one=True)
+        print(row)
         if not row:
             return None
 
@@ -3030,6 +3031,7 @@ class MessageService:
             assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
             # ✅ AHORA (línea 3201-3208)
             lead = self.lead_service.get_lead_data_by_phone(sender, company_id=company_id)
+
             print(lead)
             print("company_id en save_incoming_message------------------------------------------------------------------>:", company_id)
             # IMPORTANTE: Obtener deal_id ANTES de usarlo
