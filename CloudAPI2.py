@@ -3031,6 +3031,7 @@ class MessageService:
             # ✅ AHORA (línea 3201-3208)
             lead = self.lead_service.get_lead_data_by_phone(sender, company_id=company_id)
             print(lead)
+            print("company_id en save_incoming_message------------------------------------------------------------------>:", company_id)
             # IMPORTANTE: Obtener deal_id ANTES de usarlo
             deal_id = lead.get('deal_id') if lead else None
 
