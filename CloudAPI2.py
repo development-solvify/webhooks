@@ -2847,7 +2847,7 @@ class LeadService:
         base_sql += " ORDER BY d.created_at DESC NULLS LAST LIMIT 1"
         print(base_sql, params)
         row = self.db_manager.execute_query(base_sql, params, fetch_one=True)
-        ptint("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")        
+        print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")        
         print(row)
         if not row:
             return None
