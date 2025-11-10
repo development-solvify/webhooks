@@ -5716,7 +5716,6 @@ UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
 def webhook_company(company_id):
     method = request.method
     logger.info(f"Webhook called for company_id={company_id} with method={method}")
-    print(request.get_json(force=True))
     # --- Validación de ruta ---
     if not UUID_RE.match(company_id):
         abort(404)
