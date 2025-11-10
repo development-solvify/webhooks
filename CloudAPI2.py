@@ -2482,9 +2482,20 @@ class WhatsAppService:
                 or ""
             )
 
-            ordered_values = [cliente, comercial, oficina, link, fecha, texto_libre]
+            # ⚠️ NUNCA mandar strings vacíos a WhatsApp → fallback "-"
+            def _safe(v: str, default: str = "-") -> str:
+                v = (v or "").strip()
+                return v if v else default
 
-            # Agrupamos plantillas por nº de parámetros en el BODY
+            ordered_values = [
+                _safe(cliente),
+                _safe(comercial, "Nuestro equipo"),
+                _safe(oficina),
+                _safe(link),
+                _safe(fecha),
+                _safe(texto_libre),
+            ]
+
             ETD_TEMPLATES_2P = {
                 "etd_contacto_inicial",
                 "etd_resp_comovamio_docspendientes",
@@ -2519,26 +2530,24 @@ class WhatsAppService:
             elif name in ETD_TEMPLATES_4P:
                 body_param_count = 4
             else:
-                body_param_count = 0  # seguridad: si alguna no cuadra, no rompemos
+                body_param_count = 0
 
             if body_param_count > 0:
                 body_values = ordered_values[:body_param_count]
                 components.append({
                     "type": "body",
                     "parameters": [
-                        {"type": "text", "text": str(v)} for v in body_values
+                        {"type": "text", "text": v} for v in body_values
                     ]
                 })
 
-            # Casi todas las ETD tienen botón URL; la única sin botón es:
-            # - etd_resp_comovamio_docspendientes
             if name != "etd_resp_comovamio_docspendientes" and link:
                 components.append({
                     "type": "button",
                     "sub_type": "url",
                     "index": 0,
                     "parameters": [
-                        {"type": "text", "text": str(link)}
+                        {"type": "text", "text": link}
                     ]
                 })
 
