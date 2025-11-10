@@ -4874,7 +4874,7 @@ def send_file_endpoint():
 def send_media_message_extended():
     """Send media file to WhatsApp with extended type support"""
     try:
-        data = request.get_json(force=True)
+        data = request.get_json(silent=True) or {}
         required_fields = ['customer_phone', 'document_id']
         missing = [f for f in required_fields if f not in data]
         if missing:
@@ -5159,7 +5159,7 @@ def config_debug():
 @rate_limit(max_calls=30, window=60)
 def send_direct_message():
     try:
-        data = request.get_json(force=True)
+        data = request.get_json(silent=True) or {}
         required_fields = ['customer_phone', 'message_text']
         missing = [f for f in required_fields if f not in data]
         if missing:
@@ -5201,7 +5201,7 @@ from flask import request, jsonify
 @rate_limit(max_calls=20, window=60)
 def send_template_endpoint():
     try:
-        data = request.get_json(force=True)
+        data = request.get_json(silent=True) or {}
         required_fields = ['customer_phone', 'template_name']
         missing = [f for f in required_fields if f not in data]
         if missing:
@@ -5250,7 +5250,7 @@ def send_template_endpoint():
 @rate_limit(max_calls=50, window=60)
 def handle_template():
     try:
-        data = request.get_json(force=True)
+        data = request.get_json(silent=True) or {}
         template_data = data.get('body', data)
 
         required = ['categoria', 'email', 'lead_id', 'nombre', 'propietario', 'telefono']
@@ -5733,7 +5733,7 @@ def webhook_company(company_id):
 
     # --- Recepción de eventos (POST) ---
     try:
-        data = request.get_json(force=True)
+        data = request.get_json(silent=True) or {}
         if not data or 'entry' not in data:
             logger.info(f"[{company_id}] Empty/invalid payload")
             return 'ok', 200
@@ -6048,7 +6048,7 @@ def webhook():
 
     # --- Recepción de eventos (POST) ---
     try:
-        data = request.get_json(force=True)
+        data = request.get_json(silent=True) or {}
         if not data or 'entry' not in data:
             return 'ok', 200
 
@@ -7162,7 +7162,7 @@ def webhook_messenger():
     # Manejo de POST - MEJORADO con flujo conversacional
     try:
         logger.info("[Messenger] 🔥 Procesando webhook POST")
-        data = request.get_json(force=True)
+        data = request.get_json(silent=True) or {}
         logger.info(f"[Messenger] Payload recibido: {json.dumps(data, indent=2)}")
 
         if not data or 'entry' not in data:
@@ -7428,7 +7428,7 @@ def messenger_config_admin():
     
     elif request.method == 'POST':
         try:
-            data = request.get_json(force=True)
+            data = request.get_json(silent=True) or {}
             
             if 'enabled' in data:
                 MESSENGER_CONVERSATION_CONFIG['enabled'] = bool(data['enabled'])
@@ -7723,7 +7723,7 @@ def test_status_update():
     Útil para debugging y testing.
     """
     try:
-        data = request.get_json(force=True)
+        data = request.get_json(silent=True) or {}
         message_id = data.get('message_id')
         whatsapp_status = data.get('whatsapp_status')
         
@@ -7793,7 +7793,7 @@ def send_text_direct():
     }
     """
     try:
-        data = request.get_json(force=True)
+        data = request.get_json(silent=True) or {}
         
         phone = data.get('phone')
         message = data.get('message')
@@ -8364,7 +8364,7 @@ def time_to_template():
 def test_whatsapp_curl():
     """Test usando exactamente la misma configuración que funciona en curl"""
     try:
-        data = request.get_json(force=True)
+        data = request.get_json(silent=True) or {}
         phone = data.get('phone', '34608684495')
         
         # Exactamente los mismos valores que tu curl exitoso
