@@ -2426,6 +2426,13 @@ class WhatsAppService:
 
         is_etd_company = bool(company_id) and str(company_id) in ETD_COMPANY_IDS
 
+        is_etd_company = bool(company_id) and str(company_id) in {
+            "8bbb5ec8-6b9b-4397-975f-b80f0d7debe8",
+            "2e3b85ef-e26b-48ce-ba82-60ef5e46ef94",
+            "a29eeb04-4743-4dec-b21c-4bd9516bc69c",
+            "fa09066c-0c93-4839-8c88-cd21bcf4f593",
+        }
+
         if is_etd_company and name.startswith("etd_"):
             # Para ETD quitamos el HEADER porque las plantillas no lo tienen definido
             components = []
@@ -2460,7 +2467,7 @@ class WhatsAppService:
                 or td.get("company_name")
                 or ""
             )
-            link = (
+            raw_link = (
                 td.get("link")
                 or td.get("portal_link")
                 or td.get("payment_link")
@@ -2482,20 +2489,23 @@ class WhatsAppService:
                 or ""
             )
 
-            # ⚠️ NUNCA mandar strings vacíos a WhatsApp → fallback "-"
+            # ⚠️ WhatsApp no quiere strings vacíos
             def _safe(v: str, default: str = "-") -> str:
                 v = (v or "").strip()
                 return v if v else default
+
+            link_safe = _safe(raw_link, "https://portal.solvify.es")
 
             ordered_values = [
                 _safe(cliente),
                 _safe(comercial, "Nuestro equipo"),
                 _safe(oficina),
-                _safe(link),
+                link_safe,
                 _safe(fecha),
                 _safe(texto_libre),
             ]
 
+            # Agrupamos plantillas por nº de parámetros en el BODY
             ETD_TEMPLATES_2P = {
                 "etd_contacto_inicial",
                 "etd_resp_comovamio_docspendientes",
@@ -2541,15 +2551,22 @@ class WhatsAppService:
                     ]
                 })
 
-            if name != "etd_resp_comovamio_docspendientes" and link:
+            # === BOTONES URL PARA ETD ===
+            # Todas las ETD salvo 'etd_resp_comovamio_docspendientes' tienen botón URL
+            if name != "etd_resp_comovamio_docspendientes":
+                # El botón de tipo URL requiere al menos UN parámetro de texto.
+                # Usamos link_safe (nunca vacío por _safe).
                 components.append({
                     "type": "button",
                     "sub_type": "url",
                     "index": 0,
                     "parameters": [
-                        {"type": "text", "text": link}
+                        {"type": "text", "text": link_safe}
                     ]
                 })
+
+        else:
+            # ... resto de tu lógica de plantillas conocidas / genéricas ...
 
         else:
             # ======== PLANTILLAS CONOCIDAS (resto de tenants) ========
