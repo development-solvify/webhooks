@@ -3008,10 +3008,12 @@ class MessageService:
             )
         """
         params = [
-            str(uuid4()), 'flow_exit_ok', clean_phone, '',
-            context_id, now_ts,
-            'false', 'flow_exit_triggered',
-            chat_id or clean_phone, clean_phone, None
+            str(uuid4()),
+            json.dumps({'text': exit_message}, ensure_ascii=False),
+            sender_phone, '', context_id, madrid_ahora,
+            'true', 'flow_exit_triggered',
+            sender_phone, sender_phone, None,
+            company_id_db
         ]
         self.db_manager.execute_query(insert_sql, params)
 
@@ -5780,6 +5782,24 @@ def webhook_company(company_id):
                         # -------- MENSAJES DE TEXTO --------
                         if msg.get('type') == 'text':
                             log_received_message(msg, wa_id)
+                            # 🔍 1) Resolver lead y company_id REAL (el de negocio, FORUM / KEY / etc.)
+                            lead = None
+                            company_id_db = company_id  # por defecto, el de la ruta (tenant)
+
+                            try:
+                                lead = lead_service.get_lead_data_by_phone(sender_phone, company_id=company_id)
+                                if lead and lead.get('company_id'):
+                                    company_id_db = lead['company_id']  # ← aquí pisamos con el de FORUM 2000, etc.
+                                logger.info(f"[{company_id}] lead resuelto para {sender_phone}: {lead} (company_id_db={company_id_db})")
+                            except Exception:
+                                logger.exception(f"[{company_id}] Error resolviendo lead para {sender_phone}")
+
+                            # 💾 2) Guardar mensaje entrante usando company_id_db (NO el de la URL si hay lead)
+                            try:
+                                message_service.save_incoming_message(msg, wa_id, company_id=company_id_db)
+                            except TypeError:
+                                # compat si la firma antigua no acepta company_id
+                                message_service.save_incoming_message(msg, wa_id)                            
                             # MINIMO: pasar company_id (haz que el método lo acepte como opcional)
                             try:
                                 message_service.save_incoming_message(msg, wa_id, company_id=company_id)
@@ -5796,19 +5816,19 @@ def webhook_company(company_id):
                                 if not context_id:
                                     query_last_template = """
                                         SELECT last_message_uid
-                                          FROM public.external_messages
-                                         WHERE sender_phone = %s
-                                           AND company_id   = %s
-                                           AND from_me      = 'true'
-                                           AND status       = 'template_sent'
-                                           AND created_at   > %s
-                                           AND last_message_uid IS NOT NULL
-                                         ORDER BY created_at DESC
-                                         LIMIT 1
+                                        FROM public.external_messages
+                                        WHERE sender_phone = %s
+                                        AND company_id   = %s
+                                        AND from_me      = 'true'
+                                        AND status       = 'template_sent'
+                                        AND created_at   > %s
+                                        AND last_message_uid IS NOT NULL
+                                        ORDER BY created_at DESC
+                                        LIMIT 1
                                     """
                                     umbral = madrid_ahora - timedelta(minutes=15)
                                     row = db_manager.execute_query(
-                                        query_last_template, [sender_phone, company_id, umbral], fetch_one=True
+                                        query_last_template, [sender_phone, company_id_db, umbral], fetch_one=True
                                     )
                                     if row and row[0]:
                                         context_id = row[0]
@@ -5822,15 +5842,14 @@ def webhook_company(company_id):
                                 if context_id:
                                     chk_template = """
                                         SELECT 1
-                                          FROM public.external_messages
-                                         WHERE last_message_uid = %s
-                                           AND company_id       = %s
-                                           AND status           = 'template_sent'
-                                         LIMIT 1
+                                        FROM public.external_messages
+                                        WHERE last_message_uid = %s
+                                        AND sender_phone     = %s
+                                        AND company_id       = %s
+                                        AND status           = 'flow_exit_triggered'
+                                        LIMIT 1
                                     """
-                                    ok_template = db_manager.execute_query(
-                                        chk_template, [context_id, company_id], fetch_one=True
-                                    )
+                                    ok_template = db_manager.execute_query(chk_dedup, [context_id, sender_phone, company_id_db], fetch_one=True)
                                     if not ok_template:
                                         if not auto_reply_service.is_office_hours():
                                             auto_reply_service.send_auto_reply(
