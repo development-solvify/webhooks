@@ -3035,7 +3035,7 @@ class MessageService:
             deal_id = lead.get('deal_id') if lead else None
 
             chat_id = (deal_id if deal_id else sender)  # ✅ Ahora funciona correctamente
-                        chat_url = sender
+            chat_url = sender
 
             # --- Resolver company_id efectivo ---
             effective_company_id = company_id or (lead.get('company_id') if lead else None)
