@@ -3030,7 +3030,7 @@ class MessageService:
             assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
             # ✅ AHORA (línea 3201-3208)
             lead = self.lead_service.get_lead_data_by_phone(sender, company_id=company_id)
-
+            print(lead)
             # IMPORTANTE: Obtener deal_id ANTES de usarlo
             deal_id = lead.get('deal_id') if lead else None
 
