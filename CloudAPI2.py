@@ -5759,6 +5759,7 @@ def webhook_company(company_id):
                             log_received_message(msg, wa_id)
                             # MINIMO: pasar company_id (haz que el método lo acepte como opcional)
                             try:
+                                print(f"Saving incoming message for company_id={company_id} XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
                                 message_service.save_incoming_message(msg, wa_id, company_id=company_id)
                             except TypeError:
                                 # compat si aún no acepta el parámetro
@@ -6071,7 +6072,6 @@ def webhook():
                         if msg.get('type') == 'text':
                             log_received_message(msg, wa_id)
                             message_service.save_incoming_message(msg, wa_id)
-
                             # Flow EXIT logic
                             try:
                                 context = msg.get('context') or {}
