@@ -38,6 +38,16 @@ from enum import Enum
 
 import os
 
+# ================== ETD / ELIMINAMOS TU DEUDA ==================
+ETD_COMPANY_IDS = {
+    "8bbb5ec8-6b9b-4397-975f-b80f0d7debe8",
+    "2e3b85ef-e26b-48ce-ba82-60ef5e46ef94",
+    "a29eeb04-4743-4dec-b21c-4bd9516bc69c",
+    "fa09066c-0c93-4839-8c88-cd21bcf4f593",
+}
+
+
+
 GRAPH_API_VERSION = (os.getenv("GRAPH_API_VERSION") or "v22.0").strip() or "v22.0"
 logger = logging.getLogger(__name__)
 class CompanyConfigCache:
@@ -2417,13 +2427,6 @@ class WhatsAppService:
 
         name = (template_name or "").strip()
 
-        # ================== ETD / ELIMINAMOS TU DEUDA ==================
-        ETD_COMPANY_IDS = {
-            "8bbb5ec8-6b9b-4397-975f-b80f0d7debe8",
-            "2e3b85ef-e26b-48ce-ba82-60ef5e46ef94",
-            "a29eeb04-4743-4dec-b21c-4bd9516bc69c",
-            "fa09066c-0c93-4839-8c88-cd21bcf4f593",
-        }
 
         is_etd_company = bool(company_id) and str(company_id) in ETD_COMPANY_IDS
 
@@ -2818,10 +2821,17 @@ class LeadService:
     def __init__(self, db_manager):
         self.db_manager = db_manager
 
+class LeadService:
+    """Lead and deal management service"""
+
+    def __init__(self, db_manager):
+        self.db_manager = db_manager
+
     def get_lead_data_by_phone(self, phone: str, company_id: str | None = None):
         """
         Devuelve datos del lead + deal + responsable + compañía a partir del teléfono.
         Si se pasa company_id, filtra por esa compañía (multi-tenant seguro).
+        Para las empresas ETD (ETD_COMPANY_IDS), ignora la company concreta y busca en todas las ETD.
         """
         clean_phone = PhoneUtils.strip_34(phone)
 
@@ -2837,18 +2847,26 @@ class LeadService:
             LEFT JOIN public.companies c ON d.company_id = c.id
             WHERE l.phone = %s AND l.is_deleted = false
         """
-        params = [clean_phone]
+        params: list = [clean_phone]
 
-        if company_id:
+        # --- Lógica especial para ETD ---
+        is_etd_company = bool(company_id) and str(company_id) in ETD_COMPANY_IDS
+
+        if is_etd_company:
+            # Buscar en TODAS las companies ETD
+            placeholders = ", ".join(["%s"] * len(ETD_COMPANY_IDS))
+            base_sql += f" AND d.company_id IN ({placeholders})"
+            params.extend(list(ETD_COMPANY_IDS))
+        elif company_id:
+            # Caso normal: se filtra solo por la company pasada
             base_sql += " AND d.company_id = %s"
-            params.append(company_id)
+            params.append(str(company_id))
 
         # Por si existen varios deals, tomamos el más reciente
         base_sql += " ORDER BY d.created_at DESC NULLS LAST LIMIT 1"
-        print(base_sql, params)
+
         row = self.db_manager.execute_query(base_sql, params, fetch_one=True)
-        print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")        
-        print(row)
+
         if not row:
             return None
 
@@ -2866,6 +2884,7 @@ class LeadService:
             'company_id': str(row[10]) if row[10] else None,
             'phone': clean_phone,
         }
+
     def get_lead_assigned_info(self, phone: str):
         """Devuelve (user_assigned_id, email del responsable) o (None, None)."""
         clean_phone = PhoneUtils.strip_34(phone)
