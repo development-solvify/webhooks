@@ -256,7 +256,7 @@
   },
   "ETD": {
     "description": "Mapping para Eliminamos Tu Deuda desde Google Sheets / n8n",
-    "company_name": "Eliminamos Tu Deuda",
+    "company_name": "KEYBEN SERVICIOS JURÍDICOS, S.L.",
     "fields": {
       "Fecha": "created_time",
       "Nombre": "nombre_y_apellidos",
@@ -284,7 +284,7 @@
   },
   "ETD2": {
     "description": "Mapping para Eliminamos Tu Deuda desde Google Sheets / n8n",
-    "company_name": "Eliminamos Tu Deuda",
+    "company_name": "KEYBEN SERVICIOS JURÍDICOS, S.L.",
     "fields": {
       "Fecha": "created_time",
       "Nombre": "nombre_y_apellidos",
