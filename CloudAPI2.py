@@ -3028,11 +3028,14 @@ class MessageService:
             last_message_ts = timestamp_to_madrid_naive(wa_timestamp) if wa_timestamp else now_madrid_naive()
 
             assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
+            # ✅ AHORA (línea 3201-3208)
             lead = self.lead_service.get_lead_data_by_phone(sender, company_id=company_id)
 
-            # chat_id/chat_url como antes
-            chat_id = (lead.get('deal_id') if lead and lead.get('deal_id') else sender)
-            chat_url = sender
+            # IMPORTANTE: Obtener deal_id ANTES de usarlo
+            deal_id = lead.get('deal_id') if lead else None
+
+            chat_id = (deal_id if deal_id else sender)  # ✅ Ahora funciona correctamente
+                        chat_url = sender
 
             # --- Resolver company_id efectivo ---
             effective_company_id = company_id or (lead.get('company_id') if lead else None)
