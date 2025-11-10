@@ -22,6 +22,19 @@ app.logger.setLevel(logging.DEBUG)
 FALLBACK_COMPANY_ID = "9d4c6ef7-b5fa-4890-893f-51cafc247875"  # SICUEL
 
 
+CATALUNYA_OFFICE_ALIASES = {
+    "Badalona",
+    "Barcelona",
+    "Hospitalet del Llobregat",
+}
+
+CATALUNYA_REPS_USER_IDS = (
+    "2872e40c-fb2b-4bb9-900a-6eb2abd39bf3",
+    "137c4bc1-c606-445a-ba90-ca41ea04f2f6",
+    "4e09dd08-cc63-4084-83df-531827029436",
+)
+
+
 # ----------------------------------------------------------------------------
 # Carga de configuración DB
 # ----------------------------------------------------------------------------
@@ -579,6 +592,7 @@ def c_assign_deal_ETD(deal_id: str, source: str, data: dict):
         }
 
     company_address_id = office_info["company_address_id"]
+    office_alias = office_info.get("alias")
 
     conn = None
     cur = None
@@ -589,39 +603,22 @@ def c_assign_deal_ETD(deal_id: str, source: str, data: dict):
         conn = get_supabase_connection()
         cur = conn.cursor()
 
-        # 2) Elegir comercial de esa oficina + compañía de la oficina
-        #    - perfil no borrado
-        #    - pca no borrado
-        #    - office -> company_id vía company_addresses
-        #    - repartimos por nº de deals activos (menos cargado primero)
+        # --- 2A) Obtener company_id de la oficina (lo usaremos en cualquier caso) ---
         cur.execute(
             """
-            SELECT p.id AS user_id,
-                   ca.company_id AS company_id
-            FROM public.profile_comp_addresses pca
-            JOIN public.profiles p
-              ON p.id = pca.user_id
-             AND p.is_deleted = FALSE
-            JOIN public.company_addresses ca
-              ON ca.id = pca.company_address_id
-             AND (ca.is_deleted = FALSE OR ca.is_deleted IS NULL)
-            LEFT JOIN public.deals d
-              ON d.user_assigned_id = p.id
-             AND d.is_deleted = FALSE
-            WHERE pca.company_address_id = %s
-              AND pca.is_deleted = FALSE
-            GROUP BY p.id, ca.company_id
-            ORDER BY COUNT(d.id) ASC, MIN(p.created_at) ASC
+            SELECT company_id
+            FROM public.company_addresses
+            WHERE id = %s
+              AND (is_deleted = FALSE OR is_deleted IS NULL)
             LIMIT 1;
             """,
             (company_address_id,),
         )
-        row = cur.fetchone()
-
-        if not row:
+        row_company = cur.fetchone()
+        if not row_company:
             app.logger.warning(
-                f"[ASSIGN_ETD] Sin comerciales activos para company_address_id={company_address_id}. "
-                f"Se mantiene company_id actual (probablemente SICUEL)."
+                f"[ASSIGN_ETD] No se ha encontrado company_id para company_address_id={company_address_id}. "
+                f"Se mantiene company_id actual (fallback SICUEL)."
             )
             return {
                 "deal_id": deal_id,
@@ -630,13 +627,88 @@ def c_assign_deal_ETD(deal_id: str, source: str, data: dict):
                 "office_info": office_info,
             }
 
-        user_assigned_id, company_id = row
+        company_id = row_company[0]
+
+        # --- 2B) Selección de comercial ---
+
+        if office_alias in CATALUNYA_OFFICE_ALIASES:
+            # Caso especial Cataluña: Badalona, Barcelona, Hospitalet
+            app.logger.info(
+                f"[ASSIGN_ETD] Oficina '{office_alias}' es de Cataluña → "
+                f"asignamos entre pool fijo: {CATALUNYA_REPS_USER_IDS}"
+            )
+
+            cur.execute(
+                """
+                SELECT p.id AS user_id
+                FROM public.profiles p
+                LEFT JOIN public.deals d
+                  ON d.user_assigned_id = p.id
+                 AND d.is_deleted = FALSE
+                WHERE p.id IN (%s, %s, %s)
+                  AND p.is_deleted = FALSE
+                GROUP BY p.id
+                ORDER BY COUNT(d.id) ASC, MIN(p.created_at) ASC
+                LIMIT 1;
+                """,
+                CATALUNYA_REPS_USER_IDS,
+            )
+            row = cur.fetchone()
+
+        else:
+            # Caso general: usar comerciales ligados a esa oficina
+            cur.execute(
+                """
+                SELECT p.id AS user_id,
+                       ca.company_id AS company_id
+                FROM public.profile_comp_addresses pca
+                JOIN public.profiles p
+                  ON p.id = pca.user_id
+                 AND p.is_deleted = FALSE
+                JOIN public.company_addresses ca
+                  ON ca.id = pca.company_address_id
+                 AND (ca.is_deleted = FALSE OR ca.is_deleted IS NULL)
+                LEFT JOIN public.deals d
+                  ON d.user_assigned_id = p.id
+                 AND d.is_deleted = FALSE
+                WHERE pca.company_address_id = %s
+                  AND pca.is_deleted = FALSE
+                GROUP BY p.id, ca.company_id
+                ORDER BY COUNT(d.id) ASC, MIN(p.created_at) ASC
+                LIMIT 1;
+                """,
+                (company_address_id,),
+            )
+            row = cur.fetchone()
+            # En este caso, company_id puede venir del SELECT de arriba
+            if row:
+                user_assigned_id_tmp, company_id_tmp = row
+                user_assigned_id = user_assigned_id_tmp
+                if company_id_tmp:
+                    company_id = company_id_tmp
+
+        if not row:
+            app.logger.warning(
+                f"[ASSIGN_ETD] Sin comerciales activos para company_address_id={company_address_id} "
+                f"(alias='{office_alias}'). Se mantiene company_id actual (probablemente SICUEL)."
+            )
+            return {
+                "deal_id": deal_id,
+                "company_id": None,
+                "user_assigned_id": None,
+                "office_info": office_info,
+            }
+
+        # Si venimos del caso Cataluña, row solo trae user_id
+        if office_alias in CATALUNYA_OFFICE_ALIASES:
+            (user_assigned_id,) = row
+
         app.logger.info(
-            f"[ASSIGN_ETD] Comercial elegido para office={company_address_id}: "
-            f"user_assigned_id={user_assigned_id}, company_id={company_id}"
+            f"[ASSIGN_ETD] Comercial elegido para office={company_address_id} "
+            f"(alias='{office_alias}'): user_assigned_id={user_assigned_id}, company_id={company_id}"
         )
 
-        # 3) Actualizar deal: asignar comercial + compañía del comercial
+        # 3) Actualizar deal: asignar comercial + compañía del comercial/oficina
         cur.execute(
             """
             UPDATE public.deals
