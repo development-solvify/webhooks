@@ -2845,8 +2845,9 @@ class LeadService:
 
         # Por si existen varios deals, tomamos el más reciente
         base_sql += " ORDER BY d.created_at DESC NULLS LAST LIMIT 1"
-
+        print(base_sql, params)
         row = self.db_manager.execute_query(base_sql, params, fetch_one=True)
+        ptint("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")        
         print(row)
         if not row:
             return None
@@ -3030,6 +3031,8 @@ class MessageService:
 
             assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
             # ✅ AHORA (línea 3201-3208)
+
+
             lead = self.lead_service.get_lead_data_by_phone(sender, company_id=company_id)
 
             print(lead)
@@ -5760,7 +5763,6 @@ def webhook_company(company_id):
                             log_received_message(msg, wa_id)
                             # MINIMO: pasar company_id (haz que el método lo acepte como opcional)
                             try:
-                                print(f"Saving incoming message for company_id={company_id} XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
                                 message_service.save_incoming_message(msg, wa_id, company_id=company_id)
                             except TypeError:
                                 # compat si aún no acepta el parámetro
