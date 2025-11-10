@@ -3,7 +3,7 @@ import os
 import logging
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
-
+from flask_cors import CORS
 import psycopg2
 import requests
 import configparser
@@ -65,6 +65,12 @@ app = Flask(
 )
 app.secret_key = SECRET_KEY
 
+# 🔹 Habilitar CORS para las rutas /google/*
+CORS(
+    app,
+    resources={r"/google/*": {"origins": "*"}},
+    supports_credentials=True
+)
 
 def get_db_conn():
     logger.debug(
