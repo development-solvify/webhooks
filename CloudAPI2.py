@@ -5474,32 +5474,36 @@ def get_whatsapp_credentials_for_company(company_id: str) -> dict:
 
 import re
 
+
 def pretty_print_template_name(name: str) -> str:
     """
-    Convierte:
-      - 'mi_template_de_prueba'      -> 'Mi template de prueba'
-      - 'etd_contacto_inicial_v2'    -> 'Contacto inicial'
-      - 'etd_algo_largo_v10'         -> 'Algo largo'
-    Regla:
-      - Si empieza por 'etd_' se elimina ese prefijo.
-      - Se elimina sufijo de versión '_v<numero>' si existe.
-      - Se reemplazan '_' por espacios.
-      - Solo la primera letra del resultado en mayúscula.
+    Reglas:
+      - Si contiene 'z_test_3' -> no mostrar (devuelve "").
+      - Si empieza por 'etd_' -> quitar 'etd_'.
+      - Si termina en '_v<num>' -> quitar versión.
+      - Reemplazar '_' por espacios.
+      - Solo capitalizar la primera letra del resultado.
     """
     if not name:
         return ""
 
-    # 1) Quitar prefijo 'etd_' si existe
+    raw = name.strip().lower()
+
+    # Ocultar templates de test
+    if "z_test_3" in raw:
+        return ""
+
+    # Quitar prefijo 'etd_'
     if name.startswith("etd_"):
         name = name[len("etd_"):]
 
-    # 2) Quitar sufijo tipo '_v2', '_v10', etc.
-    name = re.sub(r"_v\d+$", "", name)
+    # Quitar sufijo tipo '_v2', '_v10', etc.
+    name = re.sub(r"_v\\d+$", "", name)
 
-    # 3) Reemplazar '_' por espacios y limpiar
+    # Reemplazar '_' por espacios
     pretty = name.replace("_", " ").strip()
 
-    # 4) Capitalizar solo la primera letra
+    # Capitalizar solo la primera letra
     return pretty[:1].upper() + pretty[1:] if pretty else ""
 
 
@@ -5576,16 +5580,24 @@ def get_templates():
         processed = []
         for t in data_js:
             raw_name = t.get('name') or ''
+            pretty = pretty_print_template_name(raw_name)
+
+            # Si pretty es vacío, NO lo añadimos (ocultamos tests, etc.)
+            if not pretty:
+                logger.info(f"🧪 Ocultando template interno: {raw_name}")
+                continue
+
             processed.append({
                 'id': t.get('id'),
                 'name': raw_name,
-                'pretty_print_template': pretty_print_template_name(raw_name),
+                'pretty_print_template': pretty,
                 'status': t.get('status'),
                 'category': t.get('category'),
                 'language': t.get('language'),
                 'components': t.get('components', []),
                 'rejected_reason': t.get('rejected_reason')
             })
+
         stats = {
             'approved': sum(1 for t in processed if t['status'] == 'APPROVED'),
             'pending': sum(1 for t in processed if t['status'] == 'PENDING'),
