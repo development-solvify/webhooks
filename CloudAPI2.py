@@ -2384,8 +2384,244 @@ class WhatsAppService:
             logger.error(f"[COVER] Error resolving cover for company_id={company_id}: {e}")
             return None
 
-
     def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str, company_id: str) -> dict:
+        """
+        Construye el payload de envío de plantilla para la Cloud API de WhatsApp.
+        - template_name: nombre EXACTO del template en WBM
+        - template_data: dict con datos de la plantilla
+        - to_phone: teléfono destino; se normaliza a E.164 español (34)
+        """
+        def normalize_es(phone: str) -> str:
+            p = PhoneUtils.strip_34(str(phone))
+            return p if p.startswith("34") else f"34{p}"
+
+        td = template_data or {}
+
+        # Idioma y cover
+        lang = td.get("language") or "es_ES"
+        cover_url = self._resolve_cover_url(company_id=company_id or td.get("company_id"))
+
+        to_e164 = normalize_es(to_phone)
+        components = []
+
+        if cover_url:
+            components.append({
+                "type": "header",
+                "parameters": [{
+                    "type": "image",
+                    "image": {"link": cover_url}
+                }]
+            })
+
+        name = (template_name or "").strip()
+
+        logger.info(f"[BUILD_TEMPLATE] ===== INICIO BUILD TEMPLATE =====")
+        logger.info(f"[BUILD_TEMPLATE] template_name input: '{template_name}' | name (stripped): '{name}'")
+        logger.info(f"[BUILD_TEMPLATE] company_id: {company_id}")
+        logger.info(f"[BUILD_TEMPLATE] to_phone: {to_phone} → to_e164: {to_e164}")
+
+        is_etd_company = bool(company_id) and str(company_id) in ETD_COMPANY_IDS
+        logger.info(f"[BUILD_TEMPLATE] is_etd_company: {is_etd_company} | name.startswith('etd_'): {name.startswith('etd_')}")
+
+        if is_etd_company and name.startswith("etd_"):
+            logger.info(f"[BUILD_TEMPLATE] ✅ Entrando en bloque ETD")
+            
+            # Para ETD quitamos el HEADER porque las plantillas no lo tienen definido
+            components = []
+            logger.info(f"[BUILD_TEMPLATE] Limpiado components (quitando HEADER)")
+
+            # Resolver valores
+            cliente = (
+                td.get("customer_name")
+                or td.get("client_name")
+                or td.get("first_name")
+                or ""
+            )
+            comercial = (
+                td.get("sales_name")
+                or td.get("comercial_asignado")
+                or td.get("responsible_first_name")
+                or td.get("responsible_name")
+                or ""
+            )
+            oficina = (
+                td.get("office_name")
+                or td.get("office")
+                or td.get("oficina")
+                or td.get("company_name")
+                or ""
+            )
+            raw_link = (
+                td.get("link")
+                or td.get("portal_link")
+                or td.get("payment_link")
+                or td.get("expediente_link")
+                or td.get("url")
+                or ""
+            )
+            fecha = (
+                td.get("date_ddmm")
+                or td.get("fecha_ddmm")
+                or td.get("fecha")
+                or td.get("date")
+                or ""
+            )
+            texto_libre = (
+                td.get("free_text")
+                or td.get("texto_libre")
+                or td.get("notes")
+                or ""
+            )
+
+            logger.info(f"[BUILD_TEMPLATE] Valores resueltos: cliente='{cliente}' | comercial='{comercial}' | oficina='{oficina}'")
+
+            # ⚠️ WhatsApp no quiere strings vacíos
+            def _safe(v: str, default: str = "-") -> str:
+                v = (v or "").strip()
+                return v if v else default
+
+            link_safe = _safe(raw_link, "https://portal.solvify.es")
+
+            ordered_values = [
+                _safe(cliente),
+                _safe(comercial, "Nuestro equipo"),
+                _safe(oficina),
+                link_safe,
+                _safe(fecha),
+                _safe(texto_libre),
+            ]
+            logger.info(f"[BUILD_TEMPLATE] ordered_values (después _safe): {ordered_values}")
+
+            # ===== MAPEO DINÁMICO DE TEMPLATES CON PREFIJOS =====
+            ETD_TEMPLATE_PARAM_COUNT = {
+                "etd_contacto_inicial": 2,
+                "etd_resp_comovamio_docspendientes": 2,
+                "etd_pago_vencido_1sem": 2,
+                "etd_pago_vencido_2sem": 2,
+                "etd_pago_exp_paralizado": 2,
+                # --- 3P ---
+                "etd_doc_completa_pago_procurador": 3,
+                "etd_estado_preparacion_demanda": 3,
+                "etd_estado_demanda_presentada": 3,
+                "etd_estado_declarado_concurso": 3,
+                "etd_estado_epi_solicitado": 3,
+                "etd_estado_epi_concedido": 3,
+                "etd_estado_epi_comunicado": 3,
+                "etd_estado_bajas_ficheros": 3,
+                "etd_rec_citas_tel": 3,
+                "etd_pago_por_vencer": 3,
+                "etd_pago_fecha_acordada": 3,
+                # --- 4P ---
+                "etd_recaptura_post_entrevista": 4,
+                "etd_doc_seguimiento_envio": 4,
+                "etd_rec_cita_presencial": 4,
+                "etd_pago_varias_cuotas": 4,
+            }
+
+            logger.info(f"[BUILD_TEMPLATE] Buscando prefijo para template: '{name}'")
+            body_param_count = 0
+            matched_prefix = None
+            
+            for prefix, count in ETD_TEMPLATE_PARAM_COUNT.items():
+                logger.debug(f"[BUILD_TEMPLATE] Comparando: '{name}'.startswith('{prefix}') ?")
+                if name.startswith(prefix):
+                    body_param_count = count
+                    matched_prefix = prefix
+                    logger.info(f"[BUILD_TEMPLATE] ✅ COINCIDENCIA ENCONTRADA: prefix='{prefix}' → body_param_count={count}")
+                    break
+            
+            if matched_prefix is None:
+                logger.warning(f"[BUILD_TEMPLATE] ⚠️ NO COINCIDIÓ CON NINGÚN PREFIJO - body_param_count={body_param_count}")
+
+            logger.info(f"[BUILD_TEMPLATE] body_param_count final: {body_param_count}")
+
+            if body_param_count > 0:
+                body_values = ordered_values[:body_param_count]
+                logger.info(f"[BUILD_TEMPLATE] Agregando BODY component con {body_param_count} parámetros: {body_values}")
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": v} for v in body_values
+                    ]
+                })
+            else:
+                logger.warning(f"[BUILD_TEMPLATE] ⚠️ body_param_count es 0 - NO se agregará BODY component")
+
+            # Todas las ETD salvo 'etd_resp_comovamio_docspendientes' tienen botón URL
+            if name != "etd_resp_comovamio_docspendientes":
+                logger.info(f"[BUILD_TEMPLATE] Agregando BUTTON (URL) component")
+                components.append({
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": 0,
+                    "parameters": [
+                        {"type": "text", "text": link_safe}
+                    ]
+                })
+            else:
+                logger.info(f"[BUILD_TEMPLATE] Omitiendo BUTTON (nombre es 'etd_resp_comovamio_docspendientes')")
+
+        else:
+            logger.info(f"[BUILD_TEMPLATE] ❌ NO es ETD template o no es ETD company - usando lógica genérica")
+            
+            # Resto de plantillas...
+            if name in ("agendar_llamada_inicial", "agendar_llamada"):
+                logger.info(f"[BUILD_TEMPLATE] Detectado template: agendar_llamada*")
+                first_name = td.get("first_name") or ""
+                deal_id = td.get("deal_id") or ""
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name}
+                    ]
+                })
+                components.append({
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": 0,
+                    "parameters": [
+                        {"type": "text", "text": deal_id}
+                    ]
+                })
+            elif name == "recordatorio_llamada_agendada":
+                logger.info(f"[BUILD_TEMPLATE] Detectado template: recordatorio_llamada_agendada")
+                first_name = td.get("first_name") or ""
+                slot_text = td.get("slot_text") or "próximamente"
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name},
+                        {"type": "text", "text": slot_text}
+                    ]
+                })
+            # ... resto de templates conocidas ...
+            else:
+                logger.info(f"[BUILD_TEMPLATE] Template desconocida - usando modo genérico")
+                body_params = td.get("body_params") or []
+                if body_params:
+                    components.append({
+                        "type": "body",
+                        "parameters": [{"type": "text", "text": str(x)} for x in body_params]
+                    })
+
+        logger.info(f"[BUILD_TEMPLATE] Components finales: {components}")
+        logger.info(f"[BUILD_TEMPLATE] ===== FIN BUILD TEMPLATE =====")
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to_e164,
+            "type": "template",
+            "template": {
+                "name": name,
+                "language": {"code": lang},
+                "components": components
+            }
+        }
+        
+        logger.info(f"[BUILD_TEMPLATE] PAYLOAD FINAL: {payload}")
+        return payload
+
+    def _build_template_payload1(self, template_name: str, template_data: dict, to_phone: str, company_id: str) -> dict:
         """
         Construye el payload de envío de plantilla para la Cloud API de WhatsApp.
         - template_name: nombre EXACTO del template en WBM
