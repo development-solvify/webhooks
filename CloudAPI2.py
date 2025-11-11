@@ -2489,7 +2489,7 @@ class WhatsAppService:
                 v = (v or "").strip()
                 return v if v else default
 
-            link_safe = _safe(raw_link, "https://portal.solvify.es")
+            link_safe = _safe(raw_link, "https://portal.eliminamostudeuda.com")
 
             ordered_values = [
                 _safe(cliente),
@@ -2500,62 +2500,54 @@ class WhatsAppService:
                 _safe(texto_libre),
             ]
 
-            # Agrupamos plantillas ETD por nº de parámetros en el BODY
-            ETD_TEMPLATES_2P = {
-                "etd_contacto_inicial",
-                "etd_resp_comovamio_docspendientes",
-                "etd_pago_vencido_1sem",
-                "etd_pago_vencido_2sem",
-                "etd_pago_exp_paralizado",
-            }
-            ETD_TEMPLATES_3P = {
-                "etd_doc_completa_pago_procurador",
-                "etd_estado_preparacion_demanda",
-                "etd_estado_demanda_presentada",
-                "etd_estado_declarado_concurso",
-                "etd_estado_epi_solicitado",
-                "etd_estado_epi_concedido",
-                "etd_estado_epi_comunicado",
-                "etd_estado_bajas_ficheros",
-                "etd_rec_citas_tel",
-                "etd_pago_por_vencer",
-                "etd_pago_fecha_acordada",
-            }
-            ETD_TEMPLATES_4P = {
-                "etd_recaptura_post_entrevista",
-                "etd_doc_seguimiento_envio",
-                "etd_rec_cita_presencial",
-                "etd_pago_varias_cuotas",
+            ETD_TEMPLATE_PARAM_COUNT = {
+                "etd_contacto_inicial": 2,
+                "etd_resp_comovamio_docspendientes": 2,
+                "etd_pago_vencido_1sem": 2,
+                "etd_pago_vencido_2sem": 2,
+                "etd_pago_exp_paralizado": 2,
+                "etd_doc_completa_pago_procurador": 3,
+                "etd_estado_preparacion_demanda": 3,
+                "etd_estado_demanda_presentada": 3,
+                "etd_estado_declarado_concurso": 3,
+                "etd_estado_epi_solicitado": 3,
+                "etd_estado_epi_concedido": 3,
+                "etd_estado_epi_comunicado": 3,
+                "etd_estado_bajas_ficheros": 3,
+                "etd_rec_citas_tel": 3,
+                "etd_pago_por_vencer": 3,
+                "etd_pago_fecha_acordada": 3,
+                "etd_recaptura_post_entrevista": 4,
+                "etd_doc_seguimiento_envio": 4,
+                "etd_rec_cita_presencial": 4,
+                "etd_pago_varias_cuotas": 4,
             }
 
-            if name in ETD_TEMPLATES_2P:
-                body_param_count = 2
-            elif name in ETD_TEMPLATES_3P:
-                body_param_count = 3
-            elif name in ETD_TEMPLATES_4P:
-                body_param_count = 4
-            else:
-                body_param_count = 0
+            body_param_count = 0
+            for prefix, count in ETD_TEMPLATE_PARAM_COUNT.items():
+                if name.startswith(prefix):
+                    body_param_count = count
+                    break
 
-            if body_param_count > 0:
-                body_values = ordered_values[:body_param_count]
-                components.append({
-                    "type": "body",
-                    "parameters": [
-                        {"type": "text", "text": v} for v in body_values
-                    ]
-                })
+                if body_param_count > 0:
+                    body_values = ordered_values[:body_param_count]
+                    components.append({
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": v} for v in body_values
+                        ]
+                    })
 
-            # Todas las ETD salvo 'etd_resp_comovamio_docspendientes' tienen botón URL
-            if name != "etd_resp_comovamio_docspendientes":
-                components.append({
-                    "type": "button",
-                    "sub_type": "url",
-                    "index": 0,
-                    "parameters": [
-                        {"type": "text", "text": link_safe}
-                    ]
-                })
+                # Todas las ETD salvo 'etd_resp_comovamio_docspendientes' tienen botón URL
+                if name != "etd_resp_comovamio_docspendientes":
+                    components.append({
+                        "type": "button",
+                        "sub_type": "url",
+                        "index": 0,
+                        "parameters": [
+                            {"type": "text", "text": link_safe}
+                        ]
+                    })
 
         else:
             # ======== PLANTILLAS CONOCIDAS (resto de tenants) ========
