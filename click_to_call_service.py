@@ -10,7 +10,7 @@ import requests
 # -----------------------------------------------------------------------------
 VPBX_API_KEY = os.environ.get("VPBX_API_KEY")
 VPBX_BASE_URL = os.environ.get("VPBX_BASE_URL", "https://vpbx.me/api")
-
+VPBX_TIMEOUT = int(os.environ.get("VPBX_TIMEOUT", "20"))  # segundos
 ALLOWED_ORIGINS = os.environ.get(
     "ALLOWED_ORIGINS",
     "https://app.solvify.es,https://portal.eliminamostudeuda.com"
@@ -147,10 +147,23 @@ def click_to_call():
     logger.info(f"➡️ Llamando a VPBX {url}")
 
     try:
-        resp = requests.get(url, headers=headers, timeout=5)
+        resp = requests.get(url, headers=headers, timeout=VPBX_TIMEOUT)
+    except requests.exceptions.ReadTimeout as e:
+        logger.warning(f"⏱️ Timeout llamando a VPBX tras {VPBX_TIMEOUT}s", exc_info=True)
+        return jsonify({
+            "ok": False,
+            "error": "vpbx_timeout",
+            "message": f"VPBX no respondió en {VPBX_TIMEOUT} segundos",
+        }), 504  # Gateway Timeout más semántico que 502
     except requests.RequestException as e:
         logger.exception("❌ Error llamando a VPBX")
-        return jsonify({"error": "vpbx request failed", "details": str(e)}), 502
+        return jsonify({
+            "ok": False,
+            "error": "vpbx_request_failed",
+            "message": "Error en la llamada a VPBX",
+            "details": str(e),
+        }), 502
+
 
     try:
         body = resp.json()
