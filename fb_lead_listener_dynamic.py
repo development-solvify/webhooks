@@ -336,6 +336,36 @@ def get_supabase_connection():
     }
     return pg8000.connect(**params)
 
+import re
+
+def _sanitize_phone(raw_phone: str) -> str | None:
+    if not raw_phone:
+        return None
+
+    # Convertir a string siempre
+    s = str(raw_phone).strip()
+
+    # Si viene de Google con #ERROR, lo detectamos:
+    if "#ERROR" in s.upper():
+        return None
+
+    # Nos quedamos solo con dígitos
+    digits = re.sub(r"\D", "", s)
+
+    if not digits:
+        return None
+
+    # Normalización típica España: quitar 34 delante si lo han puesto
+    if digits.startswith("34") and len(digits) > 9:
+        digits = digits[2:]
+
+    # Teléfonos de 9 dígitos (España) – puedes ajustar esta regla
+    if len(digits) < 8:
+        return None
+
+    return digits
+
+
 
 def _normalize_office_token(raw: str) -> str:
     """
@@ -1104,7 +1134,8 @@ def create_portal_user(data, source, config=None):
     app.logger.info(f"⚙️ Config: {config}")
     
     full = data.get('nombre_y_apellidos', '').strip()
-    phone = strip_country_code(data.get('número_de_teléfono','') or data.get('phone_number',''))
+    phone = _sanitize_phone(strip_country_code(data.get('número_de_teléfono','') or data.get('phone_number','')))
+
     app.logger.info(f"👤 Nombre procesado: '{full}'")
     app.logger.info(f"📞 Teléfono original: '{data.get('número_de_teléfono', '') or data.get('phone_number', '')}'")
     app.logger.info(f"📞 Teléfono procesado: '{phone}'")
