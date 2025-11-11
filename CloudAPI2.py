@@ -5472,18 +5472,35 @@ def get_whatsapp_credentials_for_company(company_id: str) -> dict:
             "company_name":  "Default",
         }
 
+import re
+
 def pretty_print_template_name(name: str) -> str:
     """
-    Convierte 'mi_template_de_prueba' -> 'Mi template de prueba'
+    Convierte:
+      - 'mi_template_de_prueba'      -> 'Mi template de prueba'
+      - 'etd_contacto_inicial_v2'    -> 'Contacto inicial'
+      - 'etd_algo_largo_v10'         -> 'Algo largo'
+    Regla:
+      - Si empieza por 'etd_' se elimina ese prefijo.
+      - Se elimina sufijo de versión '_v<numero>' si existe.
+      - Se reemplazan '_' por espacios.
+      - Solo la primera letra del resultado en mayúscula.
     """
     if not name:
         return ""
-    pretty = name.replace('_', ' ').strip()
-    # Solo primera letra en mayúscula, resto igual
-    return pretty[0].upper() + pretty[1:] if pretty else ""
-    # Si quisieras cada palabra capitalizada:
-    # return pretty.title()
 
+    # 1) Quitar prefijo 'etd_' si existe
+    if name.startswith("etd_"):
+        name = name[len("etd_"):]
+
+    # 2) Quitar sufijo tipo '_v2', '_v10', etc.
+    name = re.sub(r"_v\d+$", "", name)
+
+    # 3) Reemplazar '_' por espacios y limpiar
+    pretty = name.replace("_", " ").strip()
+
+    # 4) Capitalizar solo la primera letra
+    return pretty[:1].upper() + pretty[1:] if pretty else ""
 
 
 @app.route('/get_templates', methods=['GET'])
