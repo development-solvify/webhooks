@@ -5478,33 +5478,41 @@ import re
 def pretty_print_template_name(name: str) -> str:
     """
     Reglas:
-      - Si contiene 'z_test_3' -> no mostrar (devuelve "").
-      - Si empieza por 'etd_' -> quitar 'etd_'.
-      - Si termina en '_v<num>' -> quitar versión.
+      - Si contiene 'z_test_3' -> ocultar (devuelve "").
+      - Si empieza por 'etd_' -> quitar ese prefijo.
+      - Quitar TODO lo que vaya desde '_v' hasta el final (ej: _v2, _v10_test, _v3_borrador...).
       - Reemplazar '_' por espacios.
       - Solo capitalizar la primera letra del resultado.
     """
     if not name:
         return ""
 
-    raw = name.strip().lower()
+    original = name.strip()
+    lower = original.lower()
 
-    # Ocultar templates de test
-    if "z_test_3" in raw:
+    # Ocultar templates de test concretos
+    if "z_test_3" in lower:
         return ""
 
     # Quitar prefijo 'etd_'
-    if name.startswith("etd_"):
-        name = name[len("etd_"):]
+    if lower.startswith("etd_"):
+        original = original[4:]  # len("etd_") = 4
 
-    # Quitar sufijo tipo '_v2', '_v10', etc.
-    name = re.sub(r"_v\\d+$", "", name)
+    # Quitar todo desde '_v...' hasta el final (case-insensitive)
+    # Ejemplos:
+    #   'contacto_inicial_v2' -> 'contacto_inicial'
+    #   'contacto_inicial_v2_test' -> 'contacto_inicial'
+    original = re.sub(r"_v.*$", "", original, flags=re.IGNORECASE)
 
     # Reemplazar '_' por espacios
-    pretty = name.replace("_", " ").strip()
+    pretty = original.replace("_", " ").strip()
+
+    if not pretty:
+        return ""
 
     # Capitalizar solo la primera letra
-    return pretty[:1].upper() + pretty[1:] if pretty else ""
+    return pretty[0].upper() + pretty[1:]
+
 
 
 @app.route('/get_templates', methods=['GET'])
