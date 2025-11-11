@@ -2480,7 +2480,7 @@ class WhatsAppService:
                 v = (v or "").strip()
                 return v if v else default
 
-            link_safe = _safe(raw_link, "https://portal.solvify.es")
+            link_safe = _safe(raw_link, "https://portal.eliminamostudeuda.com")
 
             ordered_values = [
                 _safe(cliente),
