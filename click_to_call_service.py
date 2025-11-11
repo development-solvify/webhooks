@@ -6,29 +6,24 @@ from flask import Flask, request, jsonify
 import requests
 
 # -----------------------------------------------------------------------------
-# Config
+# Config (con defaults si no hay entorno)
 # -----------------------------------------------------------------------------
-VPBX_API_KEY = os.environ.get("VPBX_API_KEY")
-VPBX_BASE_URL = os.environ.get("VPBX_BASE_URL", "https://vpbx.me/api")
+VPBX_API_KEY = os.environ.get("VPBX_API_KEY") or "JxrjJ7I5oE20g64ua3XQ0Hocv7YlBbMd"
+VPBX_BASE_URL = os.environ.get("VPBX_BASE_URL") or "https://vpbx.me/api"
 VPBX_TIMEOUT = int(os.environ.get("VPBX_TIMEOUT", "20"))  # segundos
-ALLOWED_ORIGINS = os.environ.get(
+
+ALLOWED_ORIGINS_RAW = os.environ.get(
     "ALLOWED_ORIGINS",
     "https://app.solvify.es,https://portal.eliminamostudeuda.com"
-).split(",")
+)
+ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS_RAW.split(",") if o.strip()]
 
-INTERNAL_TOKEN = os.environ.get("CLICK2CALL_TOKEN")  # opcional
+INTERNAL_TOKEN = os.environ.get("CLICK2CALL_TOKEN") or "pon_aqui_un_token_largo_y_secreto"
 
 LOG_FILE = os.environ.get(
     "CLICK2CALL_LOG_FILE",
-    "/home/isidoro/webhooks/click_to_call_service.log"
+    "/home/isidoro/webhooks/logs/click_to_call_service.log"
 )
-
-
-VPBX_API_KEY="JxrjJ7I5oE20g64ua3XQ0Hocv7YlBbMd"
-VPBX_BASE_URL="https://vpbx.me/api"
-ALLOWED_ORIGINS="https://app.solvify.es,https://portal.eliminamostudeuda.com"
-CLICK2CALL_LOG_FILE="/home/isidoro/webhooks/logs/click_to_call_service.log"
-CLICK2CALL_TOKEN="pon_aqui_un_token_largo_y_secreto"
 
 # -----------------------------------------------------------------------------
 # Flask app
@@ -54,6 +49,12 @@ logger.addHandler(handler)
 app.logger.handlers = logger.handlers
 app.logger.setLevel(logger.level)
 
+logger.info("🔧 Config inicial:")
+logger.info(f"   VPBX_BASE_URL={VPBX_BASE_URL}")
+logger.info(f"   VPBX_TIMEOUT={VPBX_TIMEOUT}")
+logger.info(f"   ALLOWED_ORIGINS={ALLOWED_ORIGINS}")
+logger.info(f"   LOG_FILE={LOG_FILE}")
+
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -62,19 +63,44 @@ def is_origin_allowed(origin):
     if not origin:
         return False
     origin = origin.strip()
-    allowed = [o.strip() for o in ALLOWED_ORIGINS if o.strip()]
-    return origin in allowed
+    allowed = origin in ALLOWED_ORIGINS
+    logger.info(f"🔎 CORS check origin={origin} allowed={allowed}")
+    return allowed
 
 
 def require_internal_token():
     """Validación simple por token interno en cabecera X-Internal-Token."""
-    if not INTERNAL_TOKEN:
-        return True  # si no está configurado, no forzamos seguridad
     token = request.headers.get("X-Internal-Token")
+    if not INTERNAL_TOKEN:
+        logger.info("🔓 INTERNAL_TOKEN no configurado, se permite sin validar")
+        return True
     if token != INTERNAL_TOKEN:
-        logger.warning("❌ Token interno inválido en click_to_call")
+        logger.warning(f"❌ Token interno inválido en click_to_call: '{token}'")
         return False
+    logger.info("✅ Token interno OK")
     return True
+
+
+def log_request_debug():
+    """Log detallado de la petición entrante."""
+    try:
+        raw_body = request.get_data(as_text=True)
+    except Exception:
+        raw_body = "<no_body>"
+
+    safe_headers = {}
+    for k, v in request.headers.items():
+        if k.lower() in ("authorization", "cookie"):
+            safe_headers[k] = "***redacted***"
+        else:
+            safe_headers[k] = v
+
+    logger.info("📥 REQUEST DEBUG:")
+    logger.info(f"   method={request.method} path={request.path}")
+    logger.info(f"   remote_addr={request.remote_addr}")
+    logger.info(f"   origin={request.headers.get('Origin')}")
+    logger.info(f"   headers={safe_headers}")
+    logger.info(f"   raw_body={raw_body}")
 
 
 # -----------------------------------------------------------------------------
@@ -96,6 +122,7 @@ def add_cors_headers(response):
 @app.route("/click_to_call", methods=["OPTIONS"])
 def click_to_call_options():
     # Preflight CORS
+    log_request_debug()
     resp = jsonify({})
     origin = request.headers.get("Origin")
     if is_origin_allowed(origin):
@@ -105,6 +132,7 @@ def click_to_call_options():
             "Content-Type,Authorization,X-Internal-Token"
         )
         resp.headers["Access-Control-Allow-Methods"] = "POST,OPTIONS"
+    logger.info("✅ Respuesta OPTIONS /click_to_call enviada")
     return resp, 200
 
 
@@ -121,10 +149,18 @@ def health():
 # -----------------------------------------------------------------------------
 @app.route("/click_to_call", methods=["POST"])
 def click_to_call():
+    log_request_debug()
+
     if not require_internal_token():
         return jsonify({"error": "unauthorized"}), 401
 
-    data = request.get_json(silent=True) or {}
+    # Intentar JSON, si no, form/query (por si acaso)
+    data = request.get_json(silent=True)
+    if data is None:
+        data = request.form.to_dict() or request.args.to_dict() or {}
+
+    logger.info(f"🧾 Payload parseado: {data}")
+
     phone = str(data.get("phone") or "").strip()
     extension = str(data.get("extension") or "").strip()
 
@@ -144,7 +180,7 @@ def click_to_call():
         "Accept": "application/json",
     }
 
-    logger.info(f"➡️ Llamando a VPBX {url}")
+    logger.info(f"➡️ Llamando a VPBX url={url} headers={headers} timeout={VPBX_TIMEOUT}")
 
     try:
         resp = requests.get(url, headers=headers, timeout=VPBX_TIMEOUT)
@@ -154,7 +190,7 @@ def click_to_call():
             "ok": False,
             "error": "vpbx_timeout",
             "message": f"VPBX no respondió en {VPBX_TIMEOUT} segundos",
-        }), 504  # Gateway Timeout más semántico que 502
+        }), 504
     except requests.RequestException as e:
         logger.exception("❌ Error llamando a VPBX")
         return jsonify({
@@ -164,26 +200,38 @@ def click_to_call():
             "details": str(e),
         }), 502
 
+    # Log bruto de la respuesta de VPBX
+    vpbx_headers = dict(resp.headers)
+    logger.info(f"⬅️ Respuesta VPBX status={resp.status_code}")
+    logger.info(f"   VPBX headers={vpbx_headers}")
+    logger.info(f"   VPBX raw_body={resp.text}")
 
     try:
         body = resp.json()
     except ValueError:
         body = {"raw": resp.text}
 
-    logger.info(f"⬅️ Respuesta VPBX status={resp.status_code} body={body}")
+    logger.info(f"   VPBX parsed_body={body}")
 
     success = False
     cause = None
+    call_id = None
     if isinstance(body, dict):
         success = bool(body.get("success"))
         vars_ = body.get("variables") or {}
         cause = vars_.get("cause")
+        call_id = vars_.get("callId")
+
+    logger.info(
+        f"📊 Resultado normalizado: success={success} cause={cause} call_id={call_id}"
+    )
 
     return jsonify({
         "ok": success,
         "status_code": resp.status_code,
         "vpbx_response": body,
         "cause": cause,
+        "call_id": call_id,
     }), resp.status_code
 
 
@@ -191,6 +239,5 @@ def click_to_call():
 # Entry point (sin gunicorn)
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    # Para tu uso interno está bien el servidor incorporado
     logger.info("🚀 Iniciando click_to_call_service en 0.0.0.0:5010")
     app.run(host="0.0.0.0", port=5010)
