@@ -24,11 +24,11 @@ LOG_FILE = os.environ.get(
 )
 
 
-VPBX_API_KEY=JxrjJ7I5oE20g64ua3XQ0Hocv7YlBbMd
-VPBX_BASE_URL=https://vpbx.me/api
-ALLOWED_ORIGINS=https://app.solvify.es,https://portal.eliminamostudeuda.com
-CLICK2CALL_LOG_FILE=/home/isidoro/webhooks/logs/click_to_call_service.log
-CLICK2CALL_TOKEN=pon_aqui_un_token_largo_y_secreto
+VPBX_API_KEY="JxrjJ7I5oE20g64ua3XQ0Hocv7YlBbMd"
+VPBX_BASE_URL="https://vpbx.me/api"
+ALLOWED_ORIGINS="https://app.solvify.es,https://portal.eliminamostudeuda.com"
+CLICK2CALL_LOG_FILE="/home/isidoro/webhooks/logs/click_to_call_service.log"
+CLICK2CALL_TOKEN="pon_aqui_un_token_largo_y_secreto"
 
 # -----------------------------------------------------------------------------
 # Flask app
