@@ -18,7 +18,6 @@ ALLOWED_ORIGINS_RAW = os.environ.get(
 )
 ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS_RAW.split(",") if o.strip()]
 
-INTERNAL_TOKEN = os.environ.get("CLICK2CALL_TOKEN") or "pon_aqui_un_token_largo_y_secreto"
 
 LOG_FILE = os.environ.get(
     "CLICK2CALL_LOG_FILE",
@@ -66,20 +65,6 @@ def is_origin_allowed(origin):
     allowed = origin in ALLOWED_ORIGINS
     logger.info(f"🔎 CORS check origin={origin} allowed={allowed}")
     return allowed
-
-
-def require_internal_token():
-    """Validación simple por token interno en cabecera X-Internal-Token."""
-    token = request.headers.get("X-Internal-Token")
-    if not INTERNAL_TOKEN:
-        logger.info("🔓 INTERNAL_TOKEN no configurado, se permite sin validar")
-        return True
-    if token != INTERNAL_TOKEN:
-        logger.warning(f"❌ Token interno inválido en click_to_call: '{token}'")
-        return False
-    logger.info("✅ Token interno OK")
-    return True
-
 
 def log_request_debug():
     """Log detallado de la petición entrante."""
@@ -150,9 +135,6 @@ def health():
 @app.route("/click_to_call", methods=["POST"])
 def click_to_call():
     log_request_debug()
-
-    if not require_internal_token():
-        return jsonify({"error": "unauthorized"}), 401
 
     # Intentar JSON, si no, form/query (por si acaso)
     data = request.get_json(silent=True)
