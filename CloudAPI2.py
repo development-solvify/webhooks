@@ -2649,8 +2649,8 @@ class WhatsAppService:
 
         # >>>>>>> NUEVO: usar SIEMPRE el WABA/TOKEN DEL TENANT ACTIVO (pasados en template_data) <<<<<<<
         # El caller ya sabe con qué WABA envía (lo logeas justo antes de llamar). Pásalos en template_data.
-        waba_id = td.get("waba_id") or globals().get("WABA_ID")
-        access_token = td.get("access_token") or globals().get("ACCESS_TOKEN")
+        waba_id = td.get("waba_id")
+        access_token = td.get("access_token")
         if not waba_id or not access_token:
             logger.warning("[BUILD_TEMPLATE] ⚠️ waba_id/access_token no definidos en template_data; usando DEFAULT (puede fallar)")
         else:
@@ -2671,7 +2671,6 @@ class WhatsAppService:
                 )
                 if resp.status_code == 200:
                     data = resp.json() or {}
-                    print(data,"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX_---------------------------------------------------------")
                     for t in (data.get("data") or []):
                         if t.get("name") == name and t.get("language") == lang:
                             for c in (t.get("components") or []):
