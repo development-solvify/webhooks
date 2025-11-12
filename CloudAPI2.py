@@ -3580,6 +3580,202 @@ class MessageService:
     ) -> bool:
         """
         Registra un mensaje saliente de tipo TEMPLATE (from_me=true) con status 'template_sent'.
+        Renderiza la cadena EXACTA del BODY (placeholders reemplazados) e imprime un preview.
+        Guarda en external_messages.message un JSON con {"type":"template","text":..., "raw":...}.
+        """
+        try:
+            # 1) Resolver teléfono
+            phone = (
+                payload.get("phone")
+                or payload.get("to")
+                or (payload.get("template_payload") or {}).get("to")
+                or ""
+            )
+            sender = PhoneUtils.strip_34(str(phone)) if phone else None
+
+            # 2) Template name
+            template_name = (
+                payload.get("template_name")
+                or (payload.get("template_data") or {}).get("template_name")
+                or (payload.get("template") or {}).get("name")
+                or ""
+            )
+
+            # 3) Timestamp
+            last_message_ts = now_madrid_naive()
+
+            # 4) Parámetros del BODY que estás enviando ahora mismo
+            tpl = (payload.get("template") or (payload.get("template_payload") or {}).get("template") or {}) or {}
+            comps = tpl.get("components") or []
+            body_params = []
+            for c in comps:
+                if (c.get("type") or "").lower() == "body":
+                    for p in (c.get("parameters") or []):
+                        if isinstance(p, dict):
+                            if p.get("type") == "text":
+                                body_params.append(p.get("text") or "")
+                            else:
+                                body_params.append(
+                                    p.get("text") or
+                                    (p.get("currency") or {}).get("fallback_value") or
+                                    (p.get("date_time") or {}).get("fallback_value") or
+                                    p.get("payload") or
+                                    ""
+                                )
+                        else:
+                            body_params.append(str(p))
+
+            # 5) Obtener el BODY.text real del template desde Meta (con cache)
+            rendered_text = None
+            try:
+                import requests, re
+                global _TEMPLATE_BODY_CACHE
+                try:
+                    _TEMPLATE_BODY_CACHE
+                except NameError:
+                    _TEMPLATE_BODY_CACHE = {}
+
+                cache_key = f"{template_name}"
+                body_text = _TEMPLATE_BODY_CACHE.get(cache_key)
+
+                if not body_text:
+                    url = f"https://graph.facebook.com/v22.0/{WABA_ID}/message_templates"
+                    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+                    params = {
+                        "fields": "name,language,status,components",
+                        "limit": 200
+                    }
+                    resp = requests.get(url, headers=headers, params=params, timeout=12)
+                    if resp.status_code == 200:
+                        data = resp.json() or {}
+                        for t in (data.get("data") or []):
+                            if (t.get("name") or "") == template_name:
+                                # Buscar componente BODY con 'text'
+                                for comp in (t.get("components") or []):
+                                    if str(comp.get("type") or "").upper() == "BODY":
+                                        body_text = comp.get("text") or ""
+                                        break
+                                break
+                    # Cachear si lo conseguimos
+                    if body_text:
+                        _TEMPLATE_BODY_CACHE[cache_key] = body_text
+
+                # 6) Sustituir {{n}} por body_params[n-1]
+                if body_text:
+                    def _repl(m):
+                        try:
+                            idx = int(m.group(1)) - 1
+                            return str(body_params[idx]) if 0 <= idx < len(body_params) else ""
+                        except Exception:
+                            return ""
+                    rendered_text = re.sub(r"\{\{\s*(\d+)\s*\}\}", _repl, body_text).strip()
+
+            except Exception:
+                # No paramos el flujo si falla la consulta; haremos fallback.
+                pass
+
+            # 7) Fallback si no se pudo renderizar (mostramos algo útil)
+            if not (isinstance(rendered_text, str) and rendered_text.strip()):
+                rendered_text = "\n".join([x for x in body_params if x]).strip()
+
+            # 8) PREVIEW EXACTO (BODY renderizado)
+            print("\n" + "="*80)
+            print("📨 MENSAJE DE PLANTILLA (PREVIEW CLIENTE)")
+            print("="*80)
+            print(f"📱 Teléfono:           {sender or 'N/A'}")
+            print(f"📦 Message ID (WAMID): {wamid or 'N/A'}")
+            print(f"🏢 Company ID:         {company_id or 'N/A'}")
+            print(f"🧩 Template:           {template_name or 'N/A'}")
+            print("-"*80)
+            print("📝 CONTENIDO (BODY) QUE RECIBE EL CLIENTE:")
+            print("-"*80)
+            print(rendered_text or "")
+            print("-"*80)
+            print("="*80 + "\n")
+
+            # 9) Guardar en BBDD como JSON (texto + raw)
+            message_json = {
+                "type": "template",
+                "template_name": template_name,
+                "to": sender,
+                "wamid": wamid,
+                "text": rendered_text,   # <- BODY renderizado (exacto)
+                "raw": payload
+            }
+            message_text = json.dumps(message_json, ensure_ascii=False)
+
+            # 10) Resolver asignaciones/lead
+            assigned_to_id = None
+            responsible_email = ""
+            lead = None
+            if sender:
+                try:
+                    assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
+                except Exception:
+                    logging.exception("Failed to get lead assigned info for sender=%s", sender)
+                try:
+                    lead = self.lead_service.get_lead_data_by_phone(sender, company_id=company_id)
+                except Exception:
+                    logging.exception("Failed to get lead data for sender=%s", sender)
+
+            chat_id = None
+            chat_url = None
+            if lead:
+                chat_id = lead.get("deal_id") or sender
+                chat_url = sender
+                if not company_id:
+                    company_id = lead.get("company_id")
+
+            if not chat_id:
+                chat_id = sender or str(uuid4())
+            if not chat_url:
+                chat_url = sender or ""
+
+            # 11) INSERT idempotente
+            insert_sql = """
+                INSERT INTO public.external_messages (
+                    id, message, sender_phone, responsible_email,
+                    last_message_uid, last_message_timestamp,
+                    from_me, status, created_at, updated_at, is_deleted,
+                    chat_id, chat_url, assigned_to_id, company_id
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s,
+                    %s, %s, NOW(), NOW(), FALSE,
+                    %s, %s, %s, %s
+                )
+                ON CONFLICT (last_message_uid) DO NOTHING
+            """
+            params = [
+                str(uuid4()),
+                message_text,
+                (sender or ""),
+                (responsible_email or ""),
+                wamid,
+                last_message_ts,
+                'true',
+                'template_sent',
+                chat_id,
+                chat_url,
+                assigned_to_id,
+                company_id
+            ]
+            self.db_manager.execute_query(insert_sql, params)
+            return True
+
+        except Exception:
+            logging.exception("Failed to save template message")
+            return False
+
+
+    def save_template_message0(
+        self,
+        payload: dict,
+        wamid: str | None,
+        company_id: str | None = None
+    ) -> bool:
+        """
+        Registra un mensaje saliente de tipo TEMPLATE (from_me=true) con status 'template_sent'.
         Imprime en consola el contenido exacto y guarda en external_messages.message un JSON:
         { "type":"template", "template_name":..., "to":..., "wamid":..., "text":..., "raw": {...} }
         """
