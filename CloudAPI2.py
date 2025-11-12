@@ -3643,6 +3643,11 @@ class MessageService:
             if not chat_url:
                 chat_url = sender or ""
 
+
+            pretty_json = json.dumps(message_json, ensure_ascii=False, indent=2)
+            print("\n===== TEXTO QUE VERÁ EL CLIENTE =====\n" + rendered_text + "\n=====================================\n")
+            logger.info("🟩 OUTGOING TEMPLATE (preview)\n" + pretty_json)
+            
             # 7) Insert
             insert_sql = """
                 INSERT INTO public.external_messages (
