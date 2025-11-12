@@ -2690,61 +2690,77 @@ class WhatsAppService:
             # ... (tu bloque ETD tal cual) ...
             pass
         else:
-            logger.info(f"[BUILD_TEMPLATE] ❌ NO ETD - lógica version-aware + definición WABA")
+            # ======== PLANTILLAS CONOCIDAS (resto de tenants) ========
 
-            # >>>>>>> NUEVO: si la plantilla exige HEADER IMAGE, añadirlo SIEMPRE <<<<<<<
-            if header_format == "IMAGE":
-                header_image_link = td.get("header_image_link") or cover_url
-                if header_image_link:
-                    components.append({
-                        "type": "header",
-                        "parameters": [{"type": "image", "image": {"link": header_image_link}}]
-                    })
-                    logger.info(f"[BUILD_TEMPLATE] Añadido HEADER IMAGE auto (link={header_image_link})")
-                else:
-                    logger.warning("[BUILD_TEMPLATE] ⚠️ La plantilla exige HEADER IMAGE pero no hay link disponible")
-
-            # ---- Plantillas conocidas (versión-aware) ----
-            _is = lambda base: re.match(rf"^{re.escape(base)}(_v\d+)?$", name) is not None
-
-            if _is("agendar_llamada_inicial") or _is("agendar_llamada"):
+            if name in ("agendar_llamada_inicial", "agendar_llamada"):
+                # Body: {{1}} = first_name
+                # Botón URL dinámico con {{1}} = deal_id (definido así en WBM)
                 first_name = td.get("first_name") or ""
                 deal_id = td.get("deal_id") or ""
-                components.append({"type": "body","parameters": [{"type": "text","text": first_name}]})
-                components.append({"type": "button","sub_type": "url","index": 0,
-                                "parameters": [{"type": "text","text": deal_id}]})
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name}
+                    ]
+                })
+                components.append({
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": 0,
+                    "parameters": [
+                        {"type": "text", "text": deal_id}
+                    ]
+                })
 
-            elif _is("recordatorio_llamada_agendada"):
+            elif name == "recordatorio_llamada_agendada":
+                # Body: {{1}} = first_name, {{2}} = slot_text
                 first_name = td.get("first_name") or ""
                 slot_text = td.get("slot_text") or "próximamente"
-                components.append({"type": "body","parameters": [
-                    {"type": "text","text": first_name},{"type": "text","text": slot_text}
-                ]})
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name},
+                        {"type": "text", "text": slot_text}
+                    ]
+                })
 
-            elif _is("retomar_contacto"):
+            elif name == "retomar_contacto":
+                # Body: {{1}} = first_name, {{2}} = responsible_name
                 first_name = td.get("first_name") or ""
                 responsible_name = td.get("responsible_name") or ""
-                components.append({"type": "body","parameters": [
-                    {"type": "text","text": first_name},{"type": "text","text": responsible_name}
-                ]})
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name},
+                        {"type": "text", "text": responsible_name}
+                    ]
+                })
 
-            elif _is("nuevo_numero"):
-                # 📌 Esta te está fallando: según el error, tiene HEADER IMAGE definido en WABA.
-                # Con el bloque de arriba (header_format == "IMAGE") ya añadimos el header.
+            elif name == "nuevo_numero":
+                # Body: {{1}} = first_name, {{2}} = new_phone
                 first_name = td.get("first_name") or ""
                 new_phone = td.get("new_phone") or PhoneUtils.strip_34(to_e164)
-                components.append({"type": "body","parameters": [
-                    {"type": "text","text": first_name},{"type": "text","text": new_phone}
-                ]})
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name},
+                        {"type": "text", "text": new_phone}
+                    ]
+                })
 
-            elif _is("baja_comercial"):
+            elif name == "baja_comercial":
+                # Body: {{1}} = first_name
                 first_name = td.get("first_name") or ""
-                components.append({"type": "body","parameters": [{"type": "text","text": first_name}]})
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name}
+                    ]
+                })
 
-            elif _is("contacto_recordatorio_pago"):
-                # BODY fijo sin placeholders; no ponemos body.parameters
-                pass
-
+            elif name == "contacto_recordatorio_pago":
+                # Esta plantilla específica va sin header/body auto (la manejas aparte)
+                components = []
             else:
                 # Genérico (conservador)
                 body_params = td.get("body_params") or []
