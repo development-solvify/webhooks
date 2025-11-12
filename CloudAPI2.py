@@ -3513,7 +3513,6 @@ class MessageService:
                 payload.get("rendered_text")
                 or (payload.get("template_payload") or {}).get("rendered_text")
             )
-            print("Rendered text from payload--------------------------------->:", rendered_text)
 
             # 4.2 Si no hay rendered_text, intentamos reconstruirlo desde components
             if not (isinstance(rendered_text, str) and rendered_text.strip()):
@@ -3561,42 +3560,6 @@ class MessageService:
 
                 if body_text:
                     lines.append(body_text)
-                else:
-                    # Fallback genérico si la plantilla sugiere cobros/impagos
-                    tn = template_name.lower()
-                    if any(k in tn for k in ["cuota", "pago", "impago", "mora", "deuda"]):
-                        # Si hubiera nº de cuotas en body_vals[1], úsalo; si no, 'varias'
-                        cuotas = (len(body_vals) > 1 and body_vals[1]) or "varias"
-                        # Si hubiera oficina en body_vals[2], úsala
-                        oficina = (len(body_vals) > 2 and body_vals[2]) or ""
-                        if oficina:
-                            lines.append("Llevas incumplidas varias cuotas.")
-                            lines.append("")
-                            lines.append(
-                                f"Te informamos que, hasta el momento, llevas incumplidas {cuotas} cuotas de {oficina} cada una; "
-                                "te agradeceríamos que regularices esta situación a la mayor brevedad posible para evitar la paralización "
-                                "en la gestión de tu expediente y la posterior resolución contractual."
-                            )
-                        else:
-                            lines.append("Llevas incumplidas varias cuotas.")
-                            lines.append("")
-                            lines.append(
-                                f"Te informamos que, hasta el momento, llevas incumplidas {cuotas} cuotas; "
-                                "te agradeceríamos que regularices esta situación a la mayor brevedad posible para evitar la paralización "
-                                "en la gestión de tu expediente y la posterior resolución contractual."
-                            )
-                    else:
-                        # Fallback minimalista si no es de cobros (p. ej. contacto inicial)
-                        lines.append("Nos ponemos en contacto contigo para continuar con tu expediente.")
-
-                # Enlace de pago si lo tenemos
-                if url_param:
-                    lines.append("")
-                    # Añadimos punto final solo si no lo trae
-                    if url_param.endswith("."):
-                        lines.append(f"Puedes realizar el pago en el siguiente enlace: {url_param}")
-                    else:
-                        lines.append(f"Puedes realizar el pago en el siguiente enlace: {url_param}.")
 
                 # Web corporativa ETD (si no la duplica el body_text)
                 if "eliminamostudeuda.com" not in "\n".join(lines):
@@ -3604,6 +3567,7 @@ class MessageService:
                     lines.append("www.eliminamostudeuda.com")
 
                 rendered_text = "\n".join(lines).strip()
+                print("Rendered text rebuilt from components    XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX:", rendered_text)
 
             # 5) JSON a guardar en external_messages.message
             message_json = {
