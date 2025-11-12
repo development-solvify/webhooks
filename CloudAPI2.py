@@ -2711,6 +2711,7 @@ class WhatsAppService:
                         {"type": "text", "text": deal_id}
                     ]
                 })
+                logger.info(f"[BUILD_TEMPLATE] ===== agendar_llamada_inicial) =====")
 
 
             elif name == "recordatorio_llamada_agendada":
