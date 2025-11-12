@@ -2622,15 +2622,11 @@ class WhatsAppService:
         return payload
 
     def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str, company_id: str) -> dict:
-        """
-        Construye el payload de envío de plantilla para la Cloud API de WhatsApp.
-        Auto-detecta si la plantilla requiere HEADER (p.ej. IMAGE) y lo añade para evitar 132012.
-        """
         import re
         try:
             import requests
         except Exception:
-            requests = None  # fallback defensivo
+            requests = None
 
         def normalize_es(phone: str) -> str:
             p = PhoneUtils.strip_34(str(phone))
@@ -2650,15 +2646,24 @@ class WhatsAppService:
         is_etd_company = bool(company_id) and str(company_id) in ETD_COMPANY_IDS
         logger.info(f"[BUILD_TEMPLATE] is_etd_company: {is_etd_company} | name.startswith('etd_'): {name.startswith('etd_')}")
 
-        # ---------- 1) Leer definición real de la plantilla en WABA (para saber si HEADER es obligatorio) ----------
+        # >>>>>>> NUEVO: usar SIEMPRE el WABA/TOKEN DEL TENANT ACTIVO (pasados en template_data) <<<<<<<
+        # El caller ya sabe con qué WABA envía (lo logeas justo antes de llamar). Pásalos en template_data.
+        waba_id = td.get("waba_id") or globals().get("WABA_ID")
+        access_token = td.get("access_token") or globals().get("ACCESS_TOKEN")
+        if not waba_id or not access_token:
+            logger.warning("[BUILD_TEMPLATE] ⚠️ waba_id/access_token no definidos en template_data; usando DEFAULT (puede fallar)")
+        else:
+            logger.info(f"[BUILD_TEMPLATE] Usando waba_id={waba_id} para leer definición")
+
+        # ---------- Leer definición real de la plantilla en el WABA correcto ----------
         header_format = None         # "IMAGE" | "TEXT" | "VIDEO" | "DOCUMENT" | None
         body_text_def = None
         body_placeholder_count = 0
         try:
-            if requests and 'WABA_ID' in globals() and 'ACCESS_TOKEN' in globals() and WABA_ID and ACCESS_TOKEN:
+            if requests and waba_id and access_token:
                 resp = requests.get(
-                    f"https://graph.facebook.com/v22.0/{WABA_ID}/message_templates",
-                    headers={"Authorization": f"Bearer {ACCESS_TOKEN}"},
+                    f"https://graph.facebook.com/v22.0/{waba_id}/message_templates",
+                    headers={"Authorization": f"Bearer {access_token}"},
                     params={"fields": "name,language,components,status", "limit": 200},
                     timeout=10
                 )
@@ -2669,96 +2674,25 @@ class WhatsAppService:
                             for c in (t.get("components") or []):
                                 ctype = (c.get("type") or "").upper()
                                 if ctype == "HEADER":
-                                    header_format = (c.get("format") or "").upper()  # IMAGE/TEXT/VIDEO/DOCUMENT
+                                    header_format = (c.get("format") or "").upper()
                                 elif ctype == "BODY":
                                     body_text_def = c.get("text") or ""
-                                    body_placeholder_count = len(re.findall(r"\{\{\s*\d+\s*\}\}", body_text_def))
+                                    body_placeholder_count = len(re.findall(r"\{\{\s*(\d+)\s*\}\}", body_text_def))
                             break
                 logger.info(f"[BUILD_TEMPLATE] Definición WABA → header_format={header_format} | body_placeholders={body_placeholder_count}")
         except Exception:
-            logger.warning("[BUILD_TEMPLATE] ⚠️ No se pudo leer definición WABA; seguimos en modo defensivo")
-
-        # Pequeño helper para versiones: base, base_v2, base_v10...
-        _is = lambda base: re.match(rf"^{re.escape(base)}(_v\d+)?$", name) is not None
+            logger.warning("[BUILD_TEMPLATE] ⚠️ No se pudo leer definición WABA; seguimos defensivo")
 
         components = []
 
-        # ---------- 2) ETD (sin header) ----------
+        # ---------- ETD (sin header) ----------
         if is_etd_company and name.startswith("etd_"):
-            logger.info(f"[BUILD_TEMPLATE] ✅ Entrando en bloque ETD (sin HEADER)")
-
-            def _safe(v: str, default: str = "-") -> str:
-                v = (v or "").strip()
-                return v if v else default
-
-            cliente = (td.get("customer_name") or td.get("client_name") or td.get("first_name") or "")
-            comercial = (td.get("sales_name") or td.get("comercial_asignado") or td.get("responsible_first_name") or td.get("responsible_name") or "")
-            oficina = (td.get("office_name") or td.get("office") or td.get("oficina") or td.get("company_name") or "")
-            raw_link = (td.get("link") or td.get("portal_link") or td.get("payment_link") or td.get("expediente_link") or td.get("url") or "")
-            fecha = (td.get("date_ddmm") or td.get("fecha_ddmm") or td.get("fecha") or td.get("date") or "")
-            texto_libre = (td.get("free_text") or td.get("texto_libre") or td.get("notes") or "")
-
-            link_safe = _safe(raw_link, "https://portal.eliminamostudeuda.com")
-            ordered_values = [
-                _safe(cliente),
-                _safe(comercial, "Nuestro equipo"),
-                _safe(oficina),
-                link_safe,
-                _safe(fecha),
-                _safe(texto_libre),
-            ]
-
-            ETD_TEMPLATE_PARAM_COUNT = {
-                "etd_contacto_inicial": 2,
-                "etd_resp_comovamio_docspendientes": 2,
-                "etd_pago_vencido_1sem": 2,
-                "etd_pago_vencido_2sem": 2,
-                "etd_pago_exp_paralizado": 2,
-                # --- 3P ---
-                "etd_doc_completa_pago_procurador": 3,
-                "etd_estado_preparacion_demanda": 3,
-                "etd_estado_demanda_presentada": 3,
-                "etd_estado_declarado_concurso": 3,
-                "etd_estado_epi_solicitado": 3,
-                "etd_estado_epi_concedido": 3,
-                "etd_estado_epi_comunicado": 3,
-                "etd_estado_bajas_ficheros": 3,
-                "etd_rec_citas_tel": 3,
-                "etd_pago_por_vencer": 3,
-                "etd_pago_fecha_acordada": 3,
-                # --- 4P ---
-                "etd_recaptura_post_entrevista": 4,
-                "etd_doc_seguimiento_envio": 4,
-                "etd_rec_cita_presencial": 4,
-                "etd_pago_varias_cuotas": 4,
-            }
-
-            body_param_count = 0
-            for prefix, count in ETD_TEMPLATE_PARAM_COUNT.items():
-                if name.startswith(prefix):
-                    body_param_count = count
-                    break
-
-            if body_param_count > 0:
-                body_values = ordered_values[:body_param_count]
-                components.append({
-                    "type": "body",
-                    "parameters": [{"type": "text", "text": v} for v in body_values]
-                })
-
-            if name != "etd_resp_comovamio_docspendientes":
-                components.append({
-                    "type": "button",
-                    "sub_type": "url",
-                    "index": 0,
-                    "parameters": [{"type": "text", "text": link_safe}]
-                })
-
+            # ... (tu bloque ETD tal cual) ...
+            pass
         else:
             logger.info(f"[BUILD_TEMPLATE] ❌ NO ETD - lógica version-aware + definición WABA")
 
-            # ---------- 2.a) HEADER auto si la plantilla lo requiere ----------
-            # Si la definición WABA dice HEADER=IMAGE, hay que enviarlo SIEMPRE (o da 132012)
+            # >>>>>>> NUEVO: si la plantilla exige HEADER IMAGE, añadirlo SIEMPRE <<<<<<<
             if header_format == "IMAGE":
                 header_image_link = td.get("header_image_link") or cover_url
                 if header_image_link:
@@ -2770,99 +2704,63 @@ class WhatsAppService:
                 else:
                     logger.warning("[BUILD_TEMPLATE] ⚠️ La plantilla exige HEADER IMAGE pero no hay link disponible")
 
-            # (Si header_format == "TEXT" con placeholders, podrías soportarlo con td['header_params'] aquí)
+            # ---- Plantillas conocidas (versión-aware) ----
+            _is = lambda base: re.match(rf"^{re.escape(base)}(_v\d+)?$", name) is not None
 
-            # ---------- 2.b) Plantillas conocidas (version-aware) ----------
             if _is("agendar_llamada_inicial") or _is("agendar_llamada"):
                 first_name = td.get("first_name") or ""
                 deal_id = td.get("deal_id") or ""
-                components.append({
-                    "type": "body",
-                    "parameters": [{"type": "text", "text": first_name}]
-                })
-                components.append({
-                    "type": "button",
-                    "sub_type": "url",
-                    "index": 0,
-                    "parameters": [{"type": "text", "text": deal_id}]
-                })
+                components.append({"type": "body","parameters": [{"type": "text","text": first_name}]})
+                components.append({"type": "button","sub_type": "url","index": 0,
+                                "parameters": [{"type": "text","text": deal_id}]})
 
             elif _is("recordatorio_llamada_agendada"):
                 first_name = td.get("first_name") or ""
                 slot_text = td.get("slot_text") or "próximamente"
-                components.append({
-                    "type": "body",
-                    "parameters": [
-                        {"type": "text", "text": first_name},
-                        {"type": "text", "text": slot_text}
-                    ]
-                })
+                components.append({"type": "body","parameters": [
+                    {"type": "text","text": first_name},{"type": "text","text": slot_text}
+                ]})
 
             elif _is("retomar_contacto"):
                 first_name = td.get("first_name") or ""
                 responsible_name = td.get("responsible_name") or ""
-                components.append({
-                    "type": "body",
-                    "parameters": [
-                        {"type": "text", "text": first_name},
-                        {"type": "text", "text": responsible_name}
-                    ]
-                })
+                components.append({"type": "body","parameters": [
+                    {"type": "text","text": first_name},{"type": "text","text": responsible_name}
+                ]})
 
             elif _is("nuevo_numero"):
+                # 📌 Esta te está fallando: según el error, tiene HEADER IMAGE definido en WABA.
+                # Con el bloque de arriba (header_format == "IMAGE") ya añadimos el header.
                 first_name = td.get("first_name") or ""
                 new_phone = td.get("new_phone") or PhoneUtils.strip_34(to_e164)
-                components.append({
-                    "type": "body",
-                    "parameters": [
-                        {"type": "text", "text": first_name},
-                        {"type": "text", "text": new_phone}
-                    ]
-                })
+                components.append({"type": "body","parameters": [
+                    {"type": "text","text": first_name},{"type": "text","text": new_phone}
+                ]})
 
             elif _is("baja_comercial"):
                 first_name = td.get("first_name") or ""
-                components.append({
-                    "type": "body",
-                    "parameters": [{"type": "text", "text": first_name}]
-                })
+                components.append({"type": "body","parameters": [{"type": "text","text": first_name}]})
 
             elif _is("contacto_recordatorio_pago"):
-                # Si su BODY es fijo sin placeholders, no añadimos body.parameters
-
-                # OJO: si su definición WABA también exige HEADER IMAGE, arriba ya lo añadimos.
+                # BODY fijo sin placeholders; no ponemos body.parameters
                 pass
 
             else:
-                # ---------- 2.c) Genérico (conservador) ----------
+                # Genérico (conservador)
                 body_params = td.get("body_params") or []
-                # Si conocemos body_placeholder_count, recortamos para no romper:
                 if body_text_def is not None and body_placeholder_count > 0:
                     body_params = body_params[:body_placeholder_count]
-
                 if body_params:
-                    components.append({
-                        "type": "body",
-                        "parameters": [{"type": "text", "text": str(x)} for x in body_params]
-                    })
-
+                    components.append({"type": "body","parameters": [{"type": "text","text": str(x)} for x in body_params]})
                 buttons = td.get("buttons") or []
                 for i, btn in enumerate(buttons):
                     btype = (btn.get("type") or "").lower()
                     if btype == "url":
-                        components.append({
-                            "type": "button",
-                            "sub_type": "url",
-                            "index": int(btn.get("index", i)),
-                            "parameters": [{"type": "text", "text": str(btn.get("text_param", ""))}]
-                        })
-                    elif btype in ("quick_reply", "quickreply", "quick-reply"):
-                        components.append({
-                            "type": "button",
-                            "sub_type": "quick_reply",
-                            "index": int(btn.get("index", i)),
-                            "parameters": [{"type": "payload", "payload": str(btn.get("payload", ""))}]
-                        })
+                        components.append({"type": "button","sub_type": "url","index": int(btn.get("index", i)),
+                                        "parameters": [{"type": "text","text": str(btn.get("text_param", ""))}]})
+                    elif btype in ("quick_reply","quickreply","quick-reply"):
+                        components.append({"type": "button","sub_type": "quick_reply","index": int(btn.get("index", i)),
+                                        "parameters": [{"type": "payload","payload": str(btn.get("payload", ""))}]})
 
         logger.info(f"[BUILD_TEMPLATE] Components finales: {components}")
         logger.info(f"[BUILD_TEMPLATE] ===== FIN BUILD TEMPLATE =====")
@@ -2871,14 +2769,12 @@ class WhatsAppService:
             "messaging_product": "whatsapp",
             "to": to_e164,
             "type": "template",
-            "template": {
-                "name": name,
-                "language": {"code": lang},
-                "components": components
-            }
+            "template": {"name": name, "language": {"code": lang}, "components": components}
         }
         logger.info(f"[BUILD_TEMPLATE] PAYLOAD FINAL: {payload}")
         return payload
+
+
 
 class AutoReplyService:
     """Auto-reply service for office hours management"""
