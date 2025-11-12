@@ -6311,6 +6311,8 @@ import re
 
 import re
 
+import re
+
 def pretty_print_template_name(name: str) -> str:
     """
     Reglas:
@@ -6347,7 +6349,6 @@ def pretty_print_template_name(name: str) -> str:
 
     # Capitalizar solo primera letra (resto tal cual)
     return pretty[0].upper() + pretty[1:]
-
 
 
 @app.route('/get_templates', methods=['GET'])
