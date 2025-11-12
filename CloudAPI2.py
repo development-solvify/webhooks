@@ -6353,6 +6353,18 @@ def pretty_print_template_name(name: str) -> str:
     # Capitalizar solo la primera letra (resto tal cual)
     return pretty[0].upper() + pretty[1:]
 
+
+UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
+
+def _sanitize_arg(value: str | None) -> str | None:
+    if value is None:
+        return None
+    v = str(value).strip()
+    return None if v == "" or v.lower() in ("undefined", "null", "none") else v
+
+def _is_valid_uuid(value: str | None) -> bool:
+    return bool(value) and UUID_RE.match(value) is not None
+
 @app.route('/get_templates', methods=['GET'])
 def get_templates():
     try:
@@ -6364,7 +6376,7 @@ def get_templates():
         # Aceptar optional query params ?id=<uuid>&phone=<phone>
         lead_info = None
         query_phone = request.args.get('phone')
-        query_id = request.args.get('company_id') or request.args.get('id')
+        query_id = _sanitize_arg(request.args.get("company_id") or request.args.get("id"))
 
         logger.info(f"📊 Usando PHONE NUMBER: {query_phone}...")
         logger.info(f"📊 Usando COMPANY_ID: {query_id}")
