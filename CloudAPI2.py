@@ -3285,7 +3285,7 @@ class MessageService:
             lead = self.lead_service.get_lead_data_by_phone(sender, company_id=company_id)
 
             print(lead)
-            print("company_id en save_incoming_message------------------------------------------------------------------>:", company_id)
+            print("company_id en save_incoming_message ------>:", company_id)
             # IMPORTANTE: Obtener deal_id ANTES de usarlo
             deal_id = lead.get('deal_id') if lead else None
 
@@ -3508,6 +3508,78 @@ class MessageService:
             # 3) Timestamp
             last_message_ts = now_madrid_naive()
 
+            # 3bis) Construir CONTENIDO legible del mensaje (sin helpers externos)
+            # Intentamos localizar los components del template (Meta API estándar)
+            tpl = (payload.get("template") or (payload.get("template_payload") or {}).get("template") or {}) or {}
+            components = tpl.get("components") or []
+
+            # Título legible si existe pretty_print_template_name; si no, usamos el name tal cual
+            title = template_name
+            try:
+                title = pretty_print_template_name(template_name) or template_name
+            except Exception:
+                pass
+
+            parts = []
+            for c in components:
+                ctype = (c.get("type") or "").lower()
+                params = c.get("parameters") or []
+
+                if ctype == "body":
+                    vals = []
+                    for i, p in enumerate(params):
+                        v = ""
+                        if isinstance(p, dict):
+                            # Casos comunes: text / currency/date_time con fallback_value / payload
+                            if p.get("type") == "text":
+                                v = p.get("text") or ""
+                            else:
+                                v = (
+                                    p.get("text") or
+                                    (p.get("currency") or {}).get("fallback_value") or
+                                    (p.get("date_time") or {}).get("fallback_value") or
+                                    p.get("payload") or
+                                    ""
+                                )
+                        else:
+                            v = str(p)
+
+                        # Etiquetas cómodas para plantillas ETD (si aplican)
+                        if template_name.startswith("etd_"):
+                            labels = ["Cliente", "Comercial", "Oficina", "Link", "Fecha", "Texto"]
+                            if i < len(labels):
+                                vals.append(f"{labels[i]}: {v}")
+                            else:
+                                vals.append(str(v))
+                        else:
+                            vals.append(str(v))
+
+                    if vals:
+                        parts.append(" | ".join(vals))
+
+                elif ctype == "button":
+                    sub = (c.get("sub_type") or "").lower()
+                    idx = c.get("index")
+                    if sub == "url":
+                        url_param = ""
+                        for p in params:
+                            if isinstance(p, dict):
+                                url_param = p.get("text") or p.get("payload") or ""
+                                if url_param:
+                                    break
+                        parts.append(f"[Botón {idx} URL: {url_param}]")
+                    elif sub == "quick_reply":
+                        qr = ""
+                        for p in params:
+                            if isinstance(p, dict):
+                                qr = p.get("payload") or p.get("text") or ""
+                                if qr:
+                                    break
+                        parts.append(f"[Botón {idx} Quick Reply: {qr}]")
+
+            content = " | ".join([p for p in parts if p])
+            message_text = f"{title}: {content}" if content else (title or template_name or "TEMPLATE")
+
             # 4) Resolver asignaciones/lead
             assigned_to_id = None
             responsible_email = ""
@@ -3539,14 +3611,7 @@ class MessageService:
             if not chat_url:
                 chat_url = sender or ""
 
-            # 5) Cuerpo a guardar: si tienes el payload de template, lo guardamos como JSON
-            body_json = json.dumps({
-                "type": "template",
-                "template_name": template_name,
-                "payload": payload
-            }, ensure_ascii=False)
-
-            # 6) Insert con status template_sent y from_me='true'
+            # 5) Insert con status template_sent y from_me='true'
             insert_sql = """
                 INSERT INTO public.external_messages (
                     id, message, sender_phone, responsible_email,
@@ -3563,7 +3628,7 @@ class MessageService:
             """
             params = [
                 str(uuid4()),
-                body_json,
+                message_text,              # <-- ahora guardamos el CONTENIDO legible
                 (sender or ""),
                 (responsible_email or ""),
                 wamid,
@@ -3581,6 +3646,7 @@ class MessageService:
         except Exception:
             logging.exception("Failed to save template message")
             return False
+    
 
     def save_media_message(
         self,
