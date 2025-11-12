@@ -100,17 +100,20 @@ def log_request_debug():
 # -----------------------------------------------------------------------------
 # CORS
 # -----------------------------------------------------------------------------
-@app.after_request
-def add_cors_headers(response):
+@app.route("/click_to_call", methods=["OPTIONS"])
+def click_to_call_options():
+    log_request_debug()
     origin = request.headers.get("Origin")
+    resp = jsonify({})
     if is_origin_allowed(origin):
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Vary"] = "Origin"
-        response.headers["Access-Control-Allow-Headers"] = (
-            "Content-Type,Authorization,X-Internal-Token"
-        )
-        response.headers["Access-Control-Allow-Methods"] = "POST,OPTIONS"
-    return response
+        resp.headers["Access-Control-Allow-Origin"]  = origin
+        resp.headers["Vary"]                         = "Origin"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization,X-Internal-Token"
+        resp.headers["Access-Control-Allow-Methods"] = "POST,OPTIONS"
+        resp.headers["Access-Control-Max-Age"]       = "86400"
+        return resp, 204
+    # Origen no permitido
+    return resp, 403
 
 
 @app.route("/click_to_call", methods=["OPTIONS"])
