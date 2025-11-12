@@ -88,14 +88,13 @@ def log_request_debug():
     logger.info(f"   raw_body={raw_body}")
 
 
-# -----------------------------------------------------------------------------
-# CORS
-# -----------------------------------------------------------------------------
-@app.route("/click_to_call", methods=["POST", "OPTIONS"])
-def click_to_call():
+@app.route("/click_to_call", methods=["POST", "OPTIONS"], endpoint="click_to_call_handler")
+def click_to_call_handler():
     if request.method == "OPTIONS":
-        origin = request.headers.get("Origin")
+        # Preflight CORS
+        log_request_debug()
         resp = jsonify({})
+        origin = request.headers.get("Origin")
         if is_origin_allowed(origin):
             resp.headers["Access-Control-Allow-Origin"]  = origin
             resp.headers["Vary"]                         = "Origin"
@@ -104,6 +103,39 @@ def click_to_call():
             resp.headers["Access-Control-Max-Age"]       = "86400"
             return resp, 204
         return resp, 403
+
+    # ---- POST real ----
+    log_request_debug()
+    data = request.get_json(silent=True) or request.form.to_dict() or request.args.to_dict() or {}
+    phone = str(data.get("phone") or "").strip()
+    extension = str(data.get("extension") or "").strip()
+    if not phone or not extension:
+        return jsonify({"error": "phone and extension are required"}), 400
+    if not VPBX_API_KEY:
+        return jsonify({"error": "server misconfigured"}), 500
+
+    url = f"{VPBX_BASE_URL}/c2cexternal/{phone}/*{extension}"
+    headers = {"X-Api-Key": VPBX_API_KEY, "Accept": "application/json"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=VPBX_TIMEOUT)
+    except requests.exceptions.ReadTimeout:
+        return jsonify({"ok": False, "error": "vpbx_timeout", "message": f"VPBX no respondió en {VPBX_TIMEOUT} segundos"}), 504
+    except requests.RequestException as e:
+        return jsonify({"ok": False, "error": "vpbx_request_failed", "message": "Error en la llamada a VPBX", "details": str(e)}), 502
+
+    try:
+        body = resp.json()
+    except ValueError:
+        body = {"raw": resp.text}
+
+    vars_ = (body or {}).get("variables") or {}
+    return jsonify({
+        "ok": bool((body or {}).get("success")),
+        "status_code": resp.status_code,
+        "vpbx_response": body,
+        "cause": vars_.get("cause"),
+        "call_id": vars_.get("callId"),
+    }), resp.status_code
 
 # -----------------------------------------------------------------------------
 # Healthcheck
