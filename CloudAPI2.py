@@ -6331,8 +6331,8 @@ def pretty_print_template_name(name: str) -> str:
     original = name.strip()
     lower = original.lower()
 
-    # Ocultar templates de test concretos
-    if "z_test_3" in lower:
+    HIDDEN_TEMPLATES = ("z_test_3", "hello_world")
+    if any(h in lower for h in HIDDEN_TEMPLATES):
         return ""
 
     # Quitar prefijo 'etd_'
