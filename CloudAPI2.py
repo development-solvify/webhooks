@@ -2641,6 +2641,7 @@ class WhatsAppService:
         logger.info(f"[BUILD_TEMPLATE] ===== INICIO BUILD TEMPLATE =====")
         logger.info(f"[BUILD_TEMPLATE] template_name input: '{template_name}' | name (stripped): '{name}'")
         logger.info(f"[BUILD_TEMPLATE] company_id: {company_id}")
+        logger.info(f"[BUILD_TEMPLATE] company name: {td.get('company_name')}")             
         logger.info(f"[BUILD_TEMPLATE] to_phone: {to_phone} → to_e164: {to_e164}")
 
         is_etd_company = bool(company_id) and str(company_id) in ETD_COMPANY_IDS
