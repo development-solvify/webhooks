@@ -3379,7 +3379,6 @@ class MessageService:
         company_id: str | None = None
     ) -> bool:
         """Registra un mensaje saliente (from_me=true), aislado por tenant si se conoce."""
-        print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAe ------>:", text)
         sender_clean = PhoneUtils.strip_34(str(phone))
         print("\n" + "="*80)
         print("📨 MENSAJE SALIENTE ENVIADO")
