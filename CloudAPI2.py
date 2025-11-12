@@ -2651,6 +2651,8 @@ class WhatsAppService:
         # El caller ya sabe con qué WABA envía (lo logeas justo antes de llamar). Pásalos en template_data.
 
         creds = get_whatsapp_credentials_for_company(company_id)
+        print("TENANT CREDS:----------------------------------------------------------------------------------------------------->", creds)
+
         access_token = creds.get("access_token")
         pnid  = creds.get("phone_number_id")
         waba_id  = creds.get("waba_id")        
