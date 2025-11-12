@@ -15,7 +15,7 @@ import requests
 # Config (con defaults si no hay entorno)
 # ---------------------------------------------------------------------------
 VPBX_API_KEY = os.environ.get("VPBX_API_KEY") or "JxrjJ7I5oE20g64ua3XQ0Hocv7YlBbMd"
-VPBX_BASE_URL = os.environ.get("VPBX_BASE_URL") or "https://vpbx.me/api"
+VPBX_BASE_URL = "https://vpbx.me/api/originatecall"
 VPBX_TIMEOUT = int(os.environ.get("VPBX_TIMEOUT", "20"))  # segundos
 
 ALLOWED_ORIGINS_RAW = os.environ.get(
@@ -116,7 +116,7 @@ def log_request_debug(request_id: str):
 
 def call_vpbx(phone: str, extension: str, request_id: str):
     """Hace la llamada GET a VPBX y devuelve (status_code, resp_text, parsed_json_or_none)."""
-    url = f"{VPBX_BASE_URL}/c2cexternal/{phone}/*{extension}"
+    url = f"{VPBX_BASE_URL}/{extension}/{phone}?timeout={VPBX_TIMEOUT}"
     headers = {"X-Api-Key": VPBX_API_KEY, "Accept": "application/json"}
     logger.info(f"➡️ [{request_id}] Llamando a VPBX url={url} headers_keys={list(headers.keys())} timeout={VPBX_TIMEOUT}")
 
