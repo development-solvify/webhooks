@@ -3380,6 +3380,21 @@ class MessageService:
     ) -> bool:
         """Registra un mensaje saliente (from_me=true), aislado por tenant si se conoce."""
         print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAe ------>:", text)
+        sender_clean = PhoneUtils.strip_34(str(phone))
+        print("\n" + "="*80)
+        print("📨 MENSAJE QUE RECIBIRÁ EL CLIENTE")
+        print("="*80)
+        print(f"📱 Teléfono:           {sender_clean}")
+        print(f"📦 Message ID (WAMID): {wamid}")
+        print(f"👤 Responsible Email:  {responsible_email or 'N/A'}")
+        print(f"🏢 Company ID:         {company_id}")
+        print("-"*80)
+        print("📝 CONTENIDO DEL MENSAJE:")
+        print("-"*80)
+        print(text)
+        print("-"*80)
+        print("="*80 + "\n")
+     
         try:
             sender = PhoneUtils.strip_34(str(phone))
             last_message_ts = now_madrid_naive()
