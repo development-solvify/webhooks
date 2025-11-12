@@ -37,6 +37,24 @@ CLICK2CALL_ASYNC = os.environ.get("CLICK2CALL_ASYNC", "false").lower() in ("1", 
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
 
+from flask import request
+
+@app.after_request
+def add_cors_headers(resp):
+    try:
+        origin = request.headers.get("Origin")
+        if is_origin_allowed(origin):
+            # CORS para respuesta real (POST) y también demás rutas
+            resp.headers["Access-Control-Allow-Origin"]  = origin
+            resp.headers["Vary"]                         = "Origin"
+            resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization,X-Internal-Token"
+            resp.headers["Access-Control-Allow-Methods"] = "POST,OPTIONS"
+    except Exception:
+        # no rompas la respuesta por CORS
+        pass
+    return resp
+
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
