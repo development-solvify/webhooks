@@ -3379,6 +3379,7 @@ class MessageService:
         company_id: str | None = None
     ) -> bool:
         """Registra un mensaje saliente (from_me=true), aislado por tenant si se conoce."""
+        print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAe ------>:", text)
         try:
             sender = PhoneUtils.strip_34(str(phone))
             last_message_ts = now_madrid_naive()
