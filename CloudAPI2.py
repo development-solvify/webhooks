@@ -2655,7 +2655,7 @@ class WhatsAppService:
 
         access_token = creds.get("access_token")
         pnid  = creds.get("phone_number_id")
-        waba_id  = creds.get("waba_id")        
+        waba_id  = creds.get("business_id")        
         if not waba_id or not access_token:
             logger.warning("[BUILD_TEMPLATE] ⚠️ waba_id/access_token no definidos en template_data; usando DEFAULT (puede fallar)")
         else:
