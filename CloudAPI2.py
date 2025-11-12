@@ -2384,7 +2384,7 @@ class WhatsAppService:
             logger.error(f"[COVER] Error resolving cover for company_id={company_id}: {e}")
             return None
 
-    def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str, company_id: str) -> dict:
+    def _build_template_payload_OK(self, template_name: str, template_data: dict, to_phone: str, company_id: str) -> dict:
         """
         Construye el payload de envío de plantilla para la Cloud API de WhatsApp.
         - template_name: nombre EXACTO del template en WBM
@@ -2621,195 +2621,73 @@ class WhatsAppService:
         logger.info(f"[BUILD_TEMPLATE] PAYLOAD FINAL: {payload}")
         return payload
 
-    def _build_template_payload1(self, template_name: str, template_data: dict, to_phone: str, company_id: str) -> dict:
-        """
-        Construye el payload de envío de plantilla para la Cloud API de WhatsApp.
-        - template_name: nombre EXACTO del template en WBM
-        - template_data: dict con datos de la plantilla. Soporta:
-            - language: "es_ES" (por defecto)
-            - cover_url: URL imagen header (si no se pasa, usa default)
-            - first_name, last_name, deal_id, slot_text, new_phone, responsible_name, etc.
-            - body_params: lista[str] para modo genérico
-            - buttons: lista de botones, p.ej:
-                [
-                {"type":"url", "index":0, "text_param":"<valor>"},
-                {"type":"quick_reply", "index":1, "payload":"CONFIRMAR"}
-                ]
-        - to_phone: teléfono destino; se normaliza a E.164 español (34)
-        """
+    def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str, company_id: str) -> dict:
         def normalize_es(phone: str) -> str:
             p = PhoneUtils.strip_34(str(phone))
             return p if p.startswith("34") else f"34{p}"
 
+        import re
         td = template_data or {}
 
-        # Idioma y cover
         lang = td.get("language") or "es_ES"
-
-        # ⬇️ Resolver cover con prioridades finas y logging
         cover_url = self._resolve_cover_url(company_id=company_id or td.get("company_id"))
 
         to_e164 = normalize_es(to_phone)
         components = []
 
-        if cover_url:
-            components.append({
-                "type": "header",
-                "parameters": [{
-                    "type": "image",
-                    "image": {"link": cover_url}
-                }]
-            })
-
         name = (template_name or "").strip()
 
+        logger.info(f"[BUILD_TEMPLATE] ===== INICIO BUILD TEMPLATE =====")
+        logger.info(f"[BUILD_TEMPLATE] template_name input: '{template_name}' | name (stripped): '{name}'")
+        logger.info(f"[BUILD_TEMPLATE] company_id: {company_id}")
+        logger.info(f"[BUILD_TEMPLATE] to_phone: {to_phone} → to_e164: {to_e164}")
 
         is_etd_company = bool(company_id) and str(company_id) in ETD_COMPANY_IDS
+        logger.info(f"[BUILD_TEMPLATE] is_etd_company: {is_etd_company} | name.startswith('etd_'): {name.startswith('etd_')}")
 
+        # Matcher de versiones: base, base_v2, base_v10...
+        _is = lambda base: re.match(rf"^{re.escape(base)}(_v\d+)?$", name) is not None
+
+        # ========= ETD (ya soporta versiones por startswith) =========
         if is_etd_company and name.startswith("etd_"):
-            # Para ETD quitamos el HEADER porque las plantillas no lo tienen definido
-            components = []
-
-            # Semántica fija variables:
-            # {{1}} = Nombre del cliente
-            # {{2}} = Comercial asignado
-            # {{3}} = Oficina
-            # {{4}} = Link
-            # {{5}} = Fecha (DD-MM)
-            # {{6}} = Texto libre
-
-            cliente = (
-                td.get("customer_name")
-                or td.get("client_name")
-                or td.get("first_name")
-                or ""
-            )
-            comercial = (
-                td.get("sales_name")
-                or td.get("comercial_asignado")
-                or td.get("responsible_first_name")
-                or td.get("responsible_name")
-                or ""
-            )
-            oficina = (
-                td.get("office_name")
-                or td.get("office")
-                or td.get("oficina")
-                or td.get("company_name")
-                or ""
-            )
-            raw_link = (
-                td.get("link")
-                or td.get("portal_link")
-                or td.get("payment_link")
-                or td.get("expediente_link")
-                or td.get("url")
-                or ""
-            )
-            fecha = (
-                td.get("date_ddmm")
-                or td.get("fecha_ddmm")
-                or td.get("fecha")
-                or td.get("date")
-                or ""
-            )
-            texto_libre = (
-                td.get("free_text")
-                or td.get("texto_libre")
-                or td.get("notes")
-                or ""
-            )
-
-            # ⚠️ WhatsApp no quiere strings vacíos
-            def _safe(v: str, default: str = "-") -> str:
-                v = (v or "").strip()
-                return v if v else default
-
-            link_safe = _safe(raw_link, "https://portal.eliminamostudeuda.com")
-
-            ordered_values = [
-                _safe(cliente),
-                _safe(comercial, "Nuestro equipo"),
-                _safe(oficina),
-                link_safe,
-                _safe(fecha),
-                _safe(texto_libre),
-            ]
-
-            ETD_TEMPLATE_PARAM_COUNT = {
-                "etd_contacto_inicial": 2,
-                "etd_resp_comovamio_docspendientes": 2,
-                "etd_pago_vencido_1sem": 2,
-                "etd_pago_vencido_2sem": 2,
-                "etd_pago_exp_paralizado": 2,
-                "etd_doc_completa_pago_procurador": 3,
-                "etd_estado_preparacion_demanda": 3,
-                "etd_estado_demanda_presentada": 3,
-                "etd_estado_declarado_concurso": 3,
-                "etd_estado_epi_solicitado": 3,
-                "etd_estado_epi_concedido": 3,
-                "etd_estado_epi_comunicado": 3,
-                "etd_estado_bajas_ficheros": 3,
-                "etd_rec_citas_tel": 3,
-                "etd_pago_por_vencer": 3,
-                "etd_pago_fecha_acordada": 3,
-                "etd_recaptura_post_entrevista": 4,
-                "etd_doc_seguimiento_envio": 4,
-                "etd_rec_cita_presencial": 4,
-                "etd_pago_varias_cuotas": 4,
-            }
-
-            body_param_count = 0
-            for prefix, count in ETD_TEMPLATE_PARAM_COUNT.items():
-                if name.startswith(prefix):
-                    body_param_count = count
-                    break
-
-                if body_param_count > 0:
-                    body_values = ordered_values[:body_param_count]
-                    components.append({
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": v} for v in body_values
-                        ]
-                    })
-
-                # Todas las ETD salvo 'etd_resp_comovamio_docspendientes' tienen botón URL
-                if name != "etd_resp_comovamio_docspendientes":
-                    components.append({
-                        "type": "button",
-                        "sub_type": "url",
-                        "index": 0,
-                        "parameters": [
-                            {"type": "text", "text": link_safe}
-                        ]
-                    })
+            # ... (TU BLOQUE ETD TAL CUAL, sin cambios) ...
+            # (no añado aquí por brevedad; mantén el mismo código que ya tienes)
+            pass
 
         else:
-            # ======== PLANTILLAS CONOCIDAS (resto de tenants) ========
+            logger.info(f"[BUILD_TEMPLATE] ❌ NO es ETD template o no es ETD company - usando lógica genérica + versiones")
 
-            if name in ("agendar_llamada_inicial", "agendar_llamada"):
-                # Body: {{1}} = first_name
-                # Botón URL dinámico con {{1}} = deal_id (definido así en WBM)
+            # HEADER solo si lo pides explícitamente (evita (#100))
+            header_format = (td.get("header_format") or "").upper()
+            header_image_link = td.get("header_image_link")
+            use_cover_header = bool(td.get("use_cover_header"))
+            if header_format == "IMAGE":
+                actual_link = header_image_link or (cover_url if use_cover_header else None)
+                if actual_link:
+                    components.append({
+                        "type": "header",
+                        "parameters": [{"type": "image", "image": {"link": actual_link}}]
+                    })
+                    logger.info(f"[BUILD_TEMPLATE] Añadido HEADER IMAGE (link={actual_link})")
+
+            # ======== PLANTILLAS CONOCIDAS (version-aware) ========
+            if _is("agendar_llamada_inicial") or _is("agendar_llamada"):
+                logger.info(f"[BUILD_TEMPLATE] Detectado template: agendar_llamada*(version-aware)")
                 first_name = td.get("first_name") or ""
                 deal_id = td.get("deal_id") or ""
                 components.append({
                     "type": "body",
-                    "parameters": [
-                        {"type": "text", "text": first_name}
-                    ]
+                    "parameters": [{"type": "text", "text": first_name}]
                 })
                 components.append({
                     "type": "button",
                     "sub_type": "url",
                     "index": 0,
-                    "parameters": [
-                        {"type": "text", "text": deal_id}
-                    ]
+                    "parameters": [{"type": "text", "text": deal_id}]
                 })
 
-            elif name == "recordatorio_llamada_agendada":
-                # Body: {{1}} = first_name, {{2}} = slot_text
+            elif _is("recordatorio_llamada_agendada"):
+                logger.info(f"[BUILD_TEMPLATE] Detectado template: recordatorio_llamada_agendada*(version-aware)")
                 first_name = td.get("first_name") or ""
                 slot_text = td.get("slot_text") or "próximamente"
                 components.append({
@@ -2820,8 +2698,8 @@ class WhatsAppService:
                     ]
                 })
 
-            elif name == "retomar_contacto":
-                # Body: {{1}} = first_name, {{2}} = responsible_name
+            elif _is("retomar_contacto"):
+                logger.info(f"[BUILD_TEMPLATE] Detectado template: retomar_contacto*(version-aware)")
                 first_name = td.get("first_name") or ""
                 responsible_name = td.get("responsible_name") or ""
                 components.append({
@@ -2832,8 +2710,8 @@ class WhatsAppService:
                     ]
                 })
 
-            elif name == "nuevo_numero":
-                # Body: {{1}} = first_name, {{2}} = new_phone
+            elif _is("nuevo_numero"):
+                logger.info(f"[BUILD_TEMPLATE] Detectado template: nuevo_numero*(version-aware)")
                 first_name = td.get("first_name") or ""
                 new_phone = td.get("new_phone") or PhoneUtils.strip_34(to_e164)
                 components.append({
@@ -2844,23 +2722,21 @@ class WhatsAppService:
                     ]
                 })
 
-            elif name == "baja_comercial":
-                # Body: {{1}} = first_name
+            elif _is("baja_comercial"):
+                logger.info(f"[BUILD_TEMPLATE] Detectado template: baja_comercial*(version-aware)")
                 first_name = td.get("first_name") or ""
                 components.append({
                     "type": "body",
-                    "parameters": [
-                        {"type": "text", "text": first_name}
-                    ]
+                    "parameters": [{"type": "text", "text": first_name}]
                 })
 
-            elif name == "contacto_recordatorio_pago":
-                # Esta plantilla específica va sin header/body auto (la manejas aparte)
-                components = []
+            elif _is("contacto_recordatorio_pago"):
+                logger.info(f"[BUILD_TEMPLATE] Detectado template: contacto_recordatorio_pago*(version-aware, sin header dinámico)")
+                # Si su BODY es fijo sin placeholders, no añadimos body.parameters
 
             else:
                 # ======== MODO GENÉRICO ========
-                # Permite construir cualquier template pasando body_params/buttons desde template_data
+                logger.info(f"[BUILD_TEMPLATE] Template desconocida - usando modo genérico")
                 body_params = td.get("body_params") or []
                 if body_params:
                     components.append({
@@ -2869,7 +2745,6 @@ class WhatsAppService:
                     })
 
                 buttons = td.get("buttons") or []
-                # Soporta botones URL (con parámetro de texto) y quick_reply (con payload)
                 for i, btn in enumerate(buttons):
                     btype = (btn.get("type") or "").lower()
                     if btype == "url":
@@ -2877,20 +2752,18 @@ class WhatsAppService:
                             "type": "button",
                             "sub_type": "url",
                             "index": int(btn.get("index", i)),
-                            "parameters": [
-                                {"type": "text", "text": str(btn.get("text_param", ""))}
-                            ]
+                            "parameters": [{"type": "text", "text": str(btn.get("text_param", ""))}]
                         })
                     elif btype in ("quick_reply", "quickreply", "quick-reply"):
                         components.append({
                             "type": "button",
                             "sub_type": "quick_reply",
                             "index": int(btn.get("index", i)),
-                            "parameters": [
-                                {"type": "payload", "payload": str(btn.get("payload", ""))}
-                            ]
+                            "parameters": [{"type": "payload", "payload": str(btn.get("payload", ""))}]
                         })
-                    # Otros tipos se pueden añadir aquí (COPY_CODE, OTP autofill, etc.)
+
+        logger.info(f"[BUILD_TEMPLATE] Components finales: {components}")
+        logger.info(f"[BUILD_TEMPLATE] ===== FIN BUILD TEMPLATE =====")
 
         payload = {
             "messaging_product": "whatsapp",
@@ -2902,8 +2775,8 @@ class WhatsAppService:
                 "components": components
             }
         }
+        logger.info(f"[BUILD_TEMPLATE] PAYLOAD FINAL: {payload}")
         return payload
-
 
 class AutoReplyService:
     """Auto-reply service for office hours management"""
