@@ -2692,11 +2692,11 @@ class WhatsAppService:
         else:
             # ======== PLANTILLAS CONOCIDAS (resto de tenants) ========
             logger.info(f"[BUILD_TEMPLATE] ===== PLANTILLAS CONOCIDAS (resto de tenants) =====")
-            if name in ("agendar_llamada_inicial", "agendar_llamada"):
+            if name in ( "agendar_llamada_inicial","agendar_llamada" ):
                 # Body: {{1}} = first_name
                 # Botón URL dinámico con {{1}} = deal_id (definido así en WBM)
-                first_name = td.get("first_name") or ""
-                deal_id = td.get("deal_id") or ""
+                first_name = (template_data or {}).get("first_name") or ""
+                deal_id = (template_data or {}).get("deal_id") or ""
                 components.append({
                     "type": "body",
                     "parameters": [
@@ -2711,6 +2711,7 @@ class WhatsAppService:
                         {"type": "text", "text": deal_id}
                     ]
                 })
+
 
             elif name == "recordatorio_llamada_agendada":
                 # Body: {{1}} = first_name, {{2}} = slot_text
