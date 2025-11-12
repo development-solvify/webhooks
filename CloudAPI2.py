@@ -3579,7 +3579,7 @@ class MessageService:
                 "raw": payload
             }
             message_text = json.dumps(message_json, ensure_ascii=False)
-
+            print("Message JSON to save XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX:", message_text)
             # 6) Resolver asignaciones/lead
             assigned_to_id = None
             responsible_email = ""
