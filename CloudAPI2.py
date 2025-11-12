@@ -3513,6 +3513,7 @@ class MessageService:
                 payload.get("rendered_text")
                 or (payload.get("template_payload") or {}).get("rendered_text")
             )
+            print("Rendered text from payload--------------------------------->:", rendered_text)
 
             # 4.2 Si no hay rendered_text, intentamos reconstruirlo desde components
             if not (isinstance(rendered_text, str) and rendered_text.strip()):
