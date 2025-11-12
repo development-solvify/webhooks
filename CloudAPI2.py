@@ -2622,20 +2622,25 @@ class WhatsAppService:
         return payload
 
     def _build_template_payload(self, template_name: str, template_data: dict, to_phone: str, company_id: str) -> dict:
+        """
+        Construye el payload de envío de plantilla para la Cloud API de WhatsApp.
+        Auto-detecta si la plantilla requiere HEADER (p.ej. IMAGE) y lo añade para evitar 132012.
+        """
+        import re
+        try:
+            import requests
+        except Exception:
+            requests = None  # fallback defensivo
+
         def normalize_es(phone: str) -> str:
             p = PhoneUtils.strip_34(str(phone))
             return p if p.startswith("34") else f"34{p}"
 
-        import re
         td = template_data or {}
-
-        lang = td.get("language") or "es_ES"
-        cover_url = self._resolve_cover_url(company_id=company_id or td.get("company_id"))
-
-        to_e164 = normalize_es(to_phone)
-        components = []
-
         name = (template_name or "").strip()
+        lang = td.get("language") or "es_ES"
+        to_e164 = normalize_es(to_phone)
+        cover_url = self._resolve_cover_url(company_id=company_id or td.get("company_id"))
 
         logger.info(f"[BUILD_TEMPLATE] ===== INICIO BUILD TEMPLATE =====")
         logger.info(f"[BUILD_TEMPLATE] template_name input: '{template_name}' | name (stripped): '{name}'")
@@ -2645,34 +2650,130 @@ class WhatsAppService:
         is_etd_company = bool(company_id) and str(company_id) in ETD_COMPANY_IDS
         logger.info(f"[BUILD_TEMPLATE] is_etd_company: {is_etd_company} | name.startswith('etd_'): {name.startswith('etd_')}")
 
-        # Matcher de versiones: base, base_v2, base_v10...
+        # ---------- 1) Leer definición real de la plantilla en WABA (para saber si HEADER es obligatorio) ----------
+        header_format = None         # "IMAGE" | "TEXT" | "VIDEO" | "DOCUMENT" | None
+        body_text_def = None
+        body_placeholder_count = 0
+        try:
+            if requests and 'WABA_ID' in globals() and 'ACCESS_TOKEN' in globals() and WABA_ID and ACCESS_TOKEN:
+                resp = requests.get(
+                    f"https://graph.facebook.com/v22.0/{WABA_ID}/message_templates",
+                    headers={"Authorization": f"Bearer {ACCESS_TOKEN}"},
+                    params={"fields": "name,language,components,status", "limit": 200},
+                    timeout=10
+                )
+                if resp.status_code == 200:
+                    data = resp.json() or {}
+                    for t in (data.get("data") or []):
+                        if t.get("name") == name and t.get("language") == lang:
+                            for c in (t.get("components") or []):
+                                ctype = (c.get("type") or "").upper()
+                                if ctype == "HEADER":
+                                    header_format = (c.get("format") or "").upper()  # IMAGE/TEXT/VIDEO/DOCUMENT
+                                elif ctype == "BODY":
+                                    body_text_def = c.get("text") or ""
+                                    body_placeholder_count = len(re.findall(r"\{\{\s*\d+\s*\}\}", body_text_def))
+                            break
+                logger.info(f"[BUILD_TEMPLATE] Definición WABA → header_format={header_format} | body_placeholders={body_placeholder_count}")
+        except Exception:
+            logger.warning("[BUILD_TEMPLATE] ⚠️ No se pudo leer definición WABA; seguimos en modo defensivo")
+
+        # Pequeño helper para versiones: base, base_v2, base_v10...
         _is = lambda base: re.match(rf"^{re.escape(base)}(_v\d+)?$", name) is not None
 
-        # ========= ETD (ya soporta versiones por startswith) =========
+        components = []
+
+        # ---------- 2) ETD (sin header) ----------
         if is_etd_company and name.startswith("etd_"):
-            # ... (TU BLOQUE ETD TAL CUAL, sin cambios) ...
-            # (no añado aquí por brevedad; mantén el mismo código que ya tienes)
-            pass
+            logger.info(f"[BUILD_TEMPLATE] ✅ Entrando en bloque ETD (sin HEADER)")
+
+            def _safe(v: str, default: str = "-") -> str:
+                v = (v or "").strip()
+                return v if v else default
+
+            cliente = (td.get("customer_name") or td.get("client_name") or td.get("first_name") or "")
+            comercial = (td.get("sales_name") or td.get("comercial_asignado") or td.get("responsible_first_name") or td.get("responsible_name") or "")
+            oficina = (td.get("office_name") or td.get("office") or td.get("oficina") or td.get("company_name") or "")
+            raw_link = (td.get("link") or td.get("portal_link") or td.get("payment_link") or td.get("expediente_link") or td.get("url") or "")
+            fecha = (td.get("date_ddmm") or td.get("fecha_ddmm") or td.get("fecha") or td.get("date") or "")
+            texto_libre = (td.get("free_text") or td.get("texto_libre") or td.get("notes") or "")
+
+            link_safe = _safe(raw_link, "https://portal.eliminamostudeuda.com")
+            ordered_values = [
+                _safe(cliente),
+                _safe(comercial, "Nuestro equipo"),
+                _safe(oficina),
+                link_safe,
+                _safe(fecha),
+                _safe(texto_libre),
+            ]
+
+            ETD_TEMPLATE_PARAM_COUNT = {
+                "etd_contacto_inicial": 2,
+                "etd_resp_comovamio_docspendientes": 2,
+                "etd_pago_vencido_1sem": 2,
+                "etd_pago_vencido_2sem": 2,
+                "etd_pago_exp_paralizado": 2,
+                # --- 3P ---
+                "etd_doc_completa_pago_procurador": 3,
+                "etd_estado_preparacion_demanda": 3,
+                "etd_estado_demanda_presentada": 3,
+                "etd_estado_declarado_concurso": 3,
+                "etd_estado_epi_solicitado": 3,
+                "etd_estado_epi_concedido": 3,
+                "etd_estado_epi_comunicado": 3,
+                "etd_estado_bajas_ficheros": 3,
+                "etd_rec_citas_tel": 3,
+                "etd_pago_por_vencer": 3,
+                "etd_pago_fecha_acordada": 3,
+                # --- 4P ---
+                "etd_recaptura_post_entrevista": 4,
+                "etd_doc_seguimiento_envio": 4,
+                "etd_rec_cita_presencial": 4,
+                "etd_pago_varias_cuotas": 4,
+            }
+
+            body_param_count = 0
+            for prefix, count in ETD_TEMPLATE_PARAM_COUNT.items():
+                if name.startswith(prefix):
+                    body_param_count = count
+                    break
+
+            if body_param_count > 0:
+                body_values = ordered_values[:body_param_count]
+                components.append({
+                    "type": "body",
+                    "parameters": [{"type": "text", "text": v} for v in body_values]
+                })
+
+            if name != "etd_resp_comovamio_docspendientes":
+                components.append({
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": 0,
+                    "parameters": [{"type": "text", "text": link_safe}]
+                })
 
         else:
-            logger.info(f"[BUILD_TEMPLATE] ❌ NO es ETD template o no es ETD company - usando lógica genérica + versiones")
+            logger.info(f"[BUILD_TEMPLATE] ❌ NO ETD - lógica version-aware + definición WABA")
 
-            # HEADER solo si lo pides explícitamente (evita (#100))
-            header_format = (td.get("header_format") or "").upper()
-            header_image_link = td.get("header_image_link")
-            use_cover_header = bool(td.get("use_cover_header"))
+            # ---------- 2.a) HEADER auto si la plantilla lo requiere ----------
+            # Si la definición WABA dice HEADER=IMAGE, hay que enviarlo SIEMPRE (o da 132012)
             if header_format == "IMAGE":
-                actual_link = header_image_link or (cover_url if use_cover_header else None)
-                if actual_link:
+                header_image_link = td.get("header_image_link") or cover_url
+                if header_image_link:
                     components.append({
                         "type": "header",
-                        "parameters": [{"type": "image", "image": {"link": actual_link}}]
+                        "parameters": [{"type": "image", "image": {"link": header_image_link}}]
                     })
-                    logger.info(f"[BUILD_TEMPLATE] Añadido HEADER IMAGE (link={actual_link})")
+                    logger.info(f"[BUILD_TEMPLATE] Añadido HEADER IMAGE auto (link={header_image_link})")
+                else:
+                    logger.warning("[BUILD_TEMPLATE] ⚠️ La plantilla exige HEADER IMAGE pero no hay link disponible")
 
-            # ======== PLANTILLAS CONOCIDAS (version-aware) ========
+            # (Si header_format == "TEXT" con placeholders, podrías soportarlo con td['header_params'] aquí)
+
+            # ---------- 2.b) Plantillas conocidas (version-aware) ----------
             if _is("agendar_llamada_inicial") or _is("agendar_llamada"):
-                logger.info(f"[BUILD_TEMPLATE] Detectado template: agendar_llamada*(version-aware)")
                 first_name = td.get("first_name") or ""
                 deal_id = td.get("deal_id") or ""
                 components.append({
@@ -2687,7 +2788,6 @@ class WhatsAppService:
                 })
 
             elif _is("recordatorio_llamada_agendada"):
-                logger.info(f"[BUILD_TEMPLATE] Detectado template: recordatorio_llamada_agendada*(version-aware)")
                 first_name = td.get("first_name") or ""
                 slot_text = td.get("slot_text") or "próximamente"
                 components.append({
@@ -2699,7 +2799,6 @@ class WhatsAppService:
                 })
 
             elif _is("retomar_contacto"):
-                logger.info(f"[BUILD_TEMPLATE] Detectado template: retomar_contacto*(version-aware)")
                 first_name = td.get("first_name") or ""
                 responsible_name = td.get("responsible_name") or ""
                 components.append({
@@ -2711,7 +2810,6 @@ class WhatsAppService:
                 })
 
             elif _is("nuevo_numero"):
-                logger.info(f"[BUILD_TEMPLATE] Detectado template: nuevo_numero*(version-aware)")
                 first_name = td.get("first_name") or ""
                 new_phone = td.get("new_phone") or PhoneUtils.strip_34(to_e164)
                 components.append({
@@ -2723,7 +2821,6 @@ class WhatsAppService:
                 })
 
             elif _is("baja_comercial"):
-                logger.info(f"[BUILD_TEMPLATE] Detectado template: baja_comercial*(version-aware)")
                 first_name = td.get("first_name") or ""
                 components.append({
                     "type": "body",
@@ -2731,13 +2828,18 @@ class WhatsAppService:
                 })
 
             elif _is("contacto_recordatorio_pago"):
-                logger.info(f"[BUILD_TEMPLATE] Detectado template: contacto_recordatorio_pago*(version-aware, sin header dinámico)")
                 # Si su BODY es fijo sin placeholders, no añadimos body.parameters
 
+                # OJO: si su definición WABA también exige HEADER IMAGE, arriba ya lo añadimos.
+                pass
+
             else:
-                # ======== MODO GENÉRICO ========
-                logger.info(f"[BUILD_TEMPLATE] Template desconocida - usando modo genérico")
+                # ---------- 2.c) Genérico (conservador) ----------
                 body_params = td.get("body_params") or []
+                # Si conocemos body_placeholder_count, recortamos para no romper:
+                if body_text_def is not None and body_placeholder_count > 0:
+                    body_params = body_params[:body_placeholder_count]
+
                 if body_params:
                     components.append({
                         "type": "body",
