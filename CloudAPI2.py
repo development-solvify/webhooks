@@ -2661,6 +2661,7 @@ class WhatsAppService:
         body_placeholder_count = 0
         try:
             if requests and waba_id and access_token:
+                
                 resp = requests.get(
                     f"https://graph.facebook.com/v22.0/{waba_id}/message_templates",
                     headers={"Authorization": f"Bearer {access_token}"},
@@ -2712,6 +2713,8 @@ class WhatsAppService:
             if name in ( "agendar_llamada_inicial","agendar_llamada" ):
                 # Body: {{1}} = first_name
                 # Botón URL dinámico con {{1}} = deal_id (definido así en WBM)
+                logger.info(f"[DEBUG] waba_id={waba_id} access_token={access_token[:10]}... template_name={template_data.get('template_name')}")
+
                 first_name = (template_data or {}).get("first_name") or ""
                 deal_id = (template_data or {}).get("deal_id") or ""
                 components.append({
