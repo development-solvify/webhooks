@@ -3572,6 +3572,194 @@ class MessageService:
             except Exception as e:
                 print(f"\n⚠️ Error printing template: {e}\n")
 
+    def save_template_message(
+        self,
+        payload: dict,
+        wamid: str | None,
+        company_id: str | None = None
+    ) -> bool:
+        """
+        Registra un mensaje saliente de tipo TEMPLATE (from_me=true) con status 'template_sent'.
+        Imprime en consola el contenido exacto y guarda en external_messages.message un JSON:
+        { "type":"template", "template_name":..., "to":..., "wamid":..., "text":..., "raw": {...} }
+        """
+        try:
+            # 1) Resolver teléfono (en posibles rutas del payload)
+            phone = (
+                payload.get("phone")
+                or payload.get("to")
+                or (payload.get("template_payload") or {}).get("to")
+                or ""
+            )
+            sender = PhoneUtils.strip_34(str(phone)) if phone else None
+
+            # 2) Template name
+            template_name = (
+                payload.get("template_name")
+                or (payload.get("template_data") or {}).get("template_name")
+                or (payload.get("template") or {}).get("name")
+                or ""
+            )
+
+            # 3) Timestamp
+            last_message_ts = now_madrid_naive()
+
+            # 4) Renderizar **texto final** (lo que verá el cliente)
+            # 4.1 Preferimos el rendered_text si el builder ya lo trae
+            rendered_text = (
+                payload.get("rendered_text")
+                or (payload.get("template_payload") or {}).get("rendered_text")
+            )
+
+            # 4.2 Si no, intentar reconstruir desde body_text + parámetros y añadir botón/footers
+            if not (isinstance(rendered_text, str) and rendered_text.strip()):
+                tpl = (payload.get("template") or (payload.get("template_payload") or {}).get("template") or {}) or {}
+                components = tpl.get("components") or []
+
+                # Parámetros del BODY y botón URL (si existe)
+                body_params, url_param = [], None
+                for c in components:
+                    ctype = (c.get("type") or "").lower()
+                    params = c.get("parameters") or []
+                    if ctype == "body":
+                        for p in params:
+                            if isinstance(p, dict):
+                                if p.get("type") == "text":
+                                    body_params.append(p.get("text") or "")
+                                else:
+                                    body_params.append(
+                                        p.get("text") or
+                                        (p.get("currency") or {}).get("fallback_value") or
+                                        (p.get("date_time") or {}).get("fallback_value") or
+                                        p.get("payload") or
+                                        ""
+                                    )
+                            else:
+                                body_params.append(str(p))
+                    elif ctype == "button" and (c.get("sub_type") or "").lower() == "url":
+                        for p in params:
+                            if isinstance(p, dict):
+                                url_param = p.get("text") or p.get("payload") or url_param
+
+                # body_text/footers opcionales en el payload
+                td = (payload.get("template_data") or {})
+                body_text = (payload.get("body_text") or td.get("body_text") or "").strip()
+                footer_text = (payload.get("footer_text") or td.get("footer_text") or "").strip()
+
+                # Si tenemos body_text con placeholders {{n}}, sustituirlos con body_params
+                if body_text:
+                    rendered = body_text
+                    for i, val in enumerate(body_params, start=1):
+                        rendered = rendered.replace("{{%d}}" % i, str(val))
+                    lines = [rendered]
+                else:
+                    # Fallback simple: mostrar parámetros en líneas separadas (no es "exacto",
+                    # pero da visibilidad si el builder no aporta body_text/rendered_text).
+                    lines = [p for p in body_params if p]
+
+                # Añadir enlace si existe
+                if url_param:
+                    lines.append("")
+                    if url_param.endswith("."):
+                        lines.append(f"Puedes realizar el pago en el siguiente enlace: {url_param}")
+                    else:
+                        lines.append(f"Puedes realizar el pago en el siguiente enlace: {url_param}.")
+
+                # Añadir footer si existe
+                if footer_text:
+                    lines.append("")
+                    lines.append(footer_text)
+
+                rendered_text = "\n".join([l for l in lines if l]).strip()
+
+            # 5) PREVIEW en consola: exactamente lo que verá el cliente
+            print("\n" + "="*80)
+            print("📨 MENSAJE DE PLANTILLA (PREVIEW CLIENTE)")
+            print("="*80)
+            print(f"📱 Teléfono:           {sender or 'N/A'}")
+            print(f"📦 Message ID (WAMID): {wamid or 'N/A'}")
+            print(f"🏢 Company ID:         {company_id or 'N/A'}")
+            print(f"🧩 Template:           {template_name or 'N/A'}")
+            print("-"*80)
+            print("📝 CONTENIDO QUE RECIBE EL CLIENTE:")
+            print("-"*80)
+            print(rendered_text or "")
+            print("-"*80)
+            print("="*80 + "\n")
+
+            # 6) JSON a guardar en external_messages.message
+            message_json = {
+                "type": "template",
+                "template_name": template_name,
+                "to": sender,
+                "wamid": wamid,
+                "text": rendered_text,  # <-- TEXTO FINAL
+                "raw": payload
+            }
+            message_text = json.dumps(message_json, ensure_ascii=False)
+
+            # 7) Resolver asignaciones/lead
+            assigned_to_id = None
+            responsible_email = ""
+            lead = None
+            if sender:
+                try:
+                    assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
+                except Exception:
+                    logging.exception("Failed to get lead assigned info for sender=%s", sender)
+                try:
+                    lead = self.lead_service.get_lead_data_by_phone(sender, company_id=company_id)
+                except Exception:
+                    logging.exception("Failed to get lead data for sender=%s", sender)
+
+            chat_id = None
+            chat_url = None
+            if lead:
+                chat_id = lead.get("deal_id") or sender
+                chat_url = sender
+                if not company_id:
+                    company_id = lead.get("company_id")
+
+            if not chat_id:
+                chat_id = sender or str(uuid4())
+            if not chat_url:
+                chat_url = sender or ""
+
+            # 8) INSERT idempotente
+            insert_sql = """
+                INSERT INTO public.external_messages (
+                    id, message, sender_phone, responsible_email,
+                    last_message_uid, last_message_timestamp,
+                    from_me, status, created_at, updated_at, is_deleted,
+                    chat_id, chat_url, assigned_to_id, company_id
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s,
+                    %s, %s, NOW(), NOW(), FALSE,
+                    %s, %s, %s, %s
+                )
+                ON CONFLICT (last_message_uid) DO NOTHING
+            """
+            params = [
+                str(uuid4()),
+                message_text,
+                (sender or ""),
+                (responsible_email or ""),
+                wamid,
+                last_message_ts,
+                'true',
+                'template_sent',
+                chat_id,
+                chat_url,
+                assigned_to_id,
+                company_id
+            ]
+            self.db_manager.execute_query(insert_sql, params)
+            return True
+
+        except Exception:
+            logging.exception("Failed to save template message")
+            return False
 
 
     def save_template_message1(
@@ -3750,7 +3938,7 @@ class MessageService:
             return False
 
 
-    def save_template_message(
+    def save_template_message2(
         self,
         payload: dict,
         wamid: str | None,
