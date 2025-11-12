@@ -91,38 +91,19 @@ def log_request_debug():
 # -----------------------------------------------------------------------------
 # CORS
 # -----------------------------------------------------------------------------
-@app.route("/click_to_call", methods=["OPTIONS"])
-def click_to_call_options():
-    log_request_debug()
-    origin = request.headers.get("Origin")
-    resp = jsonify({})
-    if is_origin_allowed(origin):
-        resp.headers["Access-Control-Allow-Origin"]  = origin
-        resp.headers["Vary"]                         = "Origin"
-        resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization,X-Internal-Token"
-        resp.headers["Access-Control-Allow-Methods"] = "POST,OPTIONS"
-        resp.headers["Access-Control-Max-Age"]       = "86400"
-        return resp, 204
-    # Origen no permitido
-    return resp, 403
-
-
-@app.route("/click_to_call", methods=["OPTIONS"])
-def click_to_call_options():
-    # Preflight CORS
-    log_request_debug()
-    resp = jsonify({})
-    origin = request.headers.get("Origin")
-    if is_origin_allowed(origin):
-        resp.headers["Access-Control-Allow-Origin"] = origin
-        resp.headers["Vary"] = "Origin"
-        resp.headers["Access-Control-Allow-Headers"] = (
-            "Content-Type,Authorization,X-Internal-Token"
-        )
-        resp.headers["Access-Control-Allow-Methods"] = "POST,OPTIONS"
-    logger.info("✅ Respuesta OPTIONS /click_to_call enviada")
-    return resp, 200
-
+@app.route("/click_to_call", methods=["POST", "OPTIONS"])
+def click_to_call():
+    if request.method == "OPTIONS":
+        origin = request.headers.get("Origin")
+        resp = jsonify({})
+        if is_origin_allowed(origin):
+            resp.headers["Access-Control-Allow-Origin"]  = origin
+            resp.headers["Vary"]                         = "Origin"
+            resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization,X-Internal-Token"
+            resp.headers["Access-Control-Allow-Methods"] = "POST,OPTIONS"
+            resp.headers["Access-Control-Max-Age"]       = "86400"
+            return resp, 204
+        return resp, 403
 
 # -----------------------------------------------------------------------------
 # Healthcheck
