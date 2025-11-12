@@ -6313,13 +6313,16 @@ import re
 
 import re
 
+import re
+
 def pretty_print_template_name(name: str) -> str:
     """
     Reglas:
       - Si contiene 'z_test_3' -> ocultar (devuelve "").
       - Si empieza por 'etd_' -> quitar ese prefijo.
-      - Quitar TODO lo que vaya desde '_v' hasta el final (ej: _v2, _v10_test, _v3_borrador...).
-      - Reemplazar '_' por espacios.
+      - Quitar TODO desde '_v' seguido de dígitos hasta el final (ej: _v2, _v10_test...).
+        * Si tras '_v' NO hay dígito (p.ej. '_verano'), no se recorta.
+      - Reemplazar '_' por espacios y colapsar espacios.
       - Solo capitalizar la primera letra del resultado.
     """
     if not name:
@@ -6334,22 +6337,21 @@ def pretty_print_template_name(name: str) -> str:
 
     # Quitar prefijo 'etd_'
     if lower.startswith("etd_"):
-        original = original[4:]  # len("etd_") = 4
+        original = original[4:]
 
-    # Quitar todo desde '_v...' (tolerante: con o sin números, cualquier sufijo)
-    # Coincide con: _v, _v2, _v10_test, _v3_borrador, etc.
-    original = re.sub(r"(?i)_v\d?.*$", "", original)
+    # Quitar sufijo de versión SOLO si es _v + dígitos (case-insensitive)
+    # Coincide: _v1, _v2, _v10, _v3_borrador, etc.
+    # No coincide: _verano, _valpha, etc.
+    original = re.sub(r"(?i)_v\d.*$", "", original)
 
-    # Normalizar separadores: '_' -> ' ', colapsar espacios múltiples
-    pretty = original.replace("_", " ")
-    pretty = re.sub(r"\s+", " ", pretty).strip()
+    # Reemplazar '_' por espacios y normalizar múltiples espacios
+    pretty = re.sub(r"\s+", " ", original.replace("_", " ")).strip()
 
     if not pretty:
         return ""
 
-    # Capitalizar solo primera letra (resto tal cual)
+    # Capitalizar solo la primera letra (resto tal cual)
     return pretty[0].upper() + pretty[1:]
-
 
 @app.route('/get_templates', methods=['GET'])
 def get_templates():
