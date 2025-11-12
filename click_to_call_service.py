@@ -28,16 +28,7 @@ LOG_FILE = os.environ.get(
 # Flask app
 # -----------------------------------------------------------------------------
 app = Flask(__name__)
-CORS(
-    app,
-    resources={
-        r"/click_to_call": {
-            "origins": ALLOWED_ORIGINS,
-            "methods": ["POST", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization", "X-Internal-Token"],
-        }
-    },
-)
+
 # -----------------------------------------------------------------------------
 # Logging
 # -----------------------------------------------------------------------------
