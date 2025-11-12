@@ -6309,6 +6309,8 @@ def get_whatsapp_credentials_for_company(company_id: str) -> dict:
 import re
 
 
+import re
+
 def pretty_print_template_name(name: str) -> str:
     """
     Reglas:
@@ -6332,19 +6334,18 @@ def pretty_print_template_name(name: str) -> str:
     if lower.startswith("etd_"):
         original = original[4:]  # len("etd_") = 4
 
-    # Quitar todo desde '_v...' hasta el final (case-insensitive)
-    # Ejemplos:
-    #   'contacto_inicial_v2' -> 'contacto_inicial'
-    #   'contacto_inicial_v2_test' -> 'contacto_inicial'
-    original = re.sub(r"_v.*$", "", original, flags=re.IGNORECASE)
+    # Quitar todo desde '_v...' (tolerante: con o sin números, cualquier sufijo)
+    # Coincide con: _v, _v2, _v10_test, _v3_borrador, etc.
+    original = re.sub(r"(?i)_v\d?.*$", "", original)
 
-    # Reemplazar '_' por espacios
-    pretty = original.replace("_", " ").strip()
+    # Normalizar separadores: '_' -> ' ', colapsar espacios múltiples
+    pretty = original.replace("_", " ")
+    pretty = re.sub(r"\s+", " ", pretty).strip()
 
     if not pretty:
         return ""
 
-    # Capitalizar solo la primera letra
+    # Capitalizar solo primera letra (resto tal cual)
     return pretty[0].upper() + pretty[1:]
 
 
