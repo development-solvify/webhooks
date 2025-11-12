@@ -2691,7 +2691,7 @@ class WhatsAppService:
             pass
         else:
             # ======== PLANTILLAS CONOCIDAS (resto de tenants) ========
-
+            logger.info(f"[BUILD_TEMPLATE] ===== PLANTILLAS CONOCIDAS (resto de tenants) =====")
             if name in ("agendar_llamada_inicial", "agendar_llamada"):
                 # Body: {{1}} = first_name
                 # Botón URL dinámico con {{1}} = deal_id (definido así en WBM)
