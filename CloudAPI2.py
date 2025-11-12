@@ -3493,86 +3493,86 @@ class MessageService:
         logger.info(f"✅ Estado actualizado (fallback) para {wamid}: {curr} → {new_status} (fila con company_id={found_company_id})")
         return True
 
-    def print_template_to_client(payload: dict, company_id: str | None = None):
-        """
-        Imprime exactamente lo que recibirá el cliente en WhatsApp con todos los parámetros reemplazados.
-        """
-        try:
-            phone = (
-                (payload.get("phone")) or
-                (payload.get("to")) or
-                ((payload.get("template_payload") or {}).get("to")) or
-                ""
-            )
-            
-            template_name = (
-                payload.get("template_name")
-                or (payload.get("template_data") or {}).get("template_name")
-                or (payload.get("template") or {}).get("name")
-                or "UNKNOWN"
-            )
-            
-            tpl = (payload.get("template") or (payload.get("template_payload") or {}).get("template") or {}) or {}
-            components = tpl.get("components") or []
-            
-            body_params = []
-            button_url = None
-            
-            for component in components:
-                ctype = (component.get("type") or "").lower()
-                params = component.get("parameters") or []
+    def print_template_to_client(self, payload: dict, company_id: str | None = None):
+            """Imprime exactamente lo que recibirá el cliente en WhatsApp."""
+            try:
+                phone = (
+                    (payload.get("phone")) or
+                    (payload.get("to")) or
+                    ((payload.get("template_payload") or {}).get("to")) or
+                    ""
+                )
                 
-                if ctype == "body":
-                    for param in params:
-                        if isinstance(param, dict):
-                            text = param.get("text") or ""
-                            body_params.append(text)
-                        else:
-                            body_params.append(str(param))
+                template_name = (
+                    payload.get("template_name")
+                    or (payload.get("template_data") or {}).get("template_name")
+                    or (payload.get("template") or {}).get("name")
+                    or "UNKNOWN"
+                )
                 
-                elif ctype == "button" and (component.get("sub_type") or "").lower() == "url":
-                    for param in params:
-                        if isinstance(param, dict):
-                            button_url = param.get("text") or param.get("payload")
-            
-            print("\n" + "="*80)
-            print("📨 TEMPLATE QUE RECIBE EL CLIENTE")
-            print("="*80)
-            print(f"📱 Teléfono:           {phone}")
-            print(f"📝 Template Name:      {template_name}")
-            if company_id:
-                print(f"🏢 Company ID:         {company_id}")
-            
-            if body_params:
+                tpl = (payload.get("template") or (payload.get("template_payload") or {}).get("template") or {}) or {}
+                components = tpl.get("components") or []
+                
+                body_params = []
+                button_url = None
+                
+                for component in components:
+                    ctype = (component.get("type") or "").lower()
+                    params = component.get("parameters") or []
+                    
+                    if ctype == "body":
+                        for param in params:
+                            if isinstance(param, dict):
+                                text = param.get("text") or ""
+                                body_params.append(text)
+                            else:
+                                body_params.append(str(param))
+                    
+                    elif ctype == "button" and (component.get("sub_type") or "").lower() == "url":
+                        for param in params:
+                            if isinstance(param, dict):
+                                button_url = param.get("text") or param.get("payload")
+                
+                print("\n" + "="*80)
+                print("📨 TEMPLATE QUE RECIBE EL CLIENTE")
+                print("="*80)
+                print(f"📱 Teléfono:           {phone}")
+                print(f"📝 Template Name:      {template_name}")
+                if company_id:
+                    print(f"🏢 Company ID:         {company_id}")
+                
+                if body_params:
+                    print("-"*80)
+                    print("🔤 PARÁMETROS QUE SE REEMPLAZAN:")
+                    print("-"*80)
+                    for i, param in enumerate(body_params, 1):
+                        print(f"  {{{{i}}}} = {param}")
+                
+                if button_url:
+                    print("-"*80)
+                    print("🔗 BOTÓN (URL):")
+                    print("-"*80)
+                    print(f"  {button_url}")
+                
+                rendered_text = (
+                    payload.get("rendered_text")
+                    or (payload.get("template_payload") or {}).get("rendered_text")
+                    or payload.get("text")
+                )
+                
+                if rendered_text:
+                    print("-"*80)
+                    print("✅ CLIENTE VERÁ EN WHATSAPP:")
+                    print("-"*80)
+                    print(rendered_text)
+                
                 print("-"*80)
-                print("🔤 PARÁMETROS QUE SE REEMPLAZAN:")
-                print("-"*80)
-                for i, param in enumerate(body_params, 1):
-                    print(f"  {{{{i}}}} = {param}")
-            
-            if button_url:
-                print("-"*80)
-                print("🔗 BOTÓN (URL):")
-                print("-"*80)
-                print(f"  {button_url}")
-            
-            rendered_text = (
-                payload.get("rendered_text")
-                or (payload.get("template_payload") or {}).get("rendered_text")
-                or payload.get("text")
-            )
-            
-            if rendered_text:
-                print("-"*80)
-                print("✅ CLIENTE VERÁ EN WHATSAPP:")
-                print("-"*80)
-                print(rendered_text)
-            
-            print("-"*80)
-            print("="*80 + "\n")
-            
-        except Exception as e:
-            print(f"\n⚠️ Error printing template: {e}\n")
+                print("="*80 + "\n")
+                
+            except Exception as e:
+                print(f"\n⚠️ Error printing template: {e}\n")
+
+
 
     def save_template_message(
         self,
@@ -3584,7 +3584,7 @@ class MessageService:
         Registra un mensaje saliente de tipo TEMPLATE (from_me=true) con status 'template_sent'.
         Guarda en external_messages.message un JSON con el texto final (renderizado).
         """
-        print_template_to_client(payload, company_id)  # ← AGREGAR ESTA LÍNEA
+        self.print_template_to_client(payload, company_id)  # ← AGREGAR ESTA LÍNEA
         
         try:
             # 1) Resolver teléfono
