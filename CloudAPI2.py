@@ -3477,7 +3477,7 @@ class MessageService:
         return True
 
 
-    def save_template_message(
+    def save_template_message1(
         self,
         payload: dict,
         wamid: str | None,
@@ -3583,7 +3583,8 @@ class MessageService:
             logging.exception("Failed to save template message")
             return False
 
-    def save_template_message1(
+
+    def save_template_message(
         self,
         payload: dict,
         wamid: str | None,
@@ -3591,20 +3592,19 @@ class MessageService:
     ) -> bool:
         """
         Registra un mensaje saliente de tipo TEMPLATE (from_me=true) con status 'template_sent'.
-        Se intenta resolver phone y metadatos desde el payload y, si no, por la BBDD.
+        Guarda en external_messages.message un JSON con el texto final (renderizado).
         """
         try:
-            # 1) Resolver teléfono (en distintos posibles lugares del payload)
+            # 1) Resolver teléfono
             phone = (
                 (payload.get("phone")) or
                 (payload.get("to")) or
-                # algunos endpoints usan "template" con "to" en el payload real de envío
                 ((payload.get("template_payload") or {}).get("to")) or
                 ""
             )
             sender = PhoneUtils.strip_34(str(phone)) if phone else None
 
-            # 2) Template name (si viene)
+            # 2) Template name
             template_name = (
                 payload.get("template_name")
                 or (payload.get("template_data") or {}).get("template_name")
@@ -3615,89 +3615,124 @@ class MessageService:
             # 3) Timestamp
             last_message_ts = now_madrid_naive()
 
-            # 3bis) Construir CONTENIDO legible del mensaje (sin helpers externos)
-            # Intentamos localizar los components del template (Meta API estándar)
-            tpl = (payload.get("template") or (payload.get("template_payload") or {}).get("template") or {}) or {}
-            components = tpl.get("components") or []
+            # 4) Renderizar TEXTO FINAL
+            # 4.1 Preferimos un rendered_text que pueda traer tu builder
+            rendered_text = (
+                payload.get("rendered_text")
+                or (payload.get("template_payload") or {}).get("rendered_text")
+            )
 
-            # Título legible si existe pretty_print_template_name; si no, usamos el name tal cual
-            title = template_name
-            try:
-                title = pretty_print_template_name(template_name) or template_name
-            except Exception:
-                pass
+            # 4.2 Si no hay rendered_text, intentamos reconstruirlo desde components
+            if not (isinstance(rendered_text, str) and rendered_text.strip()):
+                tpl = (payload.get("template") or (payload.get("template_payload") or {}).get("template") or {}) or {}
+                components = tpl.get("components") or []
 
-            parts = []
-            for c in components:
-                ctype = (c.get("type") or "").lower()
-                params = c.get("parameters") or []
-
-                if ctype == "body":
-                    vals = []
-                    for i, p in enumerate(params):
-                        v = ""
-                        if isinstance(p, dict):
-                            # Casos comunes: text / currency/date_time con fallback_value / payload
-                            if p.get("type") == "text":
-                                v = p.get("text") or ""
-                            else:
-                                v = (
-                                    p.get("text") or
-                                    (p.get("currency") or {}).get("fallback_value") or
-                                    (p.get("date_time") or {}).get("fallback_value") or
-                                    p.get("payload") or
-                                    ""
-                                )
-                        else:
-                            v = str(p)
-
-                        # Etiquetas cómodas para plantillas ETD (si aplican)
-                        if template_name.startswith("etd_"):
-                            labels = ["Cliente", "Comercial", "Oficina", "Link", "Fecha", "Texto"]
-                            if i < len(labels):
-                                vals.append(f"{labels[i]}: {v}")
-                            else:
-                                vals.append(str(v))
-                        else:
-                            vals.append(str(v))
-
-                    if vals:
-                        parts.append(" | ".join(vals))
-
-                elif ctype == "button":
-                    sub = (c.get("sub_type") or "").lower()
-                    idx = c.get("index")
-                    if sub == "url":
-                        url_param = ""
+                body_vals, url_param = [], None
+                for c in components:
+                    ctype = (c.get("type") or "").lower()
+                    params = c.get("parameters") or []
+                    if ctype == "body":
                         for p in params:
                             if isinstance(p, dict):
-                                url_param = p.get("text") or p.get("payload") or ""
-                                if url_param:
-                                    break
-                        parts.append(f"[Botón {idx} URL: {url_param}]")
-                    elif sub == "quick_reply":
-                        qr = ""
+                                if p.get("type") == "text":
+                                    body_vals.append(p.get("text") or "")
+                                else:
+                                    body_vals.append(
+                                        p.get("text") or
+                                        (p.get("currency") or {}).get("fallback_value") or
+                                        (p.get("date_time") or {}).get("fallback_value") or
+                                        p.get("payload") or
+                                        ""
+                                    )
+                            else:
+                                body_vals.append(str(p))
+                    elif ctype == "button" and (c.get("sub_type") or "").lower() == "url":
                         for p in params:
                             if isinstance(p, dict):
-                                qr = p.get("payload") or p.get("text") or ""
-                                if qr:
-                                    break
-                        parts.append(f"[Botón {idx} Quick Reply: {qr}]")
+                                url_param = p.get("text") or p.get("payload") or url_param
 
-            content = " | ".join([p for p in parts if p])
-            message_text = f"{title}: {content}" if content else (title or template_name or "TEMPLATE")
+                # Heurística ETD: saludo + cuerpo genérico + link + web
+                lines = []
+                # Saludo si tenemos nombre
+                if body_vals:
+                    lines.append(f"Hola {body_vals[0]} 👋")
+                    lines.append("")
 
-            # 4) Resolver asignaciones/lead
+                # Cuerpo:
+                # - si tu builder ya trae 'body_text' en payload/template_data, úsalo
+                body_text = (
+                    payload.get("body_text")
+                    or (payload.get("template_data") or {}).get("body_text")
+                    or ""
+                ).strip()
+
+                if body_text:
+                    lines.append(body_text)
+                else:
+                    # Fallback genérico si la plantilla sugiere cobros/impagos
+                    tn = template_name.lower()
+                    if any(k in tn for k in ["cuota", "pago", "impago", "mora", "deuda"]):
+                        # Si hubiera nº de cuotas en body_vals[1], úsalo; si no, 'varias'
+                        cuotas = (len(body_vals) > 1 and body_vals[1]) or "varias"
+                        # Si hubiera oficina en body_vals[2], úsala
+                        oficina = (len(body_vals) > 2 and body_vals[2]) or ""
+                        if oficina:
+                            lines.append("Llevas incumplidas varias cuotas.")
+                            lines.append("")
+                            lines.append(
+                                f"Te informamos que, hasta el momento, llevas incumplidas {cuotas} cuotas de {oficina} cada una; "
+                                "te agradeceríamos que regularices esta situación a la mayor brevedad posible para evitar la paralización "
+                                "en la gestión de tu expediente y la posterior resolución contractual."
+                            )
+                        else:
+                            lines.append("Llevas incumplidas varias cuotas.")
+                            lines.append("")
+                            lines.append(
+                                f"Te informamos que, hasta el momento, llevas incumplidas {cuotas} cuotas; "
+                                "te agradeceríamos que regularices esta situación a la mayor brevedad posible para evitar la paralización "
+                                "en la gestión de tu expediente y la posterior resolución contractual."
+                            )
+                    else:
+                        # Fallback minimalista si no es de cobros (p. ej. contacto inicial)
+                        lines.append("Nos ponemos en contacto contigo para continuar con tu expediente.")
+
+                # Enlace de pago si lo tenemos
+                if url_param:
+                    lines.append("")
+                    # Añadimos punto final solo si no lo trae
+                    if url_param.endswith("."):
+                        lines.append(f"Puedes realizar el pago en el siguiente enlace: {url_param}")
+                    else:
+                        lines.append(f"Puedes realizar el pago en el siguiente enlace: {url_param}.")
+
+                # Web corporativa ETD (si no la duplica el body_text)
+                if "eliminamostudeuda.com" not in "\n".join(lines):
+                    lines.append("")
+                    lines.append("www.eliminamostudeuda.com")
+
+                rendered_text = "\n".join(lines).strip()
+
+            # 5) JSON a guardar en external_messages.message
+            message_json = {
+                "type": "template",
+                "template_name": template_name,
+                "to": sender,
+                "wamid": wamid,
+                "text": rendered_text,   # <--- TEXTO FINAL, con saltos de línea y emoji
+                "raw": payload
+            }
+            message_text = json.dumps(message_json, ensure_ascii=False)
+
+            # 6) Resolver asignaciones/lead
             assigned_to_id = None
             responsible_email = ""
             lead = None
-            print("Sender for template save--------------------------------------------------------------------->:", sender,  company_id)
+            print("Sender for template save--------------------------------------------------------------------->:", sender, company_id)
             if sender:
                 try:
                     assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
                 except Exception:
                     logging.exception("Failed to get lead assigned info for sender=%s", sender)
-
                 try:
                     lead = self.lead_service.get_lead_data_by_phone(sender, company_id=company_id)
                 except Exception:
@@ -3706,10 +3741,8 @@ class MessageService:
             chat_id = None
             chat_url = None
             if lead:
-                # Si tienes deal_id como chat_id, úsalo; si no, fallback al teléfono
                 chat_id = lead.get("deal_id") or sender
                 chat_url = sender
-                # company_id efectivo
                 if not company_id:
                     company_id = lead.get("company_id")
 
@@ -3718,7 +3751,7 @@ class MessageService:
             if not chat_url:
                 chat_url = sender or ""
 
-            # 5) Insert con status template_sent y from_me='true'
+            # 7) Insert
             insert_sql = """
                 INSERT INTO public.external_messages (
                     id, message, sender_phone, responsible_email,
@@ -3735,7 +3768,7 @@ class MessageService:
             """
             params = [
                 str(uuid4()),
-                message_text,              # <-- ahora guardamos el CONTENIDO legible
+                message_text,   # <-- se guarda JSON con "text"
                 (sender or ""),
                 (responsible_email or ""),
                 wamid,
@@ -3753,7 +3786,7 @@ class MessageService:
         except Exception:
             logging.exception("Failed to save template message")
             return False
-    
+
 
     def save_media_message(
         self,
