@@ -2669,6 +2669,7 @@ class WhatsAppService:
                 )
                 if resp.status_code == 200:
                     data = resp.json() or {}
+                    print(data,"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX_---------------------------------------------------------")
                     for t in (data.get("data") or []):
                         if t.get("name") == name and t.get("language") == lang:
                             for c in (t.get("components") or []):
