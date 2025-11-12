@@ -2683,7 +2683,23 @@ class WhatsAppService:
         except Exception:
             logger.warning("[BUILD_TEMPLATE] ⚠️ No se pudo leer definición WABA; seguimos defensivo")
 
+        # ---------- Añadir header IMAGE si la plantilla lo requiere ----------
         components = []
+        try:
+            if header_format == "IMAGE":
+                cover_url = f"https://app.solvify.es/cover-whats.jpg"
+                components.append({
+                    "type": "header",
+                    "parameters": [
+                        {
+                            "type": "image",
+                            "image": {"link": cover_url}
+                        }
+                    ]
+                })
+                logger.info(f"[BUILD_TEMPLATE] 📷 Añadido header IMAGE con link={cover_url}")
+        except Exception as e:
+            logger.warning(f"[BUILD_TEMPLATE] ⚠️ No se pudo añadir header IMAGE: {e}")
 
         # ---------- ETD (sin header) ----------
         if is_etd_company and name.startswith("etd_"):
