@@ -2612,7 +2612,19 @@ class WhatsAppService:
         else:
             # ======== PLANTILLAS CONOCIDAS (resto de tenants) ========
             logger.info(f"[BUILD_TEMPLATE] ===== PLANTILLAS CONOCIDAS (resto de tenants) =====")
-            if name in ( "agendar_llamada_inicial","agendar_llamada" ):
+            # 2) agendar_llamada → SOLO body (botón URL estático en WABA, sin parámetros)
+            if name == "agendar_llamada":
+                logger.info("[BUILD_TEMPLATE] Detectado template: agendar_llamada")
+                first_name = td.get("first_name") or ""
+
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name}
+                    ]
+                })
+            
+            elif name in ( "agendar_llamada_inicial","agendar_llamada" ):
                 # Body: {{1}} = first_name
                 # Botón URL dinámico con {{1}} = deal_id (definido así en WBM)
                 logger.info(f"[DEBUG] waba_id={waba_id} access_token={access_token[:10]}... template_name={template_data.get('template_name')}")
