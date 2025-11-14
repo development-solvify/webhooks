@@ -2873,7 +2873,7 @@ class WhatsAppService:
                 deal_id = td.get("deal_id") or ""
                 
                 # Override del language para este template específico
-                lang = "en_EN"
+                lang = "en_US"
                 
                 components.append({
                     "type": "body",
