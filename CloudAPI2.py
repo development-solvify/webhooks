@@ -6621,10 +6621,12 @@ import re
 
 import re
 
+import re
+
 def pretty_print_template_name(name: str) -> str:
     """
     Reglas:
-      - Si contiene 'z_test_3' -> ocultar (devuelve "").
+      - Ocultar ciertas plantillas por nombre base (incluyendo todas sus versiones _vN).
       - Si empieza por 'etd_' -> quitar ese prefijo.
       - Quitar TODO desde '_v' seguido de dígitos hasta el final (ej: _v2, _v10_test...).
         * Si tras '_v' NO hay dígito (p.ej. '_verano'), no se recorta.
@@ -6637,28 +6639,39 @@ def pretty_print_template_name(name: str) -> str:
     original = name.strip()
     lower = original.lower()
 
-    HIDDEN_TEMPLATES = ("z_test_3", "hello_world")
-    if any(h in lower for h in HIDDEN_TEMPLATES):
+    # 1) Normalizar un "base_name" SIN sufijo de versión para decidir ocultar
+    base_lower = re.sub(r"(?i)_v\d.*$", "", lower)  # ej: etd_rec_cita_presencial_v2 -> etd_rec_cita_presencial
+
+    # 2) Lista de nombres base que deben ocultarse SIEMPRE (todas sus versiones)
+    HIDDEN_BASES = {
+        "z_test_3",
+        "hello_world",
+        "etd_rec_cita_presencial",
+        "etd_pago_exp_paralizado",
+        "etd_pago_varias_cuotas",
+        "etd_pago_vencido_2sem",
+        "etd_pago_vencido_1sem",
+        "etd_rec_citas_tel",
+    }
+
+    if base_lower in HIDDEN_BASES:
         return ""
 
-    # Quitar prefijo 'etd_'
-    if lower.startswith("etd_"):
-        original = original[4:]
+    # 3) Quitar prefijo 'etd_' SOLO para mostrar (si quieres que no se vea)
+    if base_lower.startswith("etd_"):
+        original = original[4:]  # quitamos los primeros 4 chars de la versión "original"
 
-    # Quitar sufijo de versión SOLO si es _v + dígitos (case-insensitive)
-    # Coincide: _v1, _v2, _v10, _v3_borrador, etc.
-    # No coincide: _verano, _valpha, etc.
+    # 4) Quitar sufijo de versión en la parte visible
     original = re.sub(r"(?i)_v\d.*$", "", original)
 
-    # Reemplazar '_' por espacios y normalizar múltiples espacios
+    # 5) Reemplazar '_' por espacios y normalizar espacios
     pretty = re.sub(r"\s+", " ", original.replace("_", " ")).strip()
 
     if not pretty:
         return ""
 
-    # Capitalizar solo la primera letra (resto tal cual)
+    # 6) Capitalizar solo la primera letra
     return pretty[0].upper() + pretty[1:]
-
 
 UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
 
