@@ -4515,7 +4515,8 @@ def get_next_call_task_for_lead(lead_id: str):
        AND at.annotation_type = 'Llamada programada'
        AND at.is_deleted = false
        AND d.lead_id = %s
-       AND at.due_date BETWEEN %s AND %s
+       AND at.due_date >= NOW()
+       AND at.due_date < NOW() + INTERVAL '3 days'
      ORDER BY at.due_date ASC
      LIMIT 1
     """
