@@ -2753,7 +2753,7 @@ class WhatsAppService:
                     })
         logger.info(f"[BUILD_TEMPLATE] Components finales: {components}")
         logger.info(f"[BUILD_TEMPLATE] ===== FIN BUILD TEMPLATE =====")
-
+        lang = "es_ES"
         payload = {
             "messaging_product": "whatsapp",
             "to": to_e164,
