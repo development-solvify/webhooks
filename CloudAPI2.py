@@ -2470,7 +2470,6 @@ class WhatsAppService:
                 logger.info(f"[BUILD_TEMPLATE] 📷 Añadido header IMAGE con link={cover_url}")
         except Exception as e:
             logger.warning(f"[BUILD_TEMPLATE] ⚠️ No se pudo añadir header IMAGE: {e}")
-
         # ---------- ETD (sin header) ----------
         if is_etd_company and name.startswith("etd_"):
             logger.info(f"[BUILD_TEMPLATE] ✅ Entrando en bloque ETD")
@@ -2522,7 +2521,10 @@ class WhatsAppService:
                 or ""
             )
 
-            logger.info(f"[BUILD_TEMPLATE] Valores resueltos: cliente='{cliente}' | comercial='{comercial}' | oficina='{oficina}'")
+            logger.info(
+                f"[BUILD_TEMPLATE] Valores resueltos: "
+                f"cliente='{cliente}' | comercial='{comercial}' | oficina='{oficina}' | fecha='{fecha}'"
+            )
 
             # ⚠️ WhatsApp no quiere strings vacíos
             def _safe(v: str, default: str = "-") -> str:
@@ -2532,12 +2534,12 @@ class WhatsAppService:
             link_safe = _safe(raw_link, "https://portal.eliminamostudeuda.com")
 
             ordered_values = [
-                _safe(cliente),
-                _safe(comercial, "Nuestro equipo"),
-                _safe(oficina),
-                link_safe,
-                _safe(fecha),
-                _safe(texto_libre),
+                _safe(cliente),                    # 0
+                _safe(comercial, "Nuestro equipo"),# 1
+                _safe(oficina),                    # 2
+                link_safe,                         # 3
+                _safe(fecha),                      # 4
+                _safe(texto_libre),                # 5
             ]
             logger.info(f"[BUILD_TEMPLATE] ordered_values (después _safe): {ordered_values}")
 
@@ -2576,17 +2578,43 @@ class WhatsAppService:
                 if name.startswith(prefix):
                     body_param_count = count
                     matched_prefix = prefix
-                    logger.info(f"[BUILD_TEMPLATE] ✅ COINCIDENCIA ENCONTRADA: prefix='{prefix}' → body_param_count={count}")
+                    logger.info(
+                        f"[BUILD_TEMPLATE] ✅ COINCIDENCIA ENCONTRADA: "
+                        f"prefix='{prefix}' → body_param_count={count}"
+                    )
                     break
             
             if matched_prefix is None:
-                logger.warning(f"[BUILD_TEMPLATE] ⚠️ NO COINCIDIÓ CON NINGÚN PREFIJO - body_param_count={body_param_count}")
+                logger.warning(
+                    f"[BUILD_TEMPLATE] ⚠️ NO COINCIDIÓ CON NINGÚN PREFIJO - body_param_count={body_param_count}"
+                )
 
             logger.info(f"[BUILD_TEMPLATE] body_param_count final: {body_param_count}")
 
             if body_param_count > 0:
-                body_values = ordered_values[:body_param_count]
-                logger.info(f"[BUILD_TEMPLATE] Agregando BODY component con {body_param_count} parámetros: {body_values}")
+                # 🔧 CASO ESPECIAL: etd_rec_cita_presencial
+                if name.startswith("etd_rec_cita_presencial"):
+                    body_values = [
+                        _safe(cliente),  # {{1}}
+                        _safe(oficina),  # {{2}}
+                        _safe(fecha),    # {{3}}
+                        link_safe,       # {{4}}
+                    ]
+                    logger.info(
+                        "[BUILD_TEMPLATE] (etd_rec_cita_presencial) body_values="
+                        f"{body_values}"
+                    )
+                else:
+                    # Comportamiento genérico anterior
+                    body_values = ordered_values[:body_param_count]
+                    logger.info(
+                        f"[BUILD_TEMPLATE] (genérico) body_values={body_values}"
+                    )
+
+                logger.info(
+                    f"[BUILD_TEMPLATE] Agregando BODY component con "
+                    f"{body_param_count} parámetros: {body_values}"
+                )
                 components.append({
                     "type": "body",
                     "parameters": [
@@ -2594,11 +2622,14 @@ class WhatsAppService:
                     ]
                 })
             else:
-                logger.warning(f"[BUILD_TEMPLATE] ⚠️ body_param_count es 0 - NO se agregará BODY component")
+                logger.warning(
+                    "[BUILD_TEMPLATE] ⚠️ body_param_count es 0 - "
+                    "NO se agregará BODY component"
+                )
 
             # Todas las ETD salvo 'etd_resp_comovamio_docspendientes' tienen botón URL
             if name != "etd_resp_comovamio_docspendientes":
-                logger.info(f"[BUILD_TEMPLATE] Agregando BUTTON (URL) component")
+                logger.info("[BUILD_TEMPLATE] Agregando BUTTON (URL) component")
                 components.append({
                     "type": "button",
                     "sub_type": "url",
@@ -2608,7 +2639,11 @@ class WhatsAppService:
                     ]
                 })
             else:
-                logger.info(f"[BUILD_TEMPLATE] Omitiendo BUTTON (nombre es 'etd_resp_comovamio_docspendientes')")
+                logger.info(
+                    "[BUILD_TEMPLATE] Omitiendo BUTTON "
+                    "(nombre es 'etd_resp_comovamio_docspendientes')"
+                )
+
         else:
             """
             CÓDIGO CORREGIDO PARA LA SECCIÓN NO ETD DE _build_template_payload
