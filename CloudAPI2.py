@@ -33,7 +33,8 @@ from supabase import create_client, Client
 import hashlib
 import re
 from enum import Enum
-
+import psycopg2
+from typing import Optional
 
 
 import os
@@ -2594,6 +2595,10 @@ class WhatsAppService:
             if body_param_count > 0:
                 # 🔧 CASO ESPECIAL: etd_rec_cita_presencial
                 if name.startswith("etd_rec_cita_presencial"):
+                    dbm = get_dbm()
+                    office_str = get_office_for_lead(dbm, td.get("lead_id") )  # si any_id es el lead_id
+                    logger.info(f"👉 Oficina asignada: {office_str}")
+                    oficina = office_str or oficina
                     body_values = [
                         _safe(cliente),  # {{1}}
                         _safe(oficina),  # {{2}}
@@ -4628,6 +4633,46 @@ def get_whatsapp_credentials_for_phone(phone: str | None, company_id: str | None
         "headers": headers,
     }
 
+import psycopg2
+from typing import Optional
+
+
+def get_office_for_lead(dbm, lead_id: str) -> str | None:
+    """
+    Dado un lead_id, devuelve:
+        "<office_address>, en <office_city>"
+    o None si no hay oficina asociada.
+    """
+    row = _one(db_exec(
+        dbm,
+        """
+        SELECT
+            ca.address AS office_address,
+            ca.city    AS office_city
+        FROM public.deals d
+        LEFT JOIN public.profile_comp_addresses pca
+               ON pca.user_id = d.user_assigned_id
+              AND pca.is_deleted = false
+        LEFT JOIN public.company_addresses ca
+               ON ca.id = pca.company_address_id
+              AND ca.is_deleted = false
+        WHERE d.lead_id = %s
+          AND d.is_deleted = false
+        ORDER BY d.created_at DESC NULLS LAST
+        LIMIT 1
+        """,
+        (lead_id,),
+        fetch_one=True
+    ))
+
+    if not row:
+        return None
+
+    office_address, office_city = row
+    if not office_address or not office_city:
+        return None
+
+    return f"{office_address}, en {office_city}"
 
 
 from datetime import datetime
