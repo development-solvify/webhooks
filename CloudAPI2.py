@@ -2601,7 +2601,7 @@ class WhatsAppService:
                     office_str = get_office_for_lead(dbm, td.get("lead_id"))
                     logger.info(f"👉 Oficina asignada: {office_str}")
                     oficina = office_str or oficina
-                    fecha_ddmm = get_call_date_ddmm_for_lead(lead_id)
+                    fecha_ddmm = get_call_date_ddmm_for_lead(td.get("lead_id"))
 
                     body_values = [
                         _safe(cliente),  # {{1}}
