@@ -4601,7 +4601,7 @@ def _resolve_wa_creds_for_send_strict(
     return {}, "", "none", None, None
 
 
-def get_whatsapp_credentials_for_phone(phone: str | None, company_id: str d| None = None) -> dict:
+def get_whatsapp_credentials_for_phone(phone: str | None, company_id: str | None = None) -> dict:
     """
     Devuelve credenciales de WhatsApp priorizando:
       1) company_id explícito (tenant)
