@@ -2644,7 +2644,7 @@ class WhatsAppService:
                     "sub_type": "url",
                     "index": 0,
                     "parameters": [
-                        {"type": "text", "text": link_safe}
+                        {"type": "text", "text": deal_id}
                     ]
                 })
             else:
