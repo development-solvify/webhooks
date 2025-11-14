@@ -2644,7 +2644,7 @@ class WhatsAppService:
                     "sub_type": "url",
                     "index": 0,
                     "parameters": [
-                        {"type": "text", "text": deal_id}
+                        {"type": "text", "text": td.get("deal_id") or ""}
                     ]
                 })
             else:
