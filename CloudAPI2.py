@@ -2696,8 +2696,7 @@ class WhatsAppService:
                 logger.info("[BUILD_TEMPLATE] Detectado template: llamada_perdida")
 
                 # Asegurar idioma correcto para este template
-                nonlocal lang
-                lang = "en_US"
+                lang = "es_ES"
 
                 components.append({
                     "type": "body",
