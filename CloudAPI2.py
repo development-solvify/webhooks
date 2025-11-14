@@ -2402,6 +2402,8 @@ class WhatsAppService:
         to_e164 = normalize_es(to_phone)
         cover_url = self._resolve_cover_url(company_id=company_id or td.get("company_id"))
 
+        logger.info(template_data)
+
         logger.info(f"[BUILD_TEMPLATE] ===== INICIO BUILD TEMPLATE =====")
         logger.info(f"[BUILD_TEMPLATE] template_name input: '{template_name}' | name (stripped): '{name}'")
         logger.info(f"[BUILD_TEMPLATE] company_id: {company_id}")
@@ -2599,6 +2601,8 @@ class WhatsAppService:
                     office_str = get_office_for_lead(dbm, td.get("lead_id"))
                     logger.info(f"👉 Oficina asignada: {office_str}")
                     oficina = office_str or oficina
+
+
                     body_values = [
                         _safe(cliente),  # {{1}}
                         _safe(oficina),  # {{2}}
