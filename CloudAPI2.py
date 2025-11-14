@@ -2563,7 +2563,7 @@ class WhatsAppService:
 
         else:
             logger.info(f"[BUILD_TEMPLATE] ❌ NO es ETD template o no es ETD company - usando lógica Solvify")
-
+            lang = "es_ES"
             td = template_data or {}
 
             # Helpers seguros
