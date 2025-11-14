@@ -2601,13 +2601,13 @@ class WhatsAppService:
                     office_str = get_office_for_lead(dbm, td.get("lead_id"))
                     logger.info(f"👉 Oficina asignada: {office_str}")
                     oficina = office_str or oficina
-
+                    fecha_ddmm = get_call_date_ddmm_for_lead(lead_id)
 
                     body_values = [
                         _safe(cliente),  # {{1}}
                         _safe(oficina),  # {{2}}
-                        _safe(fecha),    # {{3}}
-                        link_safe,       # {{4}}
+                        _safe(fecha_ddmm),    # {{3}}
+                    "",       # {{4}}
                     ]
                     logger.info(
                         "[BUILD_TEMPLATE] (etd_rec_cita_presencial) body_values="
@@ -4483,6 +4483,91 @@ class MessageService:
             logger.exception("[MEDIA SAVE] Error guardando media en external_messages")
 
 # ---------- Gestión de credenciales WhatsApp por company_id (tenant) ----------
+
+
+
+
+
+from datetime import datetime, timedelta
+import logging
+
+def get_next_call_task_for_lead(lead_id: str):
+    """
+    Devuelve la PRÓXIMA tarea de 'Llamada programada' pendiente
+    para el lead indicado (o None si no hay).
+    """
+    if not lead_id:
+        logging.warning("[get_next_call_task_for_lead] lead_id vacío")
+        return None
+
+    now = datetime.now()
+    # Si quieres limitar ventana de búsqueda, puedes poner now + 30 días, etc.
+    later = now + timedelta(days=365)
+
+    query = """
+    SELECT at.*, a.object_reference_id, d.lead_id
+      FROM annotations a
+      INNER JOIN annotation_tasks at ON a.id = at.annotation_id
+      INNER JOIN deals d ON d.id = a.object_reference_id
+     WHERE a.is_deleted = false
+       AND at.status = 'pendiente'
+       AND a.object_reference_type = 'deals'
+       AND at.annotation_type = 'Llamada programada'
+       AND at.is_deleted = false
+       AND d.lead_id = %s
+       AND at.due_date BETWEEN %s AND %s
+     ORDER BY at.due_date ASC
+     LIMIT 1
+    """
+
+    logging.debug(
+        f"[get_next_call_task_for_lead] Buscando próxima llamada para lead_id={lead_id} "
+        f"entre {now} y {later}"
+    )
+
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                now_str = now.strftime('%Y-%m-%d %H:%M:%S')
+                later_str = later.strftime('%Y-%m-%d %H:%M:%S')
+                cursor.execute(query, (lead_id, now_str, later_str))
+                row = cursor.fetchone()
+
+                if not row:
+                    logging.info(f"[get_next_call_task_for_lead] No hay tareas para lead_id={lead_id}")
+                    return None
+
+                columns = [desc[0] for desc in cursor.description]
+                task = dict(zip(columns, row))
+
+        logging.debug(f"[get_next_call_task_for_lead] Tarea encontrada: {task}")
+        return task
+    except Exception as e:
+        logging.error(f"[get_next_call_task_for_lead] Error al obtener tarea: {e}", exc_info=True)
+        return None
+
+
+def get_call_date_ddmm_for_lead(lead_id: str) -> str | None:
+    """
+    Devuelve la fecha de la próxima llamada programada para el lead,
+    en formato 'dd/mm', o None si no hay.
+    """
+    task = get_next_call_task_for_lead(lead_id)
+    if not task:
+        return None
+
+    due_date = task.get("due_date")
+    if not due_date:
+        logging.warning(f"[get_call_date_ddmm_for_lead] Tarea sin due_date para lead_id={lead_id}")
+        return None
+
+    # due_date debería venir como datetime desde psycopg2
+    fecha_str = due_date.strftime('%d/%m')
+    logging.info(f"[get_call_date_ddmm_for_lead] Fecha resuelta para lead_id={lead_id}: {fecha_str}")
+    return fecha_str
+
+
+
 
 # --- Cache opcional para mapear phone -> company_id (simple diccionario en memoria)
 _phone_company_cache: dict[str, str] = {}
