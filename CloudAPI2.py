@@ -2607,7 +2607,7 @@ class WhatsAppService:
                         _safe(cliente),  # {{1}}
                         _safe(oficina),  # {{2}}
                         _safe(fecha_ddmm),    # {{3}}
-                    "",       # {{4}}
+                        " ",       # {{4}}
                     ]
                     logger.info(
                         "[BUILD_TEMPLATE] (etd_rec_cita_presencial) body_values="
