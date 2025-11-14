@@ -4529,9 +4529,7 @@ def get_next_call_task_for_lead(lead_id: str):
     try:
         with db_manager.get_connection() as conn:
             with conn.cursor() as cursor:
-                now_str = now.strftime('%Y-%m-%d %H:%M:%S')
-                later_str = later.strftime('%Y-%m-%d %H:%M:%S')
-                cursor.execute(query, (lead_id, now_str, later_str))
+                cursor.execute(query, (lead_id))
                 row = cursor.fetchone()
 
                 if not row:
