@@ -4526,7 +4526,7 @@ def get_next_call_task_for_lead(lead_id: str):
     )
 
     try:
-        with get_db_connection() as conn:
+        with db_manager.get_connection() as conn:
             with conn.cursor() as cursor:
                 now_str = now.strftime('%Y-%m-%d %H:%M:%S')
                 later_str = later.strftime('%Y-%m-%d %H:%M:%S')
