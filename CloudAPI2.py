@@ -2595,7 +2595,8 @@ class WhatsAppService:
             if body_param_count > 0:
                 # 🔧 CASO ESPECIAL: etd_rec_cita_presencial
                 if name.startswith("etd_rec_cita_presencial"):
-                    dbm = get_dbm()
+                    _, dbm = _get_cfg_db()                    
+                    
                     office_str = get_office_for_lead(dbm, td.get("lead_id") )  # si any_id es el lead_id
                     logger.info(f"👉 Oficina asignada: {office_str}")
                     oficina = office_str or oficina
