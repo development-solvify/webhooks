@@ -4487,7 +4487,6 @@ class MessageService:
 
 
 
-
 from datetime import datetime, timedelta
 import logging
 
@@ -4501,8 +4500,7 @@ def get_next_call_task_for_lead(lead_id: str):
         return None
 
     now = datetime.now()
-    # Si quieres limitar ventana de búsqueda, puedes poner now + 30 días, etc.
-    later = now + timedelta(days=365)
+    later = now + timedelta(days=3)
 
     query = """
     SELECT at.*, a.object_reference_id, d.lead_id
@@ -4529,7 +4527,8 @@ def get_next_call_task_for_lead(lead_id: str):
     try:
         with db_manager.get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(query, (lead_id))
+                # 👇 OJO: tupla de un solo elemento
+                cursor.execute(query, (lead_id,))
                 row = cursor.fetchone()
 
                 if not row:
@@ -4560,12 +4559,9 @@ def get_call_date_ddmm_for_lead(lead_id: str) -> str | None:
         logging.warning(f"[get_call_date_ddmm_for_lead] Tarea sin due_date para lead_id={lead_id}")
         return None
 
-    # due_date debería venir como datetime desde psycopg2
     fecha_str = due_date.strftime('%d/%m')
     logging.info(f"[get_call_date_ddmm_for_lead] Fecha resuelta para lead_id={lead_id}: {fecha_str}")
     return fecha_str
-
-
 
 
 # --- Cache opcional para mapear phone -> company_id (simple diccionario en memoria)
