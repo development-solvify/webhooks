@@ -2610,207 +2610,298 @@ class WhatsAppService:
             else:
                 logger.info(f"[BUILD_TEMPLATE] Omitiendo BUTTON (nombre es 'etd_resp_comovamio_docspendientes')")
         else:
-            logger.info("[BUILD_TEMPLATE] ❌ NO es empresa ETD, revisamos naming para otras lógicas")
+            """
+            CÓDIGO CORREGIDO PARA LA SECCIÓN NO ETD DE _build_template_payload
 
-            # Tenants que usan las plantillas de Solvify
-            solvify_company_ids = {
-                "a9242a58-4f5d-494c-8a74-45f8cee150e6",  # Solvify
-                # aquí puedes añadir más IDs si comparten las mismas plantillas
-            }
+            Reemplazar desde la línea 2612 (después del bloque ETD) hasta la línea 2716
+            """
 
-            if company_id in solvify_company_ids:
-                logger.info(f"[BUILD_TEMPLATE] ===== PLANTILLAS Solvify ({company_name}) =====")
+            # ======== PLANTILLAS CONOCIDAS (resto de tenants) ========
+            logger.info(f"[BUILD_TEMPLATE] ===== PLANTILLAS CONOCIDAS (resto de tenants) =====")
 
-                first_name = td.get("first_name") or td.get("name") or ""
-                responsible_first = td.get("responsible_first_name") or td.get("responsible_name") or ""
-                comp_name = td.get("company_name") or company_name or ""
-                new_phone = td.get("new_phone") or td.get("phone") or to_phone
+            # agendar_llamada → SOLO body (botón URL estático en WABA, sin parámetros)
+            if name == "agendar_llamada":
+                logger.info("[BUILD_TEMPLATE] Detectado template: agendar_llamada")
+                first_name = td.get("first_name") or ""
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name}
+                    ]
+                })
+
+            elif name == "agendar_llamada_inicial":
+                # Body: {{1}} = first_name
+                # Botón URL dinámico con {{1}} = deal_id
+                logger.info("[BUILD_TEMPLATE] Detectado template: agendar_llamada_inicial")
+                first_name = td.get("first_name") or ""
                 deal_id = td.get("deal_id") or ""
-                amount = (
-                    td.get("amount")
-                    or td.get("quota_amount")
-                    or td.get("importe")
-                    or td.get("amount_due")
-                    or "X"
-                )
+                
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name}
+                    ]
+                })
+                components.append({
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": 0,
+                    "parameters": [
+                        {"type": "text", "text": deal_id}
+                    ]
+                })
+                logger.info(f"[BUILD_TEMPLATE] ✅ agendar_llamada_inicial: first_name='{first_name}', deal_id='{deal_id}'")
 
-                # 1) agendar_llamada
-                # BODY: 1 placeholder (nombre), botón con URL ESTÁTICA (NO requiere parámetros)
-                if name == "agendar_llamada":
-                    components.append({
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": first_name}
-                        ]
-                    })
-                    # ⚠️ IMPORTANTE: no añadimos 'button' con parameters porque la URL no tiene {{1}}
-                    logger.info("[BUILD_TEMPLATE] agendar_llamada → 1 BODY param, sin parámetros en botón")
+            elif name == "recordatorio_llamada_agendada":
+                # Body: {{1}} = first_name, {{2}} = responsible_name, {{3}} = company_name
+                logger.info("[BUILD_TEMPLATE] Detectado template: recordatorio_llamada_agendada")
+                first_name = td.get("first_name") or ""
+                responsible_name = td.get("responsible_name") or td.get("responsible_first_name") or ""
+                company_name = td.get("company_name") or "Solvify"
+                
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name},
+                        {"type": "text", "text": responsible_name},
+                        {"type": "text", "text": company_name}
+                    ]
+                })
+                logger.info(f"[BUILD_TEMPLATE] ✅ recordatorio_llamada_agendada: 3 params")
 
-                # 2) nuevo_numero
-                # HEADER: IMAGE (ya añadido arriba si header_format == IMAGE)
-                # BODY: 2 placeholders → nombre, nuevo número
-                # BUTTON URL: requiere 1 parámetro (phone={{1}})
-                elif name == "nuevo_numero":
-                    components.append({
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": first_name},
-                            {"type": "text", "text": str(new_phone)},
-                        ]
-                    })
-                    if new_phone:
-                        components.append({
-                            "type": "button",
-                            "sub_type": "url",
-                            "index": 0,
-                            "parameters": [{
-                                "type": "text",
-                                "text": str(new_phone),
-                            }]
-                        })
-                    logger.info("[BUILD_TEMPLATE] nuevo_numero → 2 BODY params (nombre, teléfono) + 1 param en botón URL")
+            elif name == "retomar_contacto":
+                # Body: {{1}} = first_name, {{2}} = responsible_name
+                logger.info("[BUILD_TEMPLATE] Detectado template: retomar_contacto")
+                first_name = td.get("first_name") or ""
+                responsible_name = td.get("responsible_name") or ""
+                
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name},
+                        {"type": "text", "text": responsible_name}
+                    ]
+                })
+                logger.info(f"[BUILD_TEMPLATE] ✅ retomar_contacto: 2 params")
 
-                # 3) recordatorio_pago_hoy
-                # HEADER: IMAGE (ya añadido arriba)
-                # BODY: 2 placeholders → nombre, importe
-                elif name == "recordatorio_pago_hoy":
-                    components.append({
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": first_name},
-                            {"type": "text", "text": str(amount)},
-                        ]
-                    })
-                    logger.info("[BUILD_TEMPLATE] recordatorio_pago_hoy → 2 BODY params (nombre, importe)")
+            elif name == "nuevo_numero":
+                # Body: {{1}} = first_name, {{2}} = responsible_name
+                # Button URL: {{1}} = deal_id
+                logger.info("[BUILD_TEMPLATE] Detectado template: nuevo_numero")
+                first_name = td.get("first_name") or ""
+                responsible_name = td.get("responsible_name") or td.get("responsible_first_name") or ""
+                deal_id = td.get("deal_id") or ""
+                
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name},
+                        {"type": "text", "text": responsible_name}
+                    ]
+                })
+                components.append({
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": 0,
+                    "parameters": [
+                        {"type": "text", "text": deal_id}
+                    ]
+                })
+                logger.info(f"[BUILD_TEMPLATE] ✅ nuevo_numero: first_name='{first_name}', responsible='{responsible_name}', deal_id='{deal_id}'")
 
-                # 4) baja_comercial
-                # BODY: 3 placeholders → nombre cliente, responsable, empresa
-                elif name == "baja_comercial":
-                    components.append({
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": first_name},
-                            {"type": "text", "text": responsible_first},
-                            {"type": "text", "text": comp_name},
-                        ]
-                    })
-                    logger.info("[BUILD_TEMPLATE] baja_comercial → 3 BODY params (cliente, responsable, empresa)")
+            elif name == "baja_comercial":
+                # Body: {{1}} = first_name, {{2}} = responsible_name, {{3}} = company_name
+                # Button URL: {{1}} = deal_id
+                logger.info("[BUILD_TEMPLATE] Detectado template: baja_comercial")
+                first_name = td.get("first_name") or ""
+                responsible_name = td.get("responsible_name") or td.get("responsible_first_name") or ""
+                company_name = td.get("company_name") or "Solvify"
+                deal_id = td.get("deal_id") or ""
+                
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name},
+                        {"type": "text", "text": responsible_name},
+                        {"type": "text", "text": company_name}
+                    ]
+                })
+                components.append({
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": 0,
+                    "parameters": [
+                        {"type": "text", "text": deal_id}
+                    ]
+                })
+                logger.info(f"[BUILD_TEMPLATE] ✅ baja_comercial: 3 body params + button")
 
-                # 5) retomar_contacto
-                # BODY: 3 placeholders → nombre cliente, responsable, empresa
-                elif name == "retomar_contacto":
-                    components.append({
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": first_name},
-                            {"type": "text", "text": responsible_first},
-                            {"type": "text", "text": comp_name},
-                        ]
-                    })
-                    logger.info("[BUILD_TEMPLATE] retomar_contacto → 3 BODY params (cliente, responsable, empresa)")
+            elif name == "followup_missed_calls":
+                # Header: TEXT (sin parámetros, es estático)
+                # Body: {{1}} = first_name
+                # Button URL: {{1}} = deal_id
+                logger.info("[BUILD_TEMPLATE] Detectado template: followup_missed_calls")
+                first_name = td.get("first_name") or ""
+                deal_id = td.get("deal_id") or ""
+                
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name}
+                    ]
+                })
+                components.append({
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": 0,
+                    "parameters": [
+                        {"type": "text", "text": deal_id}
+                    ]
+                })
+                logger.info(f"[BUILD_TEMPLATE] ✅ followup_missed_calls: first_name='{first_name}', deal_id='{deal_id}'")
 
-                # 6) llamada_perdida
-                # LANGUAGE: en_US en WABA (aunque el texto esté en español)
-                # BODY: 1 placeholder → nombre
-                elif name == "llamada_perdida":
-                    lang = "en_US"  # ⚠️ clave: la plantilla solo existe en en_US
-                    components.append({
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": first_name},
-                        ]
-                    })
-                    logger.info("[BUILD_TEMPLATE] llamada_perdida → lang=en_US + 1 BODY param (nombre)")
+            elif name == "recordatorio_pago_hoy":
+                # Body: {{1}} = first_name, {{2}} = amount
+                # Button URL: {{1}} = order_id
+                logger.info("[BUILD_TEMPLATE] Detectado template: recordatorio_pago_hoy")
+                first_name = td.get("first_name") or ""
+                amount = td.get("amount") or td.get("payment_amount") or ""
+                order_id = td.get("order_id") or td.get("payment_id") or ""
+                
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name},
+                        {"type": "text", "text": str(amount)}
+                    ]
+                })
+                components.append({
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": 0,
+                    "parameters": [
+                        {"type": "text", "text": order_id}
+                    ]
+                })
+                logger.info(f"[BUILD_TEMPLATE] ✅ recordatorio_pago_hoy: first_name='{first_name}', amount='{amount}', order_id='{order_id}'")
 
-                # 7) followup_missed_calls
-                # HEADER: TEXT fijo
-                # BODY: 1 placeholder → nombre
-                # BUTTON URL: requiere 1 parámetro (deal_id={{1}})
-                elif name == "followup_missed_calls":
-                    components.append({
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": first_name},
-                        ]
-                    })
-                    if deal_id:
-                        components.append({
-                            "type": "button",
-                            "sub_type": "url",
-                            "index": 0,
-                            "parameters": [{
-                                "type": "text",
-                                "text": deal_id,
-                            }]
-                        })
-                    logger.info("[BUILD_TEMPLATE] followup_missed_calls → 1 BODY param (nombre) + 1 param en botón URL (deal_id)")
+            elif name == "recordatorio_pago_vencido_v2":
+                # Body: {{1}} = first_name, {{2}} = days_overdue, {{3}} = amount
+                # Button URL: {{1}} = order_id
+                logger.info("[BUILD_TEMPLATE] Detectado template: recordatorio_pago_vencido_v2")
+                first_name = td.get("first_name") or ""
+                days_overdue = td.get("days_overdue") or td.get("days") or ""
+                amount = td.get("amount") or td.get("payment_amount") or ""
+                order_id = td.get("order_id") or td.get("payment_id") or ""
+                
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name},
+                        {"type": "text", "text": str(days_overdue)},
+                        {"type": "text", "text": str(amount)}
+                    ]
+                })
+                components.append({
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": 0,
+                    "parameters": [
+                        {"type": "text", "text": order_id}
+                    ]
+                })
+                logger.info(f"[BUILD_TEMPLATE] ✅ recordatorio_pago_vencido_v2: 3 body params + button")
 
-                # 8) contacto_recordatorio_pago
-                # No tiene placeholders → no hace falta añadir components
-                elif name == "contacto_recordatorio_pago":
-                    logger.info("[BUILD_TEMPLATE] contacto_recordatorio_pago → 0 params, sin components adicionales")
+            elif name == "recordatorio_pago_anticipado_v2":
+                # Body: {{1}} = first_name, {{2}} = amount
+                # Button URL: {{1}} = order_id
+                logger.info("[BUILD_TEMPLATE] Detectado template: recordatorio_pago_anticipado_v2")
+                first_name = td.get("first_name") or ""
+                amount = td.get("amount") or td.get("payment_amount") or ""
+                order_id = td.get("order_id") or td.get("payment_id") or ""
+                
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name},
+                        {"type": "text", "text": str(amount)}
+                    ]
+                })
+                components.append({
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": 0,
+                    "parameters": [
+                        {"type": "text", "text": order_id}
+                    ]
+                })
+                logger.info(f"[BUILD_TEMPLATE] ✅ recordatorio_pago_anticipado_v2: 2 body params + button")
 
-                # Cualquier otra plantilla Solvify que no esté mapeada aquí
-                else:
-                    logger.info("[BUILD_TEMPLATE] Template Solvify no mapeada, usando lógica genérica")
-                    # aquí dejas tu lógica genérica actual (body_params, td['buttons'], etc.)
-                    if body_placeholder_count > 0:
-                        body_params = td.get("body_params") or []
-                        if body_params:
-                            body_parameters = [
-                                {"type": "text", "text": str(p)} for p in body_params[:body_placeholder_count]
-                            ]
-                            components.append({
-                                "type": "body",
-                                "parameters": body_parameters
-                            })
-                    # y si quieres, tu lógica genérica de botones aquí
+            elif name == "recordatorio_pago_vencido_sin_cta":
+                # Body: {{1}} = first_name, {{2}} = days_overdue
+                # Button URL: {{1}} = order_id
+                logger.info("[BUILD_TEMPLATE] Detectado template: recordatorio_pago_vencido_sin_cta")
+                first_name = td.get("first_name") or ""
+                days_overdue = td.get("days_overdue") or td.get("days") or ""
+                order_id = td.get("order_id") or td.get("payment_id") or ""
+                
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name},
+                        {"type": "text", "text": str(days_overdue)}
+                    ]
+                })
+                components.append({
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": 0,
+                    "parameters": [
+                        {"type": "text", "text": order_id}
+                    ]
+                })
+                logger.info(f"[BUILD_TEMPLATE] ✅ recordatorio_pago_vencido_sin_cta: 2 body params + button")
 
-            else:
-                # Lógica genérica para otros tenants (lo que ya tenías)
-                logger.info("[BUILD_TEMPLATE] Tenant genérico - usando lógica genérica por placeholders")
-                if body_placeholder_count > 0:
-                    body_params = td.get("body_params") or []
-                    if body_params:
-                        body_parameters = [
-                            {"type": "text", "text": str(p)} for p in body_params[:body_placeholder_count]
-                        ]
-                        components.append({
-                            "type": "body",
-                            "parameters": body_parameters
-                        })
-                # ... resto de tu lógica genérica
+            elif name == "llamada_perdida":
+                # ⚠️ ATENCIÓN: Este template está en es_ES en WBM (no es_ES)
+                # Body: {{1}} = first_name
+                # Button URL (index 1 porque hay QUICK_REPLY antes): {{1}} = deal_id
+                logger.info("[BUILD_TEMPLATE] Detectado template: llamada_perdida")
+                logger.warning("[BUILD_TEMPLATE] ⚠️ llamada_perdida requiere es_ES")
+                first_name = td.get("first_name") or ""
+                deal_id = td.get("deal_id") or ""
+                
+                # Override del language para este template específico
+                lang = "es_ES"
+                
+                components.append({
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name}
+                    ]
+                })
+                components.append({
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": 1,  # Es el segundo botón (el primero es QUICK_REPLY)
+                    "parameters": [
+                        {"type": "text", "text": deal_id}
+                    ]
+                })
+                logger.info(f"[BUILD_TEMPLATE] ✅ llamada_perdida (es_ES): first_name='{first_name}', deal_id='{deal_id}'")
 
-            else:
-                # Genérico (conservador) - para templates desconocidos
-                logger.info(f"[BUILD_TEMPLATE] Template NO reconocido: {name} - usando lógica genérica")
-                body_params = td.get("body_params") or []
-                if body_text_def is not None and body_placeholder_count > 0:
-                    body_params = body_params[:body_placeholder_count]
-                if body_params:
-                    components.append({
-                        "type": "body",
-                        "parameters": [{"type": "text", "text": str(x)} for x in body_params]
-                    })
-                    
-                buttons = td.get("buttons") or []
-                for i, btn in enumerate(buttons):
-                    btype = (btn.get("type") or "").lower()
-                    if btype == "url":
-                        components.append({
-                            "type": "button",
-                            "sub_type": "url",
-                            "index": int(btn.get("index", i)),
-                            "parameters": [{"type": "text", "text": str(btn.get("text_param", ""))}]
-                        })
-                    elif btype in ("quick_reply", "quickreply", "quick-reply"):
-                        components.append({
-                            "type": "button",
-                            "sub_type": "quick_reply",
-                            "index": int(btn.get("index", i)),
-                            "parameters": [{"type": "payload", "payload": str(btn.get("payload", ""))}]
-                        })
+            elif name == "contacto_recordatorio_pago":
+                # Esta plantilla NO tiene parámetros
+                logger.info("[BUILD_TEMPLATE] Detectado template: contacto_recordatorio_pago (sin parámetros)")
+                components = []
 
+            elif name == "recordatorio_proximo_pago":
+                # Esta plantilla NO tiene parámetros
+                logger.info("[BUILD_TEMPLATE] Detectado template: recordatorio_proximo_pago (sin parámetros)")
+                components = []
+
+            
         logger.info(f"[BUILD_TEMPLATE] Components finales: {components}")
         logger.info(f"[BUILD_TEMPLATE] ===== FIN BUILD TEMPLATE =====")
 
@@ -9341,7 +9432,7 @@ def test_whatsapp_curl():
             "type": "template",
             "template": {
                 "name": "hello_world",
-                "language": {"code": "en_US"}
+                "language": {"code": "es_ES"}
             }
         }
         
