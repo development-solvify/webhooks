@@ -2596,8 +2596,7 @@ class WhatsAppService:
                 # 🔧 CASO ESPECIAL: etd_rec_cita_presencial
                 if name.startswith("etd_rec_cita_presencial"):
                     _, dbm = _get_cfg_db()                    
-                    
-                    office_str = get_office_for_lead(dbm, td.get("lead_id") )  # si any_id es el lead_id
+                    office_str = get_office_for_lead(dbm, td.get("lead_id"))
                     logger.info(f"👉 Oficina asignada: {office_str}")
                     oficina = office_str or oficina
                     body_values = [
@@ -4602,7 +4601,7 @@ def _resolve_wa_creds_for_send_strict(
     return {}, "", "none", None, None
 
 
-def get_whatsapp_credentials_for_phone(phone: str | None, company_id: str | None = None) -> dict:
+def get_whatsapp_credentials_for_phone(phone: str | None, company_id: str d| None = None) -> dict:
     """
     Devuelve credenciales de WhatsApp priorizando:
       1) company_id explícito (tenant)
@@ -4637,16 +4636,22 @@ def get_whatsapp_credentials_for_phone(phone: str | None, company_id: str | None
 import psycopg2
 from typing import Optional
 
-
-def get_office_for_lead(dbm, lead_id: str) -> str | None:
+def get_office_for_lead(dbm, lead_id: str | None) -> Optional[str]:
     """
     Dado un lead_id, devuelve:
         "<office_address>, en <office_city>"
     o None si no hay oficina asociada.
+
+    Lógica:
+      - Busca el deal más reciente (no eliminado) de ese lead.
+      - Coge la dirección de la oficina del user_assigned_id
+        vía profile_comp_addresses -> company_addresses.
     """
-    row = _one(db_exec(
-        dbm,
-        """
+    if not lead_id:
+        logger.warning("[get_office_for_lead] lead_id vacío o None")
+        return None
+
+    sql = """
         SELECT
             ca.address AS office_address,
             ca.city    AS office_city
@@ -4661,19 +4666,31 @@ def get_office_for_lead(dbm, lead_id: str) -> str | None:
           AND d.is_deleted = false
         ORDER BY d.created_at DESC NULLS LAST
         LIMIT 1
-        """,
-        (lead_id,),
-        fetch_one=True
-    ))
+    """
+
+    try:
+        row = dbm.execute_query(sql, (lead_id,), fetch_one=True)
+    except Exception as e:
+        logger.exception(f"[get_office_for_lead] Error ejecutando query para lead_id={lead_id}: {e}")
+        return None
 
     if not row:
+        logger.info(f"[get_office_for_lead] Sin resultados para lead_id={lead_id}")
         return None
 
-    office_address, office_city = row
+    # row es una tupla (office_address, office_city)
+    office_address, office_city = row[0], row[1]
+
     if not office_address or not office_city:
+        logger.info(
+            f"[get_office_for_lead] Dirección incompleta para lead_id={lead_id} "
+            f"(address={office_address}, city={office_city})"
+        )
         return None
 
-    return f"{office_address}, en {office_city}"
+    office_str = f"{office_address}, en {office_city}"
+    logger.info(f"[get_office_for_lead] Oficina resuelta para lead_id={lead_id}: {office_str}")
+    return office_str
 
 
 from datetime import datetime
