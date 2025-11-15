@@ -3821,541 +3821,6 @@ class MessageService:
             logging.exception("Failed to save template message")
             return False
 
-
-    def save_template_message0(
-        self,
-        payload: dict,
-        wamid: str | None,
-        company_id: str | None = None
-    ) -> bool:
-        """
-        Registra un mensaje saliente de tipo TEMPLATE (from_me=true) con status 'template_sent'.
-        Imprime en consola el contenido exacto y guarda en external_messages.message un JSON:
-        { "type":"template", "template_name":..., "to":..., "wamid":..., "text":..., "raw": {...} }
-        """
-        try:
-            # 1) Resolver teléfono (en posibles rutas del payload)
-            phone = (
-                payload.get("phone")
-                or payload.get("to")
-                or (payload.get("template_payload") or {}).get("to")
-                or ""
-            )
-            sender = PhoneUtils.strip_34(str(phone)) if phone else None
-
-            # 2) Template name
-            template_name = (
-                payload.get("template_name")
-                or (payload.get("template_data") or {}).get("template_name")
-                or (payload.get("template") or {}).get("name")
-                or ""
-            )
-
-            # 3) Timestamp
-            last_message_ts = now_madrid_naive()
-
-            # 4) Renderizar **texto final** (lo que verá el cliente)
-            # 4.1 Preferimos el rendered_text si el builder ya lo trae
-            rendered_text = (
-                payload.get("rendered_text")
-                or (payload.get("template_payload") or {}).get("rendered_text")
-            )
-
-            # 4.2 Si no, intentar reconstruir desde body_text + parámetros y añadir botón/footers
-            if not (isinstance(rendered_text, str) and rendered_text.strip()):
-                tpl = (payload.get("template") or (payload.get("template_payload") or {}).get("template") or {}) or {}
-                components = tpl.get("components") or []
-
-                # Parámetros del BODY y botón URL (si existe)
-                body_params, url_param = [], None
-                for c in components:
-                    ctype = (c.get("type") or "").lower()
-                    params = c.get("parameters") or []
-                    if ctype == "body":
-                        for p in params:
-                            if isinstance(p, dict):
-                                if p.get("type") == "text":
-                                    body_params.append(p.get("text") or "")
-                                else:
-                                    body_params.append(
-                                        p.get("text") or
-                                        (p.get("currency") or {}).get("fallback_value") or
-                                        (p.get("date_time") or {}).get("fallback_value") or
-                                        p.get("payload") or
-                                        ""
-                                    )
-                            else:
-                                body_params.append(str(p))
-                    elif ctype == "button" and (c.get("sub_type") or "").lower() == "url":
-                        for p in params:
-                            if isinstance(p, dict):
-                                url_param = p.get("text") or p.get("payload") or url_param
-
-                # body_text/footers opcionales en el payload
-                td = (payload.get("template_data") or {})
-                body_text = (payload.get("body_text") or td.get("body_text") or "").strip()
-                footer_text = (payload.get("footer_text") or td.get("footer_text") or "").strip()
-
-                # Si tenemos body_text con placeholders {{n}}, sustituirlos con body_params
-                if body_text:
-                    rendered = body_text
-                    for i, val in enumerate(body_params, start=1):
-                        rendered = rendered.replace("{{%d}}" % i, str(val))
-                    lines = [rendered]
-                else:
-                    # Fallback simple: mostrar parámetros en líneas separadas (no es "exacto",
-                    # pero da visibilidad si el builder no aporta body_text/rendered_text).
-                    lines = [p for p in body_params if p]
-
-                # Añadir enlace si existe
-                if url_param:
-                    lines.append("")
-                    if url_param.endswith("."):
-                        lines.append(f"Puedes realizar el pago en el siguiente enlace: {url_param}")
-                    else:
-                        lines.append(f"Puedes realizar el pago en el siguiente enlace: {url_param}.")
-
-                # Añadir footer si existe
-                if footer_text:
-                    lines.append("")
-                    lines.append(footer_text)
-
-                rendered_text = "\n".join([l for l in lines if l]).strip()
-
-            # 5) PREVIEW en consola: exactamente lo que verá el cliente
-            print("\n" + "="*80)
-            print("📨 MENSAJE DE PLANTILLA (PREVIEW CLIENTE)")
-            print("="*80)
-            print(f"📱 Teléfono:           {sender or 'N/A'}")
-            print(f"📦 Message ID (WAMID): {wamid or 'N/A'}")
-            print(f"🏢 Company ID:         {company_id or 'N/A'}")
-            print(f"🧩 Template:           {template_name or 'N/A'}")
-            print("-"*80)
-            print("📝 CONTENIDO QUE RECIBE EL CLIENTE:")
-            print("-"*80)
-            print(rendered_text or "")
-            print("-"*80)
-            print("="*80 + "\n")
-
-            # 6) JSON a guardar en external_messages.message
-            message_json = {
-                "type": "template",
-                "template_name": template_name,
-                "to": sender,
-                "wamid": wamid,
-                "text": rendered_text,  # <-- TEXTO FINAL
-                "raw": payload
-            }
-            message_text = json.dumps(message_json, ensure_ascii=False)
-
-            # 7) Resolver asignaciones/lead
-            assigned_to_id = None
-            responsible_email = ""
-            lead = None
-            if sender:
-                try:
-                    assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
-                except Exception:
-                    logging.exception("Failed to get lead assigned info for sender=%s", sender)
-                try:
-                    lead = self.lead_service.get_lead_data_by_phone(sender, company_id=company_id)
-                except Exception:
-                    logging.exception("Failed to get lead data for sender=%s", sender)
-
-            chat_id = None
-            chat_url = None
-            if lead:
-                chat_id = lead.get("deal_id") or sender
-                chat_url = sender
-                if not company_id:
-                    company_id = lead.get("company_id")
-
-            if not chat_id:
-                chat_id = sender or str(uuid4())
-            if not chat_url:
-                chat_url = sender or ""
-
-            # 8) INSERT idempotente
-            insert_sql = """
-                INSERT INTO public.external_messages (
-                    id, message, sender_phone, responsible_email,
-                    last_message_uid, last_message_timestamp,
-                    from_me, status, created_at, updated_at, is_deleted,
-                    chat_id, chat_url, assigned_to_id, company_id
-                ) VALUES (
-                    %s, %s, %s, %s,
-                    %s, %s,
-                    %s, %s, NOW(), NOW(), FALSE,
-                    %s, %s, %s, %s
-                )
-                ON CONFLICT (last_message_uid) DO NOTHING
-            """
-            params = [
-                str(uuid4()),
-                message_text,
-                (sender or ""),
-                (responsible_email or ""),
-                wamid,
-                last_message_ts,
-                'true',
-                'template_sent',
-                chat_id,
-                chat_url,
-                assigned_to_id,
-                company_id
-            ]
-            self.db_manager.execute_query(insert_sql, params)
-            return True
-
-        except Exception:
-            logging.exception("Failed to save template message")
-            return False
-
-
-    def save_template_message1(
-        self,
-        payload: dict,
-        wamid: str | None,
-        company_id: str | None = None
-    ) -> bool:
-        """
-        Registra un mensaje saliente de tipo TEMPLATE (from_me=true) con status 'template_sent'.
-        Guarda en external_messages.message un JSON con el texto final (renderizado).
-        """
-        self.print_template_to_client(payload, company_id)  # ← AGREGAR ESTA LÍNEA
-        
-        try:
-            # 1) Resolver teléfono
-            phone = (
-                (payload.get("phone")) or
-                (payload.get("to")) or
-                ((payload.get("template_payload") or {}).get("to")) or
-                ""
-            )
-            sender = PhoneUtils.strip_34(str(phone)) if phone else None
-
-            # 2) Template name
-            template_name = (
-                payload.get("template_name")
-                or (payload.get("template_data") or {}).get("template_name")
-                or (payload.get("template") or {}).get("name")
-                or ""
-            )
-
-            # 3) Timestamp
-            last_message_ts = now_madrid_naive()
-
-            # 4) Renderizar TEXTO FINAL
-            # 4.1 Preferimos un rendered_text que pueda traer tu builder
-            rendered_text = (
-                payload.get("rendered_text")
-                or (payload.get("template_payload") or {}).get("rendered_text")
-            )
-
-            # 4.2 Si no hay rendered_text, intentamos reconstruirlo desde components
-            if not (isinstance(rendered_text, str) and rendered_text.strip()):
-                tpl = (payload.get("template") or (payload.get("template_payload") or {}).get("template") or {}) or {}
-                components = tpl.get("components") or []
-
-                body_vals, url_param = [], None
-                for c in components:
-                    ctype = (c.get("type") or "").lower()
-                    params = c.get("parameters") or []
-                    if ctype == "body":
-                        for p in params:
-                            if isinstance(p, dict):
-                                if p.get("type") == "text":
-                                    body_vals.append(p.get("text") or "")
-                                else:
-                                    body_vals.append(
-                                        p.get("text") or
-                                        (p.get("currency") or {}).get("fallback_value") or
-                                        (p.get("date_time") or {}).get("fallback_value") or
-                                        p.get("payload") or
-                                        ""
-                                    )
-                            else:
-                                body_vals.append(str(p))
-                    elif ctype == "button" and (c.get("sub_type") or "").lower() == "url":
-                        for p in params:
-                            if isinstance(p, dict):
-                                url_param = p.get("text") or p.get("payload") or url_param
-
-                # Heurística ETD: saludo + cuerpo genérico + link + web
-                lines = []
-                # Saludo si tenemos nombre
-                if body_vals:
-                    lines.append(f"Hola {body_vals[0]} 👋")
-                    lines.append("")
-
-                # Cuerpo:
-                # - si tu builder ya trae 'body_text' en payload/template_data, úsalo
-                body_text = (
-                    payload.get("body_text")
-                    or (payload.get("template_data") or {}).get("body_text")
-                    or ""
-                ).strip()
-
-                if body_text:
-                    lines.append(body_text)
-
-                # Web corporativa ETD (si no la duplica el body_text)
-                if "eliminamostudeuda.com" not in "\n".join(lines):
-                    lines.append("")
-                    lines.append("www.eliminamostudeuda.com")
-
-                rendered_text = "\n".join(lines).strip()
-                print("Rendered text rebuilt from components    XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX:", rendered_text)
-
-            # 5) JSON a guardar en external_messages.message
-            message_json = {
-                "type": "template",
-                "template_name": template_name,
-                "to": sender,
-                "wamid": wamid,
-                "text": rendered_text,   # <--- TEXTO FINAL, con saltos de línea y emoji
-                "raw": payload
-            }
-            message_text = json.dumps(message_json, ensure_ascii=False)
-            print("Message JSON to save XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX:", message_text)
-            # 6) Resolver asignaciones/lead
-            assigned_to_id = None
-            responsible_email = ""
-            lead = None
-            print("Sender for template save--------------------------------------------------------------------->:", sender, company_id)
-            if sender:
-                try:
-                    assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
-                except Exception:
-                    logging.exception("Failed to get lead assigned info for sender=%s", sender)
-                try:
-                    lead = self.lead_service.get_lead_data_by_phone(sender, company_id=company_id)
-                except Exception:
-                    logging.exception("Failed to get lead data for sender=%s", sender)
-
-            chat_id = None
-            chat_url = None
-            if lead:
-                chat_id = lead.get("deal_id") or sender
-                chat_url = sender
-                if not company_id:
-                    company_id = lead.get("company_id")
-
-            if not chat_id:
-                chat_id = sender or str(uuid4())
-            if not chat_url:
-                chat_url = sender or ""
-
-
-            pretty_json = json.dumps(message_json, ensure_ascii=False, indent=2)
-            print("\n===== TEXTO QUE VERÁ EL CLIENTE =====\n" + rendered_text + "\n=====================================\n")
-            logger.info("🟩 OUTGOING TEMPLATE (preview)\n" + pretty_json)
-            
-            # 7) Insert
-            insert_sql = """
-                INSERT INTO public.external_messages (
-                    id, message, sender_phone, responsible_email,
-                    last_message_uid, last_message_timestamp,
-                    from_me, status, created_at, updated_at, is_deleted,
-                    chat_id, chat_url, assigned_to_id, company_id
-                ) VALUES (
-                    %s, %s, %s, %s,
-                    %s, %s,
-                    %s, %s, NOW(), NOW(), FALSE,
-                    %s, %s, %s, %s
-                )
-                ON CONFLICT DO NOTHING
-            """
-            params = [
-                str(uuid4()),
-                message_text,   # <-- se guarda JSON con "text"
-                (sender or ""),
-                (responsible_email or ""),
-                wamid,
-                last_message_ts,
-                'true',
-                'template_sent',
-                chat_id,
-                chat_url,
-                assigned_to_id,
-                company_id
-            ]
-            self.db_manager.execute_query(insert_sql, params)
-            return True
-
-        except Exception:
-            logging.exception("Failed to save template message")
-            return False
-
-
-    def save_template_message2(
-        self,
-        payload: dict,
-        wamid: str | None,
-        company_id: str | None = None
-    ) -> bool:
-        """
-        Registra un mensaje saliente de tipo TEMPLATE (from_me=true) con status 'template_sent'.
-        Guarda en external_messages.message un JSON con el texto final (renderizado).
-        """
-        try:
-            # 1) Resolver teléfono
-            phone = (
-                (payload.get("phone")) or
-                (payload.get("to")) or
-                ((payload.get("template_payload") or {}).get("to")) or
-                ""
-            )
-            sender = PhoneUtils.strip_34(str(phone)) if phone else None
-
-            # 2) Template name
-            template_name = (
-                payload.get("template_name")
-                or (payload.get("template_data") or {}).get("template_name")
-                or (payload.get("template") or {}).get("name")
-                or ""
-            )
-
-            # 3) Timestamp
-            last_message_ts = now_madrid_naive()
-
-            # 4) Renderizar TEXTO FINAL
-            # 4.1 Preferimos un rendered_text que pueda traer tu builder
-            rendered_text = (
-                payload.get("rendered_text")
-                or (payload.get("template_payload") or {}).get("rendered_text")
-            )
-
-            # 4.2 Si no hay rendered_text, intentamos reconstruirlo desde components
-            if not (isinstance(rendered_text, str) and rendered_text.strip()):
-                tpl = (payload.get("template") or (payload.get("template_payload") or {}).get("template") or {}) or {}
-                components = tpl.get("components") or []
-
-                body_vals, url_param = [], None
-                for c in components:
-                    ctype = (c.get("type") or "").lower()
-                    params = c.get("parameters") or []
-                    if ctype == "body":
-                        for p in params:
-                            if isinstance(p, dict):
-                                if p.get("type") == "text":
-                                    body_vals.append(p.get("text") or "")
-                                else:
-                                    body_vals.append(
-                                        p.get("text") or
-                                        (p.get("currency") or {}).get("fallback_value") or
-                                        (p.get("date_time") or {}).get("fallback_value") or
-                                        p.get("payload") or
-                                        ""
-                                    )
-                            else:
-                                body_vals.append(str(p))
-                    elif ctype == "button" and (c.get("sub_type") or "").lower() == "url":
-                        for p in params:
-                            if isinstance(p, dict):
-                                url_param = p.get("text") or p.get("payload") or url_param
-
-                # Heurística ETD: saludo + cuerpo genérico + link + web
-                lines = []
-                # Saludo si tenemos nombre
-                if body_vals:
-                    lines.append(f"Hola {body_vals[0]} 👋")
-                    lines.append("")
-
-                # Cuerpo:
-                # - si tu builder ya trae 'body_text' en payload/template_data, úsalo
-                body_text = (
-                    payload.get("body_text")
-                    or (payload.get("template_data") or {}).get("body_text")
-                    or ""
-                ).strip()
-
-                if body_text:
-                    lines.append(body_text)
-
-                # Web corporativa ETD (si no la duplica el body_text)
-                if "eliminamostudeuda.com" not in "\n".join(lines):
-                    lines.append("")
-                    lines.append("www.eliminamostudeuda.com")
-
-                rendered_text = "\n".join(lines).strip()
-
-            # 5) JSON a guardar en external_messages.message
-            message_json = {
-                "type": "template",
-                "template_name": template_name,
-                "to": sender,
-                "wamid": wamid,
-                "text": rendered_text,   # <--- TEXTO FINAL, con saltos de línea y emoji
-                "raw": payload
-            }
-            message_text = json.dumps(message_json, ensure_ascii=False)
-
-            # 6) Resolver asignaciones/lead
-            assigned_to_id = None
-            responsible_email = ""
-            lead = None
-            print("Sender for template save--------------------------------------------------------------------->:", sender, company_id)
-            if sender:
-                try:
-                    assigned_to_id, responsible_email = self.lead_service.get_lead_assigned_info(sender)
-                except Exception:
-                    logging.exception("Failed to get lead assigned info for sender=%s", sender)
-                try:
-                    lead = self.lead_service.get_lead_data_by_phone(sender, company_id=company_id)
-                except Exception:
-                    logging.exception("Failed to get lead data for sender=%s", sender)
-
-            chat_id = None
-            chat_url = None
-            if lead:
-                chat_id = lead.get("deal_id") or sender
-                chat_url = sender
-                if not company_id:
-                    company_id = lead.get("company_id")
-
-            if not chat_id:
-                chat_id = sender or str(uuid4())
-            if not chat_url:
-                chat_url = sender or ""
-
-            # 7) Insert
-            insert_sql = """
-                INSERT INTO public.external_messages (
-                    id, message, sender_phone, responsible_email,
-                    last_message_uid, last_message_timestamp,
-                    from_me, status, created_at, updated_at, is_deleted,
-                    chat_id, chat_url, assigned_to_id, company_id
-                ) VALUES (
-                    %s, %s, %s, %s,
-                    %s, %s,
-                    %s, %s, NOW(), NOW(), FALSE,
-                    %s, %s, %s, %s
-                )
-                ON CONFLICT DO NOTHING
-            """
-            params = [
-                str(uuid4()),
-                message_text,   # <-- se guarda JSON con "text"
-                (sender or ""),
-                (responsible_email or ""),
-                wamid,
-                last_message_ts,
-                'true',
-                'template_sent',
-                chat_id,
-                chat_url,
-                assigned_to_id,
-                company_id
-            ]
-            self.db_manager.execute_query(insert_sql, params)
-            return True
-
-        except Exception:
-            logging.exception("Failed to save template message")
-            return False
-
-
     def save_media_message(
         self,
         msg: dict,
@@ -4409,7 +3874,8 @@ class MessageService:
             # 2) from_me + status por defecto
             from_me = 'false' if direction == "in" else 'true'
             if status is None:
-                status = "message_received" if direction == "in" else "media_sent"
+                # Queremos que los medias entrantes queden como 'media_received'
+                status = "media_received" if direction == "in" else "media_sent"
 
             # 3) Resolver deal/assigned/responsable para chat_id/responsible_email
             assigned_to_id = None
@@ -4431,23 +3897,47 @@ class MessageService:
 
             # 4) Construir message JSON con metadatos del media
             #    Conserva info original y adjunta extra_info
+            # 4) Construir message JSON alineado con legacy:
+            #    { "type": "voice", "url": "...supabase...", "filename": "...",
+            #      "mime_type": "audio/ogg", "detected_type": "voice",
+            #      "extended_support": true, "document_id": "...", "file_size": ... }
+
+            info = extra_info or {}
+
+            # Tipo detectado (voice, image, sticker, etc.)
+            detected_type = (
+                info.get("whatsapp_type")           # p.ej. 'voice'
+                or info.get("media_type")           # p.ej. 'audio'
+                or (msg.get("type") if isinstance(msg.get("type"), str) else "media")
+            )
+
+            # URL pública de Supabase
+            media_url = (
+                info.get("url")                     # por compatibilidad si viniera ya
+                or info.get("public_url")           # ExtendedFileService
+                or info.get("supabase_path")        # último recurso, al menos deja el path
+                or ""
+            )
+
+            # MIME type
+            mime_type = (
+                info.get("mime_type")
+                or info.get("content_type")
+            )
+
             message_json = {
-                "type": "media",
-                "direction": direction,
-                "whatsapp_wamid": wa_id,
-                "raw": msg,                         # payload original para trazabilidad
-                "media": {
-                    "url": (extra_info or {}).get("url"),
-                    "mime_type": (extra_info or {}).get("mime_type"),
-                    "filename": (extra_info or {}).get("filename"),
-                    "caption": (extra_info or {}).get("caption"),
-                    "document_id": (extra_info or {}).get("document_id"),
-                    "media_id": (extra_info or {}).get("media_id"),
-                    "whatsapp_type": (extra_info or {}).get("whatsapp_type"),  # 'image', 'video', 'document', 'audio', etc.
-                    "file_size": (extra_info or {}).get("file_size"),
-                    "sha256": (extra_info or {}).get("sha256"),
-                }
+                "type": detected_type,              # 'voice', 'image', 'sticker', etc.
+                "url": media_url,
+                "filename": info.get("filename") or info.get("original_filename"),
+                "mime_type": mime_type,
+                "detected_type": detected_type,
+                "extended_support": True,
+                "document_id": info.get("document_id"),
+                "file_size": info.get("file_size"),
+                # opcional: si quieres guardar hash también:
+                "sha256": info.get("sha256"),
             }
+
 
             # 5) Insertar en external_messages (multitenant)
             #    Columnas según tu esquema actual (con company_id)
