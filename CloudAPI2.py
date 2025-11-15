@@ -3871,6 +3871,24 @@ class MessageService:
             clean_phone = PhoneUtils.strip_34(str(raw_phone))
             display_phone = PhoneUtils.add_34(clean_phone)
 
+            # 1.b) Normalizar message UID (last_message_uid / whatsapp_wamid)
+            raw_wa_id = wa_id or msg.get("id") or msg.get("wamid") or msg.get("message_id")
+            msg_uid = str(raw_wa_id) if raw_wa_id else None
+
+            # Si lo que ha llegado como wa_id es en realidad el teléfono (solo dígitos)
+            # lo descartamos e intentamos usar el id real del mensaje.
+            if msg_uid and msg_uid.isdigit() and msg_uid == clean_phone:
+                alt = msg.get("id") or msg.get("wamid") or msg.get("message_id")
+                if alt:
+                    msg_uid = str(alt)
+
+            # Fallback final: phone + timestamp, para no romper aunque no venga id
+            if not msg_uid:
+                import time
+                ts = msg.get("timestamp") or int(time.time())
+                msg_uid = f"{clean_phone}_{ts}"
+
+
             # 2) from_me + status por defecto
             from_me = 'false' if direction == "in" else 'true'
             if status is None:
@@ -3902,31 +3920,33 @@ class MessageService:
             #      "mime_type": "audio/ogg", "detected_type": "voice",
             #      "extended_support": true, "document_id": "...", "file_size": ... }
 
+            # 4) Construir message JSON alineado con legacy:
+            # { "type": "voice", "url": "...supabase...", "filename": "...",
+            #   "mime_type": "audio/ogg", "detected_type": "voice",
+            #   "extended_support": true, "document_id": "...", "file_size": ... }
+
             info = extra_info or {}
 
-            # Tipo detectado (voice, image, sticker, etc.)
             detected_type = (
-                info.get("whatsapp_type")           # p.ej. 'voice'
-                or info.get("media_type")           # p.ej. 'audio'
+                info.get("whatsapp_type")           # 'voice', 'image', 'sticker', etc.
+                or info.get("media_type")           # 'audio', 'image', etc.
                 or (msg.get("type") if isinstance(msg.get("type"), str) else "media")
             )
 
-            # URL pública de Supabase
             media_url = (
-                info.get("url")                     # por compatibilidad si viniera ya
-                or info.get("public_url")           # ExtendedFileService
-                or info.get("supabase_path")        # último recurso, al menos deja el path
+                info.get("url")
+                or info.get("public_url")
+                or info.get("supabase_path")
                 or ""
             )
 
-            # MIME type
             mime_type = (
                 info.get("mime_type")
                 or info.get("content_type")
             )
 
             message_json = {
-                "type": detected_type,              # 'voice', 'image', 'sticker', etc.
+                "type": detected_type,
                 "url": media_url,
                 "filename": info.get("filename") or info.get("original_filename"),
                 "mime_type": mime_type,
@@ -3934,7 +3954,6 @@ class MessageService:
                 "extended_support": True,
                 "document_id": info.get("document_id"),
                 "file_size": info.get("file_size"),
-                # opcional: si quieres guardar hash también:
                 "sha256": info.get("sha256"),
             }
 
@@ -3944,17 +3963,17 @@ class MessageService:
             sql = """
                 INSERT INTO public.external_messages
                 ( id, message, sender_phone, responsible_email, last_message_uid, last_message_timestamp,
-                from_me, status, created_at, updated_at, is_deleted, chat_url, chat_id, assigned_to_id, company_id )
+                  from_me, status, created_at, updated_at, is_deleted, chat_url, chat_id, assigned_to_id, company_id )
                 VALUES
                 ( gen_random_uuid(), %s, %s, %s, %s, NOW(),
-                %s, %s, NOW(), NOW(), FALSE, %s, %s, %s, %s )
+                  %s, %s, NOW(), NOW(), FALSE, %s, %s, %s, %s )
             """
 
             params = [
                 json.dumps(message_json, ensure_ascii=False),
                 clean_phone,
                 responsible_email or "",
-                wa_id,
+                msg_uid,          # 👈 aquí, NO wa_id
                 from_me,
                 status,
                 chat_url,
@@ -3966,7 +3985,7 @@ class MessageService:
             dbm.execute_query(sql, params, fetch_one=False, fetch_all=False)
             logger.info(
                 f"[MEDIA SAVE] Guardado media ({direction}) para {display_phone} | "
-                f"status={status} | wa_id={wa_id} | deal/chat_id={chat_id} | company_id={company_id}"
+                f"status={status} | msg_uid={msg_uid} | deal/chat_id={chat_id} | company_id={company_id}"
             )
 
         except Exception:
