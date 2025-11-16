@@ -336,7 +336,7 @@ def get_supabase_connection():
     }
     return pg8000.connect(**params)
 
-import re
+
 
 def _sanitize_phone(raw_phone: str) -> str | None:
     if not raw_phone:
@@ -364,8 +364,6 @@ def _sanitize_phone(raw_phone: str) -> str | None:
         return None
 
     return digits
-
-
 
 def _normalize_office_token(raw: str) -> str:
     """
