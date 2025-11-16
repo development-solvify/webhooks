@@ -6,7 +6,7 @@ import os
 import configparser
 from pathlib import Path
 from datetime import datetime, timezone
-
+from typing import Optional
 import pg8000
 from flask import Flask, request, jsonify
 from flask_cors import CORS
