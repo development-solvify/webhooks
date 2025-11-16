@@ -223,6 +223,104 @@ def get_task_info(task_id: str) -> Optional[dict]:
             pass
 
 
+from werkzeug.exceptions import BadRequest
+import json
+
+from werkzeug.exceptions import BadRequest
+import json
+
+@app.route("/task-info", methods=["POST"])
+def task_info_webhook():
+    """
+    Webhook HTTPS + CORS.
+
+    Recibe:
+      { "task_id": "<uuid-annotation_tasks>" }
+    (también acepta "id" o "annotation_task_id")
+
+    1) Busca la tarea en BD.
+    2) Muestra info por log.
+    3) SOLO si el tipo es 'Llamada programada' dispara trigger_call_reminder_flow(task).
+    """
+    try:
+        # 👀 Log raw body para ver qué llega (axios, curl, etc.)
+        raw_body = request.get_data(as_text=True)
+        app.logger.info(f"📜 Raw body recibido en /task-info: {raw_body!r}")
+
+        try:
+            data = request.get_json(force=True)
+        except BadRequest as e:
+            app.logger.error(f"❌ JSON inválido en /task-info: {e}")
+            return jsonify({"error": "JSON inválido", "details": str(e)}), 400
+
+        if not isinstance(data, dict):
+            app.logger.error(f"❌ JSON no es un objeto: {data!r}")
+            return jsonify({"error": "JSON debe ser un objeto", "details": str(data)}), 400
+
+        # 🔑 Aceptamos varios nombres de campo
+        task_id = (
+            data.get("task_id")
+            or data.get("id")
+            or data.get("annotation_task_id")
+        )
+
+        app.logger.info(f"🔎 task_id resuelto desde JSON: {task_id}")
+
+        if not task_id:
+            return jsonify({
+                "error": "task_id es obligatorio",
+                "details": "Envía 'task_id' o 'id' en el cuerpo JSON",
+            }), 400
+
+        app.logger.info(f"📥 Webhook /task-info recibido para task_id={task_id}")
+
+        # 🔄 Recuperar la tarea desde la BD
+        task = get_task_info(task_id)
+        if not task:
+            return jsonify({"error": "Tarea no encontrada"}), 404
+
+        # 👀 Logs bonitos
+        app.logger.info("📝 TASK INFO")
+        app.logger.info(f"   • ID tarea:       {task.get('task_id')}")
+        app.logger.info(f"   • Contenido:      {task.get('content')}")
+        app.logger.info(f"   • Due date:       {task.get('due_date')}")
+        app.logger.info(f"   • Estado:         {task.get('status')}")
+        app.logger.info(f"   • Prioridad:      {task.get('priority')}")
+        app.logger.info(f"   • Tipo tarea:     {task.get('task_annotation_type')}")
+        app.logger.info(
+            f"   • Asignado a:     {task.get('assignee_first_name')} "
+            f"{task.get('assignee_last_name')} <{task.get('assignee_email')}> "
+            f"(profile_id={task.get('user_assigned_id')})"
+        )
+        app.logger.info(
+            f"   • Compañía:       {task.get('company_name')} "
+            f"(company_id={task.get('company_id')})"
+        )
+        app.logger.info(
+            f"   • Ref:            {task.get('object_reference_type')} "
+            f"{task.get('object_reference_id')}"
+        )
+        app.logger.info(f"   • Lead:           {task.get('lead_id')}")
+
+        # ⚙️ “Switch”: solo si es Llamada programada lanzamos el flow
+        task_type = (task.get("task_annotation_type") or "").strip()
+        if task_type == "Llamada programada":
+            app.logger.info("📞 Tipo 'Llamada programada' → disparando trigger_call_reminder_flow()")
+            trigger_call_reminder_flow(task)
+        else:
+            app.logger.info(
+                f"⏭️ No se dispara customer_journey: task_type='{task_type}' != 'Llamada programada'"
+            )
+
+        # Respuesta al caller
+        return jsonify({"ok": True, "task": task}), 200
+
+    except Exception as e:
+        app.logger.error(f"💥 Error en /task-info: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+
 # ----------------------------------------------------------------------------
 # Helper para convertir fechas a ISO8601 UTC
 # ----------------------------------------------------------------------------
@@ -390,107 +488,6 @@ def log_request_info():
     except Exception:
         pass
 
-from werkzeug.exceptions import BadRequest
-import json
-
-@app.route("/task-info", methods=["POST"])
-def task_info_webhook():
-    """
-    Webhook HTTPS + CORS
-    Body esperado: { "task_id": "<uuid-de-annotation_tasks>" }
-    Pero también aceptamos "id" o "annotation_task_id" por si viene de frontends antiguos.
-    """
-    try:
-        # 👀 Log raw body para depurar qué llega de axios
-        raw_body = request.get_data(as_text=True)
-        app.logger.info(f"📜 Raw body recibido en /task-info: {raw_body!r}")
-
-        try:
-            # Forzamos parseo de JSON (si no es JSON válido, lanzará BadRequest)
-            data = request.get_json(force=True)
-        except BadRequest as e:
-            app.logger.error(f"❌ JSON inválido en /task-info: {e}")
-            return (
-                jsonify(
-                    {
-                        "error": "JSON inválido",
-                        "details": str(e),
-                    }
-                ),
-                400,
-            )
-
-        if not isinstance(data, dict):
-            app.logger.error(f"❌ JSON no es un objeto: {data!r}")
-            return (
-                jsonify(
-                    {
-                        "error": "JSON debe ser un objeto",
-                        "details": str(data),
-                    }
-                ),
-                400,
-            )
-
-        # 🔑 Aceptamos varios nombres de campo por robustez
-        task_id = (
-            data.get("task_id")
-            or data.get("id")                    # por si el front envía { id: ... }
-            or data.get("annotation_task_id")    # alias opcional
-        )
-
-        app.logger.info(f"🔎 task_id resuelto desde JSON: {task_id}")
-
-        if not task_id:
-            return (
-                jsonify(
-                    {
-                        "error": "task_id es obligatorio",
-                        "details": "Envía 'task_id' o 'id' en el cuerpo JSON",
-                    }
-                ),
-                400,
-            )
-
-        app.logger.info(f"📥 Webhook /task-info recibido para task_id={task_id}")
-
-        # 🔄 Recuperar la tarea desde la BD
-        task = get_task_info(task_id)
-        if not task:
-            return jsonify({"error": "Tarea no encontrada"}), 404
-
-        # 👀 Logs bonitos
-        app.logger.info("📝 TASK INFO")
-        app.logger.info(f"   • ID tarea:       {task.get('task_id')}")
-        app.logger.info(f"   • Contenido:      {task.get('content')}")
-        app.logger.info(f"   • Due date:       {task.get('due_date')}")
-        app.logger.info(f"   • Estado:         {task.get('status')}")
-        app.logger.info(f"   • Prioridad:      {task.get('priority')}")
-        app.logger.info(
-            f"   • Asignado a:     {task.get('assignee_first_name')} "
-            f"{task.get('assignee_last_name')} <{task.get('assignee_email')}> "
-            f"(profile_id={task.get('user_assigned_id')})"
-        )
-        app.logger.info(
-            f"   • Compañía:       {task.get('company_name')} "
-            f"(company_id={task.get('company_id')})"
-        )
-        app.logger.info(
-            f"   • Ref:            {task.get('object_reference_type')} "
-            f"{task.get('object_reference_id')}"
-        )
-        app.logger.info(
-            f"   • Lead:           {task.get('lead_id')}"
-        )
-
-        # 🚀 Disparar el flow en el scheduler (ya con lead_id dentro de task)
-        trigger_call_reminder_flow(task)
-
-        return jsonify({"ok": True, "task": task}), 200
-
-    except Exception as e:
-        app.logger.error(f"💥 Error en /task-info: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
 
 # ----------------------------------------------------------------------------
 # Arranque HTTPS
