@@ -2393,8 +2393,13 @@ class WhatsAppService:
             p = PhoneUtils.strip_34(str(phone))
             return p if p.startswith("34") else f"34{p}"
 
+        def normalize_template_name(name: str) -> str:
+            """Elimina sufijos de versión como _v2, _v3, _v4, etc. del nombre del template"""
+            return re.sub(r'_v\d+$', '', name)
+        
         td = template_data or {}
         name = (template_name or "").strip()
+        name_normalized = normalize_template_name(name)  # Nombre sin sufijo de versión para comparaciones
         lang = td.get("language") or "es_ES"
         to_e164 = normalize_es(to_phone)
         cover_url = self._resolve_cover_url(company_id=company_id or td.get("company_id"))
@@ -2402,7 +2407,7 @@ class WhatsAppService:
         logger.info(template_data)
 
         logger.info(f"[BUILD_TEMPLATE] ===== INICIO BUILD TEMPLATE =====")
-        logger.info(f"[BUILD_TEMPLATE] template_name input: '{template_name}' | name (stripped): '{name}'")
+        logger.info(f"[BUILD_TEMPLATE] template_name input: '{template_name}' | name_normalized (stripped): '{name_normalized}'")
         logger.info(f"[BUILD_TEMPLATE] company_id: {company_id}")
         logger.info(f"[BUILD_TEMPLATE] company name: {td.get('company_name')}")             
         logger.info(f"[BUILD_TEMPLATE] to_phone: {to_phone} → to_e164: {to_e164}")
@@ -2661,7 +2666,7 @@ class WhatsAppService:
             logger.info(f"[BUILD_TEMPLATE] ===== PLANTILLAS CONOCIDAS (resto de tenants) =====")
 
             # agendar_llamada → SOLO body (botón URL estático en WABA, sin parámetros)
-            if name == "agendar_llamada":
+            if name_normalized == "agendar_llamada":
                 logger.info("[BUILD_TEMPLATE] Detectado template: agendar_llamada")
                 first_name = td.get("first_name") or ""
                 components.append({
@@ -2671,7 +2676,7 @@ class WhatsAppService:
                     ]
                 })
 
-            elif name == "agendar_llamada_inicial":
+            elif name_normalized == "agendar_llamada_inicial":
                 # Body: {{1}} = first_name
                 # Botón URL dinámico con {{1}} = deal_id
                 logger.info("[BUILD_TEMPLATE] Detectado template: agendar_llamada_inicial")
@@ -2694,7 +2699,7 @@ class WhatsAppService:
                 })
                 logger.info(f"[BUILD_TEMPLATE] ✅ agendar_llamada_inicial: first_name='{first_name}', deal_id='{deal_id}'")
 
-            elif name == "recordatorio_llamada_agendada":
+            elif name_normalized == "recordatorio_llamada_agendada":
                 # Body: {{1}} = first_name, {{2}} = responsible_name, {{3}} = company_name
                 logger.info("[BUILD_TEMPLATE] Detectado template: recordatorio_llamada_agendada")
                 first_name = td.get("first_name") or ""
@@ -2711,7 +2716,7 @@ class WhatsAppService:
                 })
                 logger.info(f"[BUILD_TEMPLATE] ✅ recordatorio_llamada_agendada: 3 params")
 
-            elif name == "retomar_contacto":
+            elif name_normalized == "retomar_contacto":
                 # Body: {{1}} = first_name, {{2}} = responsible_name
                 logger.info("[BUILD_TEMPLATE] Detectado template: retomar_contacto")
                 first_name = td.get("first_name") or ""
@@ -2726,7 +2731,7 @@ class WhatsAppService:
                 })
                 logger.info(f"[BUILD_TEMPLATE] ✅ retomar_contacto: 2 params")
 
-            elif name == "nuevo_numero":
+            elif name_normalized == "nuevo_numero":
                 # Body: {{1}} = first_name, {{2}} = responsible_name
                 # Button URL: {{1}} = deal_id
                 logger.info("[BUILD_TEMPLATE] Detectado template: nuevo_numero")
@@ -2751,7 +2756,7 @@ class WhatsAppService:
                 })
                 logger.info(f"[BUILD_TEMPLATE] ✅ nuevo_numero: first_name='{first_name}', responsible='{responsible_name}', deal_id='{deal_id}'")
 
-            elif name == "baja_comercial":
+            elif name_normalized == "baja_comercial":
                 # Body: {{1}} = first_name, {{2}} = responsible_name, {{3}} = company_name
                 # Button URL: {{1}} = deal_id
                 logger.info("[BUILD_TEMPLATE] Detectado template: baja_comercial")
@@ -2778,7 +2783,7 @@ class WhatsAppService:
                 })
                 logger.info(f"[BUILD_TEMPLATE] ✅ baja_comercial: 3 body params + button")
 
-            elif name == "followup_missed_calls":
+            elif name_normalized == "followup_missed_calls":
                 # Header: TEXT (sin parámetros, es estático)
                 # Body: {{1}} = first_name
                 # Button URL: {{1}} = deal_id
@@ -2802,7 +2807,7 @@ class WhatsAppService:
                 })
                 logger.info(f"[BUILD_TEMPLATE] ✅ followup_missed_calls: first_name='{first_name}', deal_id='{deal_id}'")
 
-            elif name == "recordatorio_pago_hoy":
+            elif name_normalized == "recordatorio_pago_hoy":
                 # Body: {{1}} = first_name, {{2}} = amount
                 # Button URL: {{1}} = order_id
                 logger.info("[BUILD_TEMPLATE] Detectado template: recordatorio_pago_hoy")
@@ -2827,10 +2832,10 @@ class WhatsAppService:
                 })
                 logger.info(f"[BUILD_TEMPLATE] ✅ recordatorio_pago_hoy: first_name='{first_name}', amount='{amount}', order_id='{order_id}'")
 
-            elif name == "recordatorio_pago_vencido_v2":
+            elif name_normalized == "recordatorio_pago_vencido":
                 # Body: {{1}} = first_name, {{2}} = days_overdue, {{3}} = amount
                 # Button URL: {{1}} = order_id
-                logger.info("[BUILD_TEMPLATE] Detectado template: recordatorio_pago_vencido_v2")
+                logger.info("[BUILD_TEMPLATE] Detectado template: recordatorio_pago_vencido")
                 first_name = td.get("first_name") or ""
                 days_overdue = td.get("days_overdue") or td.get("days") or ""
                 amount = td.get("amount") or td.get("payment_amount") or ""
@@ -2852,12 +2857,12 @@ class WhatsAppService:
                         {"type": "text", "text": order_id}
                     ]
                 })
-                logger.info(f"[BUILD_TEMPLATE] ✅ recordatorio_pago_vencido_v2: 3 body params + button")
+                logger.info(f"[BUILD_TEMPLATE] ✅ recordatorio_pago_vencido: 3 body params + button")
 
-            elif name == "recordatorio_pago_anticipado_v2":
+            elif name_normalized == "recordatorio_pago_anticipado":
                 # Body: {{1}} = first_name, {{2}} = amount
                 # Button URL: {{1}} = order_id
-                logger.info("[BUILD_TEMPLATE] Detectado template: recordatorio_pago_anticipado_v2")
+                logger.info("[BUILD_TEMPLATE] Detectado template: recordatorio_pago_anticipado")
                 first_name = td.get("first_name") or ""
                 amount = td.get("amount") or td.get("payment_amount") or ""
                 order_id = td.get("order_id") or td.get("payment_id") or ""
@@ -2877,9 +2882,9 @@ class WhatsAppService:
                         {"type": "text", "text": order_id}
                     ]
                 })
-                logger.info(f"[BUILD_TEMPLATE] ✅ recordatorio_pago_anticipado_v2: 2 body params + button")
+                logger.info(f"[BUILD_TEMPLATE] ✅ recordatorio_pago_anticipado: 2 body params + button")
 
-            elif name == "recordatorio_pago_vencido_sin_cta":
+            elif name_normalized == "recordatorio_pago_vencido_sin_cta":
                 # Body: {{1}} = first_name, {{2}} = days_overdue
                 # Button URL: {{1}} = order_id
                 logger.info("[BUILD_TEMPLATE] Detectado template: recordatorio_pago_vencido_sin_cta")
@@ -2904,7 +2909,7 @@ class WhatsAppService:
                 })
                 logger.info(f"[BUILD_TEMPLATE] ✅ recordatorio_pago_vencido_sin_cta: 2 body params + button")
 
-            elif name == "llamada_perdida":
+            elif name_normalized == "llamada_perdida":
                 # ⚠️ ATENCIÓN: Este template está en es_ES en WBM (no es_ES)
                 # Body: {{1}} = first_name
                 # Button URL (index 1 porque hay QUICK_REPLY antes): {{1}} = deal_id
@@ -2932,16 +2937,15 @@ class WhatsAppService:
                 })
                 logger.info(f"[BUILD_TEMPLATE] ✅ llamada_perdida (es_ES): first_name='{first_name}', deal_id='{deal_id}'")
 
-            elif name == "contacto_recordatorio_pago":
+            elif name_normalized == "contacto_recordatorio_pago":
                 # Esta plantilla NO tiene parámetros
                 logger.info("[BUILD_TEMPLATE] Detectado template: contacto_recordatorio_pago (sin parámetros)")
                 components = []
 
-            elif name == "recordatorio_proximo_pago":
+            elif name_normalized == "recordatorio_proximo_pago":
                 # Esta plantilla NO tiene parámetros
                 logger.info("[BUILD_TEMPLATE] Detectado template: recordatorio_proximo_pago (sin parámetros)")
                 components = []
-
             
         logger.info(f"[BUILD_TEMPLATE] Components finales: {components}")
         logger.info(f"[BUILD_TEMPLATE] ===== FIN BUILD TEMPLATE =====")
