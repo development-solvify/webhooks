@@ -3711,34 +3711,59 @@ class MessageService:
 
                 template_name_normalized = normalize_template_name_for_search(template_name)
 
+                # 🔧 OBTENER CREDENCIALES DEL TENANT CORRECTO
+                if company_id:
+                    creds = get_whatsapp_credentials_for_company(company_id)
+                    waba_id = creds.get('business_id') or creds.get('waba_id') or WABA_ID
+                    access_token = creds.get('access_token') or ACCESS_TOKEN
+                    logger.info(f"[SAVE_TEMPLATE] Usando WABA del tenant: {waba_id[:15]}...")
+                else:
+                    waba_id = WABA_ID
+                    access_token = ACCESS_TOKEN
+                    logger.info(f"[SAVE_TEMPLATE] Usando WABA global: {waba_id[:15]}...")
+
                 # Buscar AMBOS nombres (con y sin versión) en Meta API
-                cache_key = f"{template_name}"  # Mantener cache por nombre completo
+                cache_key = f"{company_id or 'global'}:{template_name}"  # Cache por tenant + template
                 body_text = _TEMPLATE_BODY_CACHE.get(cache_key)
 
                 if not body_text:
-                    url = f"https://graph.facebook.com/v22.0/{WABA_ID}/message_templates"
-                    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+                    url = f"https://graph.facebook.com/v22.0/{waba_id}/message_templates"
+                    headers = {"Authorization": f"Bearer {access_token}"}
                     params = {
                         "fields": "name,language,status,components",
                         "limit": 200
                     }
+                    logger.info(f"[SAVE_TEMPLATE] Consultando templates de Meta API para '{template_name}' (normalizado: '{template_name_normalized}')")
                     resp = requests.get(url, headers=headers, params=params, timeout=12)
                     if resp.status_code == 200:
                         data = resp.json() or {}
+                        templates_found = []
                         for t in (data.get("data") or []):
                             t_name = t.get("name") or ""
+                            templates_found.append(t_name)
                             # Buscar por nombre exacto O por nombre normalizado
                             if t_name == template_name or t_name == template_name_normalized:
+                                logger.info(f"[SAVE_TEMPLATE] ✅ Template encontrado en Meta: '{t_name}'")
                                 # Buscar componente BODY con 'text'
                                 for comp in (t.get("components") or []):
                                     if str(comp.get("type") or "").upper() == "BODY":
                                         body_text = comp.get("text") or ""
+                                        logger.info(f"[SAVE_TEMPLATE] Body text extraído: {body_text[:100]}...")
                                         break
                                 if body_text:  # Salir si ya encontramos el body
                                     break
+                        
+                        if not body_text:
+                            logger.warning(
+                                f"[SAVE_TEMPLATE] ⚠️ Template '{template_name}' (norm: '{template_name_normalized}') "
+                                f"NO encontrado. Templates disponibles: {templates_found[:10]}"
+                            )
+                        
                         # Cachear si lo conseguimos
                         if body_text:
                             _TEMPLATE_BODY_CACHE[cache_key] = body_text
+                    else:
+                        logger.error(f"[SAVE_TEMPLATE] ❌ Error consultando Meta API: {resp.status_code} - {resp.text[:200]}")
 
                 # 6) Sustituir {{n}} por body_params[n-1]
                 if body_text:
@@ -3749,15 +3774,16 @@ class MessageService:
                         except Exception:
                             return ""
                     rendered_text = re.sub(r"\{\{\s*(\d+)\s*\}\}", _repl, body_text).strip()
+                    logger.info(f"[SAVE_TEMPLATE] ✅ Texto renderizado: {rendered_text[:100]}...")
 
-            except Exception:
+            except Exception as e:
                 # No paramos el flujo si falla la consulta; haremos fallback.
-                pass
+                logger.exception(f"[SAVE_TEMPLATE] ❌ Error obteniendo template body: {e}")
 
             # 7) Fallback si no se pudo renderizar (mostramos algo útil)
             if not (isinstance(rendered_text, str) and rendered_text.strip()):
+                logger.warning(f"[SAVE_TEMPLATE] ⚠️ Fallback a parámetros: {body_params}")
                 rendered_text = "\n".join([x for x in body_params if x]).strip()
-
             # 8) PREVIEW EXACTO (BODY renderizado)
             print("\n" + "="*80)
             print("📨 MENSAJE DE PLANTILLA (PREVIEW CLIENTE)")
