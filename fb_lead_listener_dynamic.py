@@ -1177,25 +1177,53 @@ def create_portal_user(data, source, config=None):
     
     app.logger.debug(f"Company name final antes de DB lookup: '{company_name}'")
 
-    # 4️⃣ Lookup dinámico de company_id
+    # 4️⃣ Lookup dinámico de company_id y company_address_id
     company_id = None
+    company_address_id = None
+
     try:
         conn = get_supabase_connection()
         cur = conn.cursor()
-        cur.execute("SELECT id FROM companies WHERE LOWER(name) = LOWER(%s) LIMIT 1", (company_name,))
+
+        cur.execute("""
+            SELECT 
+                c.id AS company_id,
+                ca.id AS company_address_id
+            FROM companies c
+            LEFT JOIN LATERAL (
+                SELECT 
+                    a.id,
+                    a.created_at
+                FROM company_addresses a
+                WHERE a.company_id = c.id
+                  AND a.is_deleted = FALSE
+                ORDER BY a.created_at ASC
+                LIMIT 1
+            ) ca ON TRUE
+            WHERE c.is_deleted = FALSE
+              AND LOWER(c.name) = LOWER(%s)
+            LIMIT 1;
+        """, (company_name,))
+
         row = cur.fetchone()
-        company_id = str(row[0]) if row else None
-        if company_id:
+
+        if row:
+            company_id = str(row[0]) if row[0] is not None else None
+            company_address_id = str(row[1]) if row[1] is not None else None
+
             app.logger.debug(f"Company ID encontrado para '{company_name}': {company_id}")
+            app.logger.debug(f"Company Address ID encontrado para '{company_name}': {company_address_id}")
         else:
-            app.logger.warning(f"No se encontró company_id para '{company_name}', usando fallback estático")
+            app.logger.warning(f"No se encontró company para '{company_name}'")
+
     except Exception as e:
-        app.logger.error(f"Error buscando company_id para '{company_name}': {e}")
+        app.logger.error(f"Error buscando company_id / company_address_id para '{company_name}': {e}")
+
     finally:
         try:
             cur.close()
             conn.close()
-        except:
+        except Exception:
             pass
 
     # 4.5️⃣ Verificar si el cliente (número) ya existe para ESTE company_id
@@ -1264,6 +1292,7 @@ def create_portal_user(data, source, config=None):
         'campaign':   data.get('campaign_name',''),
         'lead_gen_id':data.get('lead_gen_id') or data.get('leadgen_id',''),
         'company_id': company_id or FALLBACK_COMPANY_ID,
+        'company_address_id': company_address_id or FALLBACK_COMPANY_ID
     }
     app.logger.debug(f"Payload PortalUser para {company_name}: {payload}")
 
@@ -1722,7 +1751,7 @@ def receive_b2b_lead():
 
     # 4) Fallback mínimo para críticos si no vienen en el mapping
     critical_fallbacks = {
-        'nombre_y_apellidos': ['Nombre', 'Full Name', 'full_name', 'fullname', 'name', 'Nombre '],
+        'nombre_y_apellidos': ['Nombre', 'Full Name', 'fullname', 'nombre', 'nombre_completo'],
         'correo_electrónico': ['Mail', 'Email', 'email', 'correo', 'e-mail'],
         'número_de_teléfono': ['Teléfono', 'Phone Number', 'phone_number', 'telefono', 'teléfono', 'tel', 'mobile'],
     }
