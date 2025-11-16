@@ -344,27 +344,44 @@ def task_info_webhook():
 # ----------------------------------------------------------------------------
 # Arranque HTTPS
 # ----------------------------------------------------------------------------
-def get_webhook_server_config():
+def get_task_engine_server_config():
     """
-    Lee [WEBHOOK] de scripts.conf si existe.
+    Lee la sección [TASK_ENGINE] de scripts.conf para configurar
+    el servidor de este microservicio, SIN tocar la sección [WEBHOOK].
+
+    Claves esperadas:
+      [TASK_ENGINE]
+      TASK_ENGINE_HOST = 0.0.0.0
+      TASK_ENGINE_PORT = 5105
+      TASK_ENGINE_HTTP_PORT = 5104   (opcional, por si quieres usarlo)
+      SSL_CERT_PATH = /ruta/cert.pem
+      SSL_KEY_PATH  = /ruta/key.pem
     """
     host = "0.0.0.0"
     port = 5105
+    http_port = None  # por si en el futuro quieres exponer HTTP también
     ssl_cert = None
     ssl_key = None
 
-    if config_supabase.has_section("WEBHOOK"):
-        w = config_supabase["WEBHOOK"]
-        host = w.get("WEBHOOK_HOST", host)
-        port = int(w.get("WEBHOOK_PORT", port))
-        ssl_cert = w.get("SSL_CERT_PATH", ssl_cert)
-        ssl_key = w.get("SSL_KEY_PATH", ssl_key)
+    if config_supabase.has_section("TASK_ENGINE"):
+        t = config_supabase["TASK_ENGINE"]
+        host = t.get("TASK_ENGINE_HOST", host)
+        port = int(t.get("TASK_ENGINE_PORT", port))
+        http_port = t.get("TASK_ENGINE_HTTP_PORT", None)
+        if http_port is not None:
+            try:
+                http_port = int(http_port)
+            except ValueError:
+                http_port = None
 
-    return host, port, ssl_cert, ssl_key
+        ssl_cert = t.get("SSL_CERT_PATH", ssl_cert)
+        ssl_key = t.get("SSL_KEY_PATH", ssl_key)
+
+    return host, port, http_port, ssl_cert, ssl_key
 
 
 if __name__ == "__main__":
-    host, port, ssl_cert, ssl_key = get_webhook_server_config()
+    host, port, http_port, ssl_cert, ssl_key = get_task_engine_server_config()
 
     ssl_context = None
     if ssl_cert and ssl_key:
