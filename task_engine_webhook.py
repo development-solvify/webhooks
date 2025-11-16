@@ -424,55 +424,75 @@ def to_utc_iso_z(dt):
         iso = iso[:-6] + "Z"
     return iso
 
+def trigger_call_reminder_flow(task: dict) -> None:
+    """
+    Dispara el flow 'recordatorio_llamada' al scheduler/customer_journey.
 
-def trigger_call_reminder_flow(task: dict):
+    IMPORTANTE:
+      - Enviamos SIEMPRE el lead_id como "id" en el payload.
+      - NO usamos assigned_to_id para nada (solo para logs informativos).
     """
-    Lanza el flow 'recordatorio_llamada' en el scheduler/customer_journey
-    usando:
-      - id         = assigned_to_id
-      - schedule_at = due_date (ISO Z)
-    """
+    if not task:
+        app.logger.error("❌ trigger_call_reminder_flow llamado sin task válida")
+        return
+
     if requests is None:
         app.logger.error("❌ requests no disponible, no puedo llamar al scheduler.")
-        return False, "requests_not_available"
+        return
 
-    scheduler_url, api_key = get_scheduler_config()
+    # 👇 Aquí ya solo nos importa el LEAD_ID
+    lead_id = task.get("lead_id") or task.get("object_reference_id")
 
-    assigned_id = task.get("assigned_to_id")
-    if not assigned_id:
-        app.logger.warning("⚠️ Task sin assigned_to_id, no se lanza flow.")
-        return False, "no_assigned_to_id"
+    if not lead_id:
+        app.logger.error(
+            "❌ No hay lead_id (ni object_reference_id como fallback), no se lanza flow."
+        )
+        return
 
-    schedule_at = to_utc_iso_z(task.get("due_date"))
-    if not schedule_at:
-        app.logger.warning("⚠️ Task sin due_date, no se lanza flow.")
-        return False, "no_due_date"
+    # Due date → schedule_at
+    due_date = task.get("due_date")
+    if isinstance(due_date, datetime):
+        # Normalizamos a UTC + formato Z
+        if due_date.tzinfo is None:
+            due_dt = due_date.replace(tzinfo=timezone.utc)
+        else:
+            due_dt = due_date.astimezone(timezone.utc)
+    else:
+        # Si no hay due_date o no es datetime, fallback a ahora + 5 min
+        from datetime import timedelta
+        due_dt = datetime.now(timezone.utc) + timedelta(minutes=5)
+
+    due_dt = due_dt.replace(microsecond=0)
+    schedule_at = due_dt.isoformat().replace("+00:00", "Z")
 
     payload = {
-        "id": str(assigned_id),
+        "id": str(lead_id),                  # 👈 AHORA SIEMPRE EL LEAD_ID
         "flow_name": "recordatorio_llamada",
         "schedule_at": schedule_at,
     }
 
+    # Usa tu SCHEDULER_URL ya configurada (en tu código ya la tienes)
+    url = SCHEDULER_URL
     headers = {
         "Content-Type": "application/json",
     }
-    if api_key:
-        headers["X-API-Key"] = api_key
-    else:
-        # Si no hay API key, seguimos pero avisando
-        app.logger.warning("⚠️ SCHEDULER_API_KEY no configurada. Enviando sin X-API-Key.")
+    if SCHEDULER_API_KEY:
+        headers["X-API-Key"] = SCHEDULER_API_KEY
 
-    app.logger.info("🚀 Lanzando flow de recordatorio de llamada en scheduler")
-    app.logger.debug(f"POST {scheduler_url} payload={payload} headers={headers}")
+    import json
+    app.logger.info("🌊 Llamando a Customer Journey (recordatorio_llamada)")
+    app.logger.info(f"   • lead_id      : {lead_id}")
+    app.logger.info(f"   • schedule_at  : {schedule_at}")
+    app.logger.info(f"📦 Payload JSON real: {json.dumps(payload)}")
 
     try:
-        resp = requests.post(scheduler_url, json=payload, headers=headers, timeout=10)
-        app.logger.info(f"✅ Respuesta scheduler: {resp.status_code} {resp.text[:500]}")
-        return resp.ok, resp.text
+        resp = requests.post(url, json=payload, headers=headers, timeout=10)
+        app.logger.info(f"📡 Respuesta scheduler: {resp.status_code} - {resp.text}")
+        resp.raise_for_status()
     except Exception as e:
-        app.logger.error(f"❌ Error llamando al scheduler: {e}", exc_info=True)
-        return False, str(e)
+        app.logger.error(f"❌ Error llamando a customer_journey: {e}")
+
+
 
 # ----------------------------------------------------------------------------
 # Flask + CORS
