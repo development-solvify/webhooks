@@ -3690,7 +3690,15 @@ class MessageService:
                 except NameError:
                     _TEMPLATE_BODY_CACHE = {}
 
-                cache_key = f"{template_name}"
+                import re
+                def normalize_template_name_for_search(name: str) -> str:
+                    """Elimina sufijos de versión para buscar en Meta API"""
+                    return re.sub(r'_v\d+$', '', name)
+
+                template_name_normalized = normalize_template_name_for_search(template_name)
+
+                # Buscar AMBOS nombres (con y sin versión) en Meta API
+                cache_key = f"{template_name}"  # Mantener cache por nombre completo
                 body_text = _TEMPLATE_BODY_CACHE.get(cache_key)
 
                 if not body_text:
@@ -3704,16 +3712,19 @@ class MessageService:
                     if resp.status_code == 200:
                         data = resp.json() or {}
                         for t in (data.get("data") or []):
-                            if (t.get("name") or "") == template_name:
+                            t_name = t.get("name") or ""
+                            # Buscar por nombre exacto O por nombre normalizado
+                            if t_name == template_name or t_name == template_name_normalized:
                                 # Buscar componente BODY con 'text'
                                 for comp in (t.get("components") or []):
                                     if str(comp.get("type") or "").upper() == "BODY":
                                         body_text = comp.get("text") or ""
                                         break
-                                break
-                    # Cachear si lo conseguimos
-                    if body_text:
-                        _TEMPLATE_BODY_CACHE[cache_key] = body_text
+                                if body_text:  # Salir si ya encontramos el body
+                                    break
+                        # Cachear si lo conseguimos
+                        if body_text:
+                            _TEMPLATE_BODY_CACHE[cache_key] = body_text
 
                 # 6) Sustituir {{n}} por body_params[n-1]
                 if body_text:
