@@ -207,32 +207,20 @@ def build_schedule_at(due_date: Optional[datetime]) -> str:
     dt = dt.replace(microsecond=0)
     return dt.isoformat().replace("+00:00", "Z")
 
-
 def trigger_customer_journey(task: dict) -> None:
-    """
-    Llama a:
-    POST https://scheduler.solvify.es:5100/api/flow/triggerFlow
-
-    Body:
-    {
-        "id": <user_assigned_id>,
-        "flow_name": "recordatorio_llamada",
-        "schedule_at": <due_date en UTC ISO>
-    }
-    """
     if not task:
-        app.logger.error("❌ trigger_customer_journey llamado sin task válida")
+        logger.error("❌ trigger_customer_journey llamado sin task válida")
         return
 
     user_id = task.get("user_assigned_id")
     due_date = task.get("due_date")
 
     if not user_id:
-        app.logger.warning("⚠️ Tarea sin user_assigned_id, no se lanza customer_journey")
+        logger.warning("⚠️ Tarea sin user_assigned_id, no se lanza customer_journey")
         return
 
     if due_date and not isinstance(due_date, datetime):
-        app.logger.warning(f"⚠️ due_date no es datetime: {due_date!r}")
+        logger.warning(f"⚠️ due_date no es datetime: {due_date!r}")
         due_dt = None
     else:
         due_dt = due_date
@@ -245,24 +233,22 @@ def trigger_customer_journey(task: dict) -> None:
         "schedule_at": schedule_at,
     }
 
-    scheduler_url, scheduler_api_key = get_scheduler_config()
-    url = scheduler_url.rstrip("/") if scheduler_url.endswith("/api/flow/triggerFlow") else scheduler_url.rstrip("/") + "/api/flow/triggerFlow"
+    url = SCHEDULER_URL.rstrip("/") + "/api/flow/triggerFlow"
     headers = {
         "Content-Type": "application/json",
+        "X-API-Key": SCHEDULER_API_KEY,
     }
-    if scheduler_api_key:
-        headers["X-API-Key"] = scheduler_api_key
 
-    app.logger.info(f"🌊 Llamando a Customer Journey: POST {url}")
-    app.logger.info(f"📦 Payload: {payload}")
+    import json
+    logger.info(f"🌊 Llamando a Customer Journey: POST {url}")
+    logger.info(f"📦 Payload JSON real: {json.dumps(payload)}")
 
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=10)
-        app.logger.info(f"📡 Respuesta scheduler: {resp.status_code} - {resp.text}")
+        logger.info(f"📡 Respuesta scheduler: {resp.status_code} - {resp.text}")
         resp.raise_for_status()
     except Exception as e:
-        app.logger.error(f"❌ Error llamando a customer_journey: {e}")
-
+        logger.error(f"❌ Error llamando a customer_journey: {e}")
 
 # ----------------------------------------------------------------------------
 # Config Scheduler / Customer Journey
