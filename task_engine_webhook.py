@@ -74,55 +74,193 @@ def get_db_connection():
         raise
 
 
-def get_task_info(task_id: str):
+def get_task_info(task_id: str) -> Optional[dict]:
     """
-    Ajusta la SQL a tu esquema real de tareas.
-    Suposición:
-      - Tabla: public.tasks
-      - Campos: id, due_date, description, assigned_to_id
-      - Join con profiles (asignado)
+    Obtiene info de la tarea a partir de annotation_tasks.id
+    - due_date
+    - content
+    - user_assigned (profile)
+    - compañía (si se puede resolver vía deals/companies)
     """
-    sql = """
-        SELECT
-            t.id,
-            t.due_date,
-            t.description,
-            t.assigned_to_id,
-            p.first_name,
-            p.last_name,
-            p.email
-        FROM public.tasks t
-        LEFT JOIN public.profiles p
-          ON p.id = t.assigned_to_id
-        WHERE t.id = %s
-        LIMIT 1;
-    """
-
-    conn = None
+    conn = create_db_connection()
     try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute(sql, (task_id,))
-            row = cur.fetchone()
+        cur = conn.cursor()
+        sql = """
+        SELECT
+            at.id                             AS task_id,
+            at.content                        AS task_content,
+            at.due_date                       AS task_due_date,
+            at.status                         AS task_status,
+            at.priority                       AS task_priority,
+            at.user_assigned_id               AS user_assigned_id,
+            at.annotation_type                AS task_annotation_type,
+            at.is_completed                   AS task_is_completed,
+
+            a.annotation_type                 AS parent_annotation_type,
+            a.object_reference_type           AS object_reference_type,
+            a.object_reference_id             AS object_reference_id,
+
+            p.first_name                      AS assignee_first_name,
+            p.last_name                       AS assignee_last_name,
+            p.email                           AS assignee_email,
+
+            d.id                              AS deal_id,
+            d.company_id                      AS company_id,
+            c.name                            AS company_name
+        FROM annotation_tasks at
+        LEFT JOIN annotations a
+               ON a.id = at.annotation_id
+        LEFT JOIN profiles p
+               ON p.id = at.user_assigned_id
+        LEFT JOIN LATERAL (
+            SELECT d.id, d.company_id
+            FROM deals d
+            WHERE d.is_deleted = false
+              AND (
+                    (a.object_reference_type = 'deals' AND a.object_reference_id = d.id)
+                 OR (a.object_reference_type = 'leads' AND a.object_reference_id = d.lead_id)
+              )
+            ORDER BY d.created_at DESC
+            LIMIT 1
+        ) d ON TRUE
+        LEFT JOIN companies c
+               ON c.id = d.company_id
+        WHERE at.id = %s
+          AND at.is_deleted = false
+        """
+        cur.execute(sql, (task_id,))
+        row = cur.fetchone()
+        cur.close()
+
         if not row:
+            logger.warning(f"🔍 No se encontró annotation_task con id={task_id}")
             return None
 
-        task = {
-            "id": row[0],
-            "due_date": row[1],         # datetime / date
-            "description": row[2],
-            "assigned_to_id": row[3],
-            "assigned_first_name": row[4],
-            "assigned_last_name": row[5],
-            "assigned_email": row[6],
+        # Mapeo por índice (orden del SELECT)
+        (
+            task_id,
+            task_content,
+            task_due_date,
+            task_status,
+            task_priority,
+            user_assigned_id,
+            task_annotation_type,
+            task_is_completed,
+            parent_annotation_type,
+            object_reference_type,
+            object_reference_id,
+            assignee_first_name,
+            assignee_last_name,
+            assignee_email,
+            deal_id,
+            company_id,
+            company_name,
+        ) = row
+
+        return {
+            "task_id": str(task_id) if task_id else None,
+            "content": task_content,
+            "due_date": task_due_date,
+            "status": task_status,
+            "priority": task_priority,
+            "user_assigned_id": str(user_assigned_id) if user_assigned_id else None,
+            "task_annotation_type": task_annotation_type,
+            "task_is_completed": task_is_completed,
+            "parent_annotation_type": parent_annotation_type,
+            "object_reference_type": object_reference_type,
+            "object_reference_id": str(object_reference_id) if object_reference_id else None,
+            "assignee_first_name": assignee_first_name,
+            "assignee_last_name": assignee_last_name,
+            "assignee_email": assignee_email,
+            "deal_id": str(deal_id) if deal_id else None,
+            "company_id": str(company_id) if company_id else None,
+            "company_name": company_name,
         }
-        return task
-    except Exception as e:
-        app.logger.error(f"❌ Error obteniendo task {task_id}: {e}", exc_info=True)
-        raise
+
     finally:
-        if conn is not None:
+        try:
             conn.close()
+        except Exception:
+            pass
+
+
+
+import requests
+from datetime import datetime, timezone
+
+def build_schedule_at(due_date: Optional[datetime]) -> str:
+    """
+    Convierte due_date (naive o con tz) a ISO8601 UTC con 'Z'.
+    Si no hay due_date, usa ahora + 5 minutos.
+    """
+    from datetime import timedelta
+
+    if due_date is None:
+        dt = datetime.now(timezone.utc) + timedelta(minutes=5)
+    else:
+        if due_date.tzinfo is None:
+            # asumimos que está en UTC si viene naive
+            dt = due_date.replace(tzinfo=timezone.utc)
+        else:
+            dt = due_date.astimezone(timezone.utc)
+
+    dt = dt.replace(microsecond=0)
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def trigger_customer_journey(task: dict) -> None:
+    """
+    Llama a:
+    POST https://scheduler.solvify.es:5100/api/flow/triggerFlow
+
+    Body:
+    {
+        "id": <user_assigned_id>,
+        "flow_name": "recordatorio_llamada",
+        "schedule_at": <due_date en UTC ISO>
+    }
+    """
+    if not task:
+        logger.error("❌ trigger_customer_journey llamado sin task válida")
+        return
+
+    user_id = task.get("user_assigned_id")
+    due_date = task.get("due_date")
+
+    if not user_id:
+        logger.warning("⚠️ Tarea sin user_assigned_id, no se lanza customer_journey")
+        return
+
+    if due_date and not isinstance(due_date, datetime):
+        logger.warning(f"⚠️ due_date no es datetime: {due_date!r}")
+        due_dt = None
+    else:
+        due_dt = due_date
+
+    schedule_at = build_schedule_at(due_dt)
+
+    payload = {
+        "id": user_id,
+        "flow_name": "recordatorio_llamada",
+        "schedule_at": schedule_at,
+    }
+
+    url = SCHEDULER_URL.rstrip("/") + "/api/flow/triggerFlow"
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-Key": SCHEDULER_API_KEY,
+    }
+
+    logger.info(f"🌊 Llamando a Customer Journey: POST {url}")
+    logger.info(f"📦 Payload: {payload}")
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=10)
+        logger.info(f"📡 Respuesta scheduler: {resp.status_code} - {resp.text}")
+        resp.raise_for_status()
+    except Exception as e:
+        logger.error(f"❌ Error llamando a customer_journey: {e}")
+
 
 # ----------------------------------------------------------------------------
 # Config Scheduler / Customer Journey
@@ -237,109 +375,58 @@ def log_request_info():
     except Exception:
         pass
 
-
-@app.route("/task-info", methods=["POST", "GET"])
+@app.route("/task-info", methods=["POST"])
 def task_info_webhook():
     """
-    Webhook HTTPS/CORS que recibe un task_id y:
-      1) Muestra info de la tarea por pantalla (logs)
-      2) Devuelve la info en JSON
-      3) Lanza el flow 'recordatorio_llamada' en scheduler con:
-         - id = assigned_to_id
-         - schedule_at = due_date
+    Webhook HTTPS + CORS
+    Body esperado: { "task_id": "<uuid-de-annotation_tasks>" }
     """
     try:
-        # --- Obtener task_id de querystring o body JSON ---
-        task_id = request.args.get("task_id")
-        if not task_id:
-            data = request.get_json(silent=True) or {}
-            task_id = data.get("task_id")
+        data = request.get_json(silent=True) or {}
+        task_id = data.get("task_id")
 
         if not task_id:
-            return (
-                jsonify(
-                    {
-                        "status": "error",
-                        "message": "task_id es obligatorio (query param o JSON).",
-                    }
-                ),
-                400,
-            )
+            return jsonify({"error": "task_id es obligatorio"}), 400
 
-        app.logger.info(f"🔔 Webhook recibido para task_id={task_id}")
+        logger.info(f"📥 Webhook /task-info recibido para task_id={task_id}")
 
-        # --- Consultar la tarea ---
         task = get_task_info(task_id)
         if not task:
-            app.logger.warning(f"⚠️ Task {task_id} no encontrada")
-            return (
-                jsonify(
-                    {
-                        "status": "not_found",
-                        "message": f"Tarea {task_id} no encontrada",
-                    }
-                ),
-                404,
-            )
+            return jsonify({"error": "Tarea no encontrada"}), 404
 
-        assigned_name = (
-            f"{task['assigned_first_name'] or ''} {task['assigned_last_name'] or ''}"
-        ).strip() or "Sin asignar"
-
-        # --- Log bonito en consola ---
-        app.logger.info(
-            "📝 TASK INFO\n"
-            f"   • ID          : {task['id']}\n"
-            f"   • Due date    : {task['due_date']}\n"
-            f"   • Descripción : {task['description']}\n"
-            f"   • Asignado a  : {assigned_name} <{task['assigned_email']}>"
+        # 👀 Log legible
+        logger.info("📝 TASK INFO")
+        logger.info(f"   • ID tarea:       {task.get('task_id')}")
+        logger.info(f"   • Contenido:      {task.get('content')}")
+        logger.info(f"   • Due date:       {task.get('due_date')}")
+        logger.info(f"   • Estado:         {task.get('status')}")
+        logger.info(f"   • Prioridad:      {task.get('priority')}")
+        logger.info(
+            f"   • Asignado a:     {task.get('assignee_first_name')} "
+            f"{task.get('assignee_last_name')} <{task.get('assignee_email')}> "
+            f"(profile_id={task.get('user_assigned_id')})"
+        )
+        logger.info(
+            f"   • Compañía:       {task.get('company_name')} "
+            f"(company_id={task.get('company_id')})"
+        )
+        logger.info(
+            f"   • Ref:            {task.get('object_reference_type')} "
+            f"{task.get('object_reference_id')}"
         )
 
-        # --- Lanzar flow en scheduler ---
-        ok, scheduler_response = trigger_call_reminder_flow(task)
-        app.logger.info(f"📡 Resultado trigger flow: ok={ok} resp={scheduler_response}")
+        # 🚀 Dispara el customer journey
+        trigger_customer_journey(task)
 
-        # --- Respuesta JSON ---
-        return (
-            jsonify(
-                {
-                    "status": "ok",
-                    "task": {
-                        "id": str(task["id"]),
-                        "due_date": task["due_date"].isoformat()
-                        if hasattr(task["due_date"], "isoformat")
-                        else task["due_date"],
-                        "description": task["description"],
-                        "assigned": {
-                            "id": str(task["assigned_to_id"])
-                            if task["assigned_to_id"]
-                            else None,
-                            "first_name": task["assigned_first_name"],
-                            "last_name": task["assigned_last_name"],
-                            "email": task["assigned_email"],
-                            "full_name": assigned_name,
-                        },
-                    },
-                    "flow_trigger": {
-                        "ok": ok,
-                        "raw_response": scheduler_response,
-                    },
-                }
-            ),
-            200,
-        )
+        # Devolvemos la info básica al caller (por si quieres usarla aguas arriba)
+        return jsonify({
+            "ok": True,
+            "task": task
+        }), 200
 
     except Exception as e:
-        app.logger.error(f"💥 Error en /task-info: {e}", exc_info=True)
-        return (
-            jsonify(
-                {
-                    "status": "error",
-                    "message": "Error interno",
-                }
-            ),
-            500,
-        )
+        logger.error(f"💥 Error en /task-info: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
 
 # ----------------------------------------------------------------------------
 # Arranque HTTPS
