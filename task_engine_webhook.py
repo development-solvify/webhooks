@@ -390,26 +390,76 @@ def log_request_info():
     except Exception:
         pass
 
+from werkzeug.exceptions import BadRequest
+import json
+
 @app.route("/task-info", methods=["POST"])
 def task_info_webhook():
     """
     Webhook HTTPS + CORS
     Body esperado: { "task_id": "<uuid-de-annotation_tasks>" }
+    Pero también aceptamos "id" o "annotation_task_id" por si viene de frontends antiguos.
     """
     try:
-        data = request.get_json(silent=True) or {}
-        task_id = data.get("task_id")
+        # 👀 Log raw body para depurar qué llega de axios
+        raw_body = request.get_data(as_text=True)
+        app.logger.info(f"📜 Raw body recibido en /task-info: {raw_body!r}")
+
+        try:
+            # Forzamos parseo de JSON (si no es JSON válido, lanzará BadRequest)
+            data = request.get_json(force=True)
+        except BadRequest as e:
+            app.logger.error(f"❌ JSON inválido en /task-info: {e}")
+            return (
+                jsonify(
+                    {
+                        "error": "JSON inválido",
+                        "details": str(e),
+                    }
+                ),
+                400,
+            )
+
+        if not isinstance(data, dict):
+            app.logger.error(f"❌ JSON no es un objeto: {data!r}")
+            return (
+                jsonify(
+                    {
+                        "error": "JSON debe ser un objeto",
+                        "details": str(data),
+                    }
+                ),
+                400,
+            )
+
+        # 🔑 Aceptamos varios nombres de campo por robustez
+        task_id = (
+            data.get("task_id")
+            or data.get("id")                    # por si el front envía { id: ... }
+            or data.get("annotation_task_id")    # alias opcional
+        )
+
+        app.logger.info(f"🔎 task_id resuelto desde JSON: {task_id}")
 
         if not task_id:
-            return jsonify({"error": "task_id es obligatorio"}), 400
+            return (
+                jsonify(
+                    {
+                        "error": "task_id es obligatorio",
+                        "details": "Envía 'task_id' o 'id' en el cuerpo JSON",
+                    }
+                ),
+                400,
+            )
 
         app.logger.info(f"📥 Webhook /task-info recibido para task_id={task_id}")
 
+        # 🔄 Recuperar la tarea desde la BD
         task = get_task_info(task_id)
         if not task:
             return jsonify({"error": "Tarea no encontrada"}), 404
 
-        # 👀 Log legible
+        # 👀 Logs bonitos
         app.logger.info("📝 TASK INFO")
         app.logger.info(f"   • ID tarea:       {task.get('task_id')}")
         app.logger.info(f"   • Contenido:      {task.get('content')}")
@@ -429,15 +479,14 @@ def task_info_webhook():
             f"   • Ref:            {task.get('object_reference_type')} "
             f"{task.get('object_reference_id')}"
         )
+        app.logger.info(
+            f"   • Lead:           {task.get('lead_id')}"
+        )
 
-        # 🚀 Dispara el customer journey
-        trigger_customer_journey(task)
+        # 🚀 Disparar el flow en el scheduler (ya con lead_id dentro de task)
+        trigger_call_reminder_flow(task)
 
-        # Devolvemos la info básica al caller (por si quieres usarla aguas arriba)
-        return jsonify({
-            "ok": True,
-            "task": task
-        }), 200
+        return jsonify({"ok": True, "task": task}), 200
 
     except Exception as e:
         app.logger.error(f"💥 Error en /task-info: {e}", exc_info=True)
