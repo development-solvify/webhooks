@@ -137,14 +137,21 @@ def get_task_info(task_id: str) -> Optional[dict]:
 
             d.id                              AS deal_id,
             d.company_id                      AS company_id,
-            c.name                            AS company_name
+            c.name                            AS company_name,
+
+            -- 👇 lead_id resuelto según el tipo de objeto
+            CASE
+                WHEN a.object_reference_type = 'leads' THEN a.object_reference_id
+                WHEN a.object_reference_type = 'deals' THEN d.lead_id
+                ELSE NULL
+            END                               AS lead_id
         FROM annotation_tasks at
         LEFT JOIN annotations a
                ON a.id = at.annotation_id
         LEFT JOIN profiles p
                ON p.id = at.user_assigned_id
         LEFT JOIN LATERAL (
-            SELECT d.id, d.company_id
+            SELECT d.id, d.company_id, d.lead_id
             FROM deals d
             WHERE d.is_deleted = false
               AND (
@@ -167,7 +174,6 @@ def get_task_info(task_id: str) -> Optional[dict]:
             app.logger.warning(f"🔍 No se encontró annotation_task con id={task_id}")
             return None
 
-        # Mapeo por índice (orden del SELECT)
         (
             task_id,
             task_content,
@@ -186,6 +192,7 @@ def get_task_info(task_id: str) -> Optional[dict]:
             deal_id,
             company_id,
             company_name,
+            lead_id,              # 👈 nuevo campo
         ) = row
 
         return {
@@ -206,6 +213,7 @@ def get_task_info(task_id: str) -> Optional[dict]:
             "deal_id": str(deal_id) if deal_id else None,
             "company_id": str(company_id) if company_id else None,
             "company_name": company_name,
+            "lead_id": str(lead_id) if lead_id else None,   # 👈 lo devolvemos
         }
 
     finally:
