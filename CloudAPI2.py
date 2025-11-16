@@ -2427,7 +2427,7 @@ class WhatsAppService:
         if not waba_id or not access_token:
             logger.warning("[BUILD_TEMPLATE] ⚠️ waba_id/access_token no definidos en template_data; usando DEFAULT (puede fallar)")
         else:
-            logger.info(f"[BUILD_TEMPLATE] Usando waba_id={waba_id} para leer definición")
+                    logger.info(f"[BUILD_TEMPLATE] Usando waba_id={waba_id} para leer definición")
 
         # ---------- Leer definición real de la plantilla en el WABA correcto ----------
         header_format = None         # "IMAGE" | "TEXT" | "VIDEO" | "DOCUMENT" | None
@@ -2435,6 +2435,12 @@ class WhatsAppService:
         body_placeholder_count = 0
         try:
             if requests and waba_id and access_token:
+                # Normalizar nombre para buscar (sin _vN)
+                def normalize_template_name_for_search(tname: str) -> str:
+                    return re.sub(r'_v\d+$', '', tname)
+                
+                name_normalized = normalize_template_name_for_search(name)
+                logger.info(f"[BUILD_TEMPLATE] Buscando template: '{name}' o '{name_normalized}'")
                 
                 resp = requests.get(
                     f"https://graph.facebook.com/v22.0/{waba_id}/message_templates",
@@ -2445,7 +2451,11 @@ class WhatsAppService:
                 if resp.status_code == 200:
                     data = resp.json() or {}
                     for t in (data.get("data") or []):
-                        if t.get("name") == name and t.get("language") == lang:
+                        t_name = t.get("name") or ""
+                        t_lang = t.get("language") or ""
+                        # Buscar por nombre exacto O normalizado, mismo idioma
+                        if (t_name == name or t_name == name_normalized) and t_lang == lang:
+                            logger.info(f"[BUILD_TEMPLATE] ✅ Template encontrado en Meta: '{t_name}' ({t_lang})")
                             for c in (t.get("components") or []):
                                 ctype = (c.get("type") or "").upper()
                                 if ctype == "HEADER":
@@ -2454,10 +2464,13 @@ class WhatsAppService:
                                     body_text_def = c.get("text") or ""
                                     body_placeholder_count = len(re.findall(r"\{\{\s*(\d+)\s*\}\}", body_text_def))
                             break
-                logger.info(f"[BUILD_TEMPLATE] Definición WABA → header_format={header_format} | body_placeholders={body_placeholder_count}")
-        except Exception:
-            logger.warning("[BUILD_TEMPLATE] ⚠️ No se pudo leer definición WABA; seguimos defensivo")
-
+                    
+                    if not body_text_def:
+                        logger.warning(f"[BUILD_TEMPLATE] ⚠️ Template '{name}' NO encontrado en Meta API")
+                    
+                    logger.info(f"[BUILD_TEMPLATE] Definición WABA → header_format={header_format} | body_placeholders={body_placeholder_count}")
+        except Exception as e:
+            logger.warning(f"[BUILD_TEMPLATE] ⚠️ Error leyendo definición WABA: {e}")
         # ---------- Añadir header IMAGE si la plantilla lo requiere ----------
         components = []
         try:
@@ -2575,6 +2588,7 @@ class WhatsAppService:
             }
 
             logger.info(f"[BUILD_TEMPLATE] Buscando prefijo para template: '{name}'")
+            logger.info(f"[BUILD_TEMPLATE] name_normalized usado: '{name_normalized}' (si aplica)")
             body_param_count = 0
             matched_prefix = None
             
