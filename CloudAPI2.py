@@ -41,10 +41,7 @@ import os
 
 # ================== ETD / ELIMINAMOS TU DEUDA ==================
 ETD_COMPANY_IDS = {
-    "8bbb5ec8-6b9b-4397-975f-b80f0d7debe8",
-    "2e3b85ef-e26b-48ce-ba82-60ef5e46ef94",
-    "a29eeb04-4743-4dec-b21c-4bd9516bc69c",
-    "fa09066c-0c93-4839-8c88-cd21bcf4f593",
+    "2e3b85ef-e26b-48ce-ba82-60ef5e46ef94"
 }
 
 
