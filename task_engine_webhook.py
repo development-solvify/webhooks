@@ -242,9 +242,12 @@ def build_schedule_at(due_date: Optional[datetime]) -> str:
 
     dt = dt.replace(microsecond=0)
     return dt.isoformat().replace("+00:00", "Z")
+
 def trigger_customer_journey(task: dict) -> None:
     """
     Dispara el flow 'recordatorio_llamada' al scheduler/customer_journey.
+    Ahora:
+      - id = lead_id (no el user_assigned_id)
     """
     if not task:
         app.logger.error("❌ trigger_customer_journey llamado sin task válida")
@@ -254,13 +257,20 @@ def trigger_customer_journey(task: dict) -> None:
         app.logger.error("❌ requests no disponible, no puedo llamar al scheduler.")
         return
 
-    user_id = task.get("user_assigned_id")
-    due_date = task.get("due_date")
+    lead_id = task.get("lead_id")
+    if not lead_id:
+        # Fallback por si alguna tarea vieja viene solo con object_reference_id
+        fallback = task.get("object_reference_id")
+        app.logger.warning(
+            f"⚠️ Tarea sin lead_id resuelto, usando object_reference_id como fallback: {fallback}"
+        )
+        lead_id = fallback
 
-    if not user_id:
-        app.logger.warning("⚠️ Tarea sin user_assigned_id, no se lanza customer_journey")
+    if not lead_id:
+        app.logger.error("❌ No hay lead_id ni fallback, no se lanza customer_journey")
         return
 
+    due_date = task.get("due_date")
     if due_date and not isinstance(due_date, datetime):
         app.logger.warning(f"⚠️ due_date no es datetime: {due_date!r}")
         due_dt = None
@@ -270,17 +280,15 @@ def trigger_customer_journey(task: dict) -> None:
     schedule_at = build_schedule_at(due_dt)
 
     payload = {
-        "id": user_id,
+        "id": lead_id,                      # 👈 AHORA ES EL LEAD
         "flow_name": "recordatorio_llamada",
         "schedule_at": schedule_at,
     }
 
-    # Usar SCHEDULER_URL directamente sin añadir la ruta
     url = SCHEDULER_URL
     headers = {
         "Content-Type": "application/json",
     }
-    
     if SCHEDULER_API_KEY:
         headers["X-API-Key"] = SCHEDULER_API_KEY
 
@@ -294,6 +302,8 @@ def trigger_customer_journey(task: dict) -> None:
         resp.raise_for_status()
     except Exception as e:
         app.logger.error(f"❌ Error llamando a customer_journey: {e}")
+
+
 def to_utc_iso_z(dt):
     """
     Convierte un datetime o date a string ISO8601 terminado en Z.
