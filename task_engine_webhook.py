@@ -82,7 +82,7 @@ def get_task_info(task_id: str) -> Optional[dict]:
     - user_assigned (profile)
     - compañía (si se puede resolver vía deals/companies)
     """
-    conn = create_db_connection()
+    conn = get_db_connection()
     try:
         cur = conn.cursor()
         sql = """
@@ -133,7 +133,7 @@ def get_task_info(task_id: str) -> Optional[dict]:
         cur.close()
 
         if not row:
-            logger.warning(f"🔍 No se encontró annotation_task con id={task_id}")
+            app.logger.warning(f"🔍 No se encontró annotation_task con id={task_id}")
             return None
 
         # Mapeo por índice (orden del SELECT)
@@ -221,18 +221,18 @@ def trigger_customer_journey(task: dict) -> None:
     }
     """
     if not task:
-        logger.error("❌ trigger_customer_journey llamado sin task válida")
+        app.logger.error("❌ trigger_customer_journey llamado sin task válida")
         return
 
     user_id = task.get("user_assigned_id")
     due_date = task.get("due_date")
 
     if not user_id:
-        logger.warning("⚠️ Tarea sin user_assigned_id, no se lanza customer_journey")
+        app.logger.warning("⚠️ Tarea sin user_assigned_id, no se lanza customer_journey")
         return
 
     if due_date and not isinstance(due_date, datetime):
-        logger.warning(f"⚠️ due_date no es datetime: {due_date!r}")
+        app.logger.warning(f"⚠️ due_date no es datetime: {due_date!r}")
         due_dt = None
     else:
         due_dt = due_date
@@ -245,21 +245,23 @@ def trigger_customer_journey(task: dict) -> None:
         "schedule_at": schedule_at,
     }
 
-    url = SCHEDULER_URL.rstrip("/") + "/api/flow/triggerFlow"
+    scheduler_url, scheduler_api_key = get_scheduler_config()
+    url = scheduler_url.rstrip("/") if scheduler_url.endswith("/api/flow/triggerFlow") else scheduler_url.rstrip("/") + "/api/flow/triggerFlow"
     headers = {
         "Content-Type": "application/json",
-        "X-API-Key": SCHEDULER_API_KEY,
     }
+    if scheduler_api_key:
+        headers["X-API-Key"] = scheduler_api_key
 
-    logger.info(f"🌊 Llamando a Customer Journey: POST {url}")
-    logger.info(f"📦 Payload: {payload}")
+    app.logger.info(f"🌊 Llamando a Customer Journey: POST {url}")
+    app.logger.info(f"📦 Payload: {payload}")
 
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=10)
-        logger.info(f"📡 Respuesta scheduler: {resp.status_code} - {resp.text}")
+        app.logger.info(f"📡 Respuesta scheduler: {resp.status_code} - {resp.text}")
         resp.raise_for_status()
     except Exception as e:
-        logger.error(f"❌ Error llamando a customer_journey: {e}")
+        app.logger.error(f"❌ Error llamando a customer_journey: {e}")
 
 
 # ----------------------------------------------------------------------------
@@ -388,29 +390,29 @@ def task_info_webhook():
         if not task_id:
             return jsonify({"error": "task_id es obligatorio"}), 400
 
-        logger.info(f"📥 Webhook /task-info recibido para task_id={task_id}")
+        app.logger.info(f"📥 Webhook /task-info recibido para task_id={task_id}")
 
         task = get_task_info(task_id)
         if not task:
             return jsonify({"error": "Tarea no encontrada"}), 404
 
         # 👀 Log legible
-        logger.info("📝 TASK INFO")
-        logger.info(f"   • ID tarea:       {task.get('task_id')}")
-        logger.info(f"   • Contenido:      {task.get('content')}")
-        logger.info(f"   • Due date:       {task.get('due_date')}")
-        logger.info(f"   • Estado:         {task.get('status')}")
-        logger.info(f"   • Prioridad:      {task.get('priority')}")
-        logger.info(
+        app.logger.info("📝 TASK INFO")
+        app.logger.info(f"   • ID tarea:       {task.get('task_id')}")
+        app.logger.info(f"   • Contenido:      {task.get('content')}")
+        app.logger.info(f"   • Due date:       {task.get('due_date')}")
+        app.logger.info(f"   • Estado:         {task.get('status')}")
+        app.logger.info(f"   • Prioridad:      {task.get('priority')}")
+        app.logger.info(
             f"   • Asignado a:     {task.get('assignee_first_name')} "
             f"{task.get('assignee_last_name')} <{task.get('assignee_email')}> "
             f"(profile_id={task.get('user_assigned_id')})"
         )
-        logger.info(
+        app.logger.info(
             f"   • Compañía:       {task.get('company_name')} "
             f"(company_id={task.get('company_id')})"
         )
-        logger.info(
+        app.logger.info(
             f"   • Ref:            {task.get('object_reference_type')} "
             f"{task.get('object_reference_id')}"
         )
@@ -425,7 +427,7 @@ def task_info_webhook():
         }), 200
 
     except Exception as e:
-        logger.error(f"💥 Error en /task-info: {e}", exc_info=True)
+        app.logger.error(f"💥 Error en /task-info: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 # ----------------------------------------------------------------------------
