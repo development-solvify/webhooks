@@ -234,8 +234,6 @@ def build_schedule_at(due_date: Optional[datetime]) -> str:
 
     dt = dt.replace(microsecond=0)
     return dt.isoformat().replace("+00:00", "Z")
-
-
 def trigger_customer_journey(task: dict) -> None:
     """
     Dispara el flow 'recordatorio_llamada' al scheduler/customer_journey.
@@ -269,7 +267,8 @@ def trigger_customer_journey(task: dict) -> None:
         "schedule_at": schedule_at,
     }
 
-    url = SCHEDULER_URL.rstrip("/") + "/api/flow/triggerFlow"
+    # Usar SCHEDULER_URL directamente sin añadir la ruta
+    url = SCHEDULER_URL
     headers = {
         "Content-Type": "application/json",
     }
@@ -287,8 +286,6 @@ def trigger_customer_journey(task: dict) -> None:
         resp.raise_for_status()
     except Exception as e:
         app.logger.error(f"❌ Error llamando a customer_journey: {e}")
-
-
 def to_utc_iso_z(dt):
     """
     Convierte un datetime o date a string ISO8601 terminado en Z.
