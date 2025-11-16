@@ -5,7 +5,7 @@ import logging
 import os
 import configparser
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 import pg8000
 from flask import Flask, request, jsonify
@@ -39,6 +39,37 @@ if os.path.exists(SCRIPTS_CONF_PATH):
         app.logger.error(f"❌ Error cargando scripts.conf: {e}", exc_info=True)
 else:
     app.logger.warning("⚠️ scripts.conf no encontrado. Revisa ruta/volumen.")
+
+# ----------------------------------------------------------------------------
+# Config Scheduler / Customer Journey
+# ----------------------------------------------------------------------------
+def get_scheduler_config():
+    """
+    Saca URL y API Key de scripts.conf o variables de entorno.
+    Sección sugerida:
+
+    [SCHEDULER]
+    SCHEDULER_URL = https://scheduler.solvify.es:5100/api/flow/triggerFlow
+    SCHEDULER_API_KEY = your-api-key-for-webhooks
+    """
+    url = os.environ.get("SCHEDULER_URL")
+    api_key = os.environ.get("SCHEDULER_API_KEY")
+
+    if config_supabase.has_section("SCHEDULER"):
+        sec = config_supabase["SCHEDULER"]
+        url = sec.get("SCHEDULER_URL", url)
+        api_key = sec.get("SCHEDULER_API_KEY", api_key)
+
+    # Por defecto, la URL que me has pasado
+    if not url:
+        url = "https://scheduler.solvify.es:5100/api/flow/triggerFlow"
+
+    return url, api_key
+
+
+# Cargar configuración del scheduler como variables globales
+SCHEDULER_URL, SCHEDULER_API_KEY = get_scheduler_config()
+app.logger.info(f"🔧 Scheduler configurado: {SCHEDULER_URL}")
 
 # ----------------------------------------------------------------------------
 # Conexión a BD
@@ -184,17 +215,14 @@ def get_task_info(task_id: str) -> Optional[dict]:
             pass
 
 
-
-import requests
-from datetime import datetime, timezone
-
+# ----------------------------------------------------------------------------
+# Helper para convertir fechas a ISO8601 UTC
+# ----------------------------------------------------------------------------
 def build_schedule_at(due_date: Optional[datetime]) -> str:
     """
     Convierte due_date (naive o con tz) a ISO8601 UTC con 'Z'.
     Si no hay due_date, usa ahora + 5 minutos.
     """
-    from datetime import timedelta
-
     if due_date is None:
         dt = datetime.now(timezone.utc) + timedelta(minutes=5)
     else:
@@ -207,20 +235,28 @@ def build_schedule_at(due_date: Optional[datetime]) -> str:
     dt = dt.replace(microsecond=0)
     return dt.isoformat().replace("+00:00", "Z")
 
+
 def trigger_customer_journey(task: dict) -> None:
+    """
+    Dispara el flow 'recordatorio_llamada' al scheduler/customer_journey.
+    """
     if not task:
-        logger.error("❌ trigger_customer_journey llamado sin task válida")
+        app.logger.error("❌ trigger_customer_journey llamado sin task válida")
+        return
+
+    if requests is None:
+        app.logger.error("❌ requests no disponible, no puedo llamar al scheduler.")
         return
 
     user_id = task.get("user_assigned_id")
     due_date = task.get("due_date")
 
     if not user_id:
-        logger.warning("⚠️ Tarea sin user_assigned_id, no se lanza customer_journey")
+        app.logger.warning("⚠️ Tarea sin user_assigned_id, no se lanza customer_journey")
         return
 
     if due_date and not isinstance(due_date, datetime):
-        logger.warning(f"⚠️ due_date no es datetime: {due_date!r}")
+        app.logger.warning(f"⚠️ due_date no es datetime: {due_date!r}")
         due_dt = None
     else:
         due_dt = due_date
@@ -236,45 +272,21 @@ def trigger_customer_journey(task: dict) -> None:
     url = SCHEDULER_URL.rstrip("/") + "/api/flow/triggerFlow"
     headers = {
         "Content-Type": "application/json",
-        "X-API-Key": SCHEDULER_API_KEY,
     }
+    
+    if SCHEDULER_API_KEY:
+        headers["X-API-Key"] = SCHEDULER_API_KEY
 
     import json
-    logger.info(f"🌊 Llamando a Customer Journey: POST {url}")
-    logger.info(f"📦 Payload JSON real: {json.dumps(payload)}")
+    app.logger.info(f"🌊 Llamando a Customer Journey: POST {url}")
+    app.logger.info(f"📦 Payload JSON real: {json.dumps(payload)}")
 
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=10)
-        logger.info(f"📡 Respuesta scheduler: {resp.status_code} - {resp.text}")
+        app.logger.info(f"📡 Respuesta scheduler: {resp.status_code} - {resp.text}")
         resp.raise_for_status()
     except Exception as e:
-        logger.error(f"❌ Error llamando a customer_journey: {e}")
-
-# ----------------------------------------------------------------------------
-# Config Scheduler / Customer Journey
-# ----------------------------------------------------------------------------
-def get_scheduler_config():
-    """
-    Saca URL y API Key de scripts.conf o variables de entorno.
-    Sección sugerida:
-
-    [SCHEDULER]
-    SCHEDULER_URL = https://scheduler.solvify.es:5100/api/flow/triggerFlow
-    SCHEDULER_API_KEY = your-api-key-for-webhooks
-    """
-    url = os.environ.get("SCHEDULER_URL")
-    api_key = os.environ.get("SCHEDULER_API_KEY")
-
-    if config_supabase.has_section("SCHEDULER"):
-        sec = config_supabase["SCHEDULER"]
-        url = sec.get("SCHEDULER_URL", url)
-        api_key = sec.get("SCHEDULER_API_KEY", api_key)
-
-    # Por defecto, la URL que me has pasado
-    if not url:
-        url = "https://scheduler.solvify.es:5100/api/flow/triggerFlow"
-
-    return url, api_key
+        app.logger.error(f"❌ Error llamando a customer_journey: {e}")
 
 
 def to_utc_iso_z(dt):
