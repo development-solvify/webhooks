@@ -1473,23 +1473,43 @@ def create_portal_user(data, source, config=None):
         try:
             conn = get_supabase_connection()
             cur = conn.cursor()
+            
+            # Buscar deal existente
             cur.execute("""
-                SELECT 1
+                SELECT d.id, d.status
                 FROM leads l
                 JOIN deals d ON d.lead_id = l.id AND d.is_deleted = FALSE
-                -- Mismo criterio de normalización que usas en la búsqueda de deal_id
                 WHERE TRIM(REPLACE(REPLACE(l.phone, '+34', ''), ' ', '')) = %s
                 AND l.is_deleted = FALSE
                 AND d.company_id = %s
+                ORDER BY d.created_at DESC
                 LIMIT 1
             """, (phone, company_id))
-            exists_same_company = cur.fetchone() is not None
+            existing_deal = cur.fetchone()
 
-            if exists_same_company:
+            if existing_deal:
+                deal_id, current_status = existing_deal
                 app.logger.warning(
-                    f"RECHAZADO PortalUser: {full} | TEL={phone} | "
-                    f"MOTIVO=Cliente ya existe en ESTA company (ID: {company_id})"
+                    f"⚠️ DUPLICADO DETECTADO: {full} | TEL={phone} | "
+                    f"Company ID: {company_id} | Deal ID: {deal_id} | Status actual: {current_status}"
                 )
+                
+                # Actualizar deal a "Nuevo Contacto"
+                cur.execute("""
+                    UPDATE public.deals
+                    SET status = 'Nuevo Contacto',
+                        updated_at = now()
+                    WHERE id = %s
+                    AND is_deleted = FALSE
+                """, (deal_id,))
+                conn.commit()
+                
+                app.logger.info(
+                    f"✅ Deal {deal_id} actualizado a 'Nuevo Contacto' | "
+                    f"Cliente: {full} | TEL={phone} | Status anterior: {current_status}"
+                )
+                
+                # Retornar None para no crear nuevo portal user
                 return None
             else:
                 app.logger.debug(
@@ -1497,14 +1517,14 @@ def create_portal_user(data, source, config=None):
                 )
 
         except Exception as e:
-            app.logger.error(f"Error verificando duplicado para {phone} en company {company_id}: {e}")
+            app.logger.error(f"Error verificando/actualizando duplicado para {phone} en company {company_id}: {e}")
         finally:
             try:
                 cur.close()
                 conn.close()
             except:
                 pass
-
+    
 
     # 5️⃣ Construcción del payload
     parts = full.split()
@@ -1712,7 +1732,7 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
         app.logger.error(
             f"[ASSIGN_ETD] Error inesperado al asignar deal {deal_id} para source={source}: {e}",
             exc_info=True,
-        )
+               )
     return {
         "portal_user_created": True,
         "info_lead_created": task is not None,
@@ -1894,7 +1914,7 @@ def receive_alianza_lead():
     for original_key, mapped_key in mapping.items():
         value = raw.get(original_key)
         if value is not None:
-            data[mapped_key] = str(value) if not isinstance(value, str) else value
+            data[mapped_key] = str(value) if not isinstance(value, str) : value
             app.logger.debug(f"MAPEADO: '{original_key}' → '{mapped_key}' = '{value}' (tipo: {type(value)})")
 
     # 2.2 Fallback para críticos
@@ -1918,7 +1938,7 @@ def receive_alianza_lead():
     for k, v in raw.items():
         mapped_key = mapping.get(k)
         if not mapped_key and k not in data:
-            data[k] = str(v) if not isinstance(v, str) else v
+            data[k] = str(v) if not isinstance(v, str) : v
             app.logger.debug(f"SIN MAPEAR: '{k}' = '{v}' (tipo: {type(v)})")
 
     # 2.4 Debug final
