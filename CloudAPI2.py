@@ -2730,20 +2730,22 @@ class WhatsAppService:
                 })
                 logger.info(f"[BUILD_TEMPLATE] ✅ recordatorio_llamada_agendada: 3 params")
 
-            elif name_normalized == "retomar_contacto":
-                # Body: {{1}} = first_name, {{2}} = responsible_name
-                logger.info("[BUILD_TEMPLATE] Detectado template: retomar_contacto")
-                first_name = td.get("first_name") or ""
-                responsible_name = td.get("responsible_name") or ""
-                
-                components.append({
-                    "type": "body",
-                    "parameters": [
-                        {"type": "text", "text": first_name},
-                        {"type": "text", "text": responsible_name}
-                    ]
-                })
-                logger.info(f"[BUILD_TEMPLATE] ✅ retomar_contacto: 2 params")
+                elif name_normalized == "retomar_contacto":
+                    # Body: {{1}} = first_name, {{2}} = responsible_name, {{3}} = company_name
+                    logger.info("[BUILD_TEMPLATE] Detectado template: retomar_contacto")
+                    first_name = td.get("first_name") or ""
+                    responsible_name = td.get("responsible_name") or td.get("responsible_first_name") or ""
+                    company_name = td.get("company_name") or "Solvify"
+                    
+                    components.append({
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": first_name},
+                            {"type": "text", "text": responsible_name},
+                            {"type": "text", "text": company_name}
+                        ]
+                    })
+                    logger.info(f"[BUILD_TEMPLATE] ✅ retomar_contacto: 3 params (first_name='{first_name}', responsible='{responsible_name}', company='{company_name}')")
 
             elif name_normalized == "nuevo_numero":
                 # Body: {{1}} = first_name, {{2}} = responsible_name
