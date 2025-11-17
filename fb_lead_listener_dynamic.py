@@ -595,6 +595,7 @@ def c_assign_deal_ETD(deal_id: str, source: str, data: dict):
     """
     Asigna el deal al comercial de la oficina y a la compañía
     a la que pertenece ese comercial (vía company_addresses.company_id).
+    También asigna el company_address_id del usuario asignado al deal.
 
     - Si algo falla, NO toca company_id (se queda el fallback SICUEL).
     """
@@ -616,6 +617,7 @@ def c_assign_deal_ETD(deal_id: str, source: str, data: dict):
             "deal_id": deal_id,
             "company_id": None,
             "user_assigned_id": None,
+            "company_address_id": None,
             "office_info": office_info,
         }
 
@@ -626,6 +628,7 @@ def c_assign_deal_ETD(deal_id: str, source: str, data: dict):
     cur = None
     user_assigned_id = None
     company_id = None
+    user_company_address_id = None
 
     try:
         conn = get_supabase_connection()
@@ -652,6 +655,7 @@ def c_assign_deal_ETD(deal_id: str, source: str, data: dict):
                 "deal_id": deal_id,
                 "company_id": None,
                 "user_assigned_id": None,
+                "company_address_id": None,
                 "office_info": office_info,
             }
 
@@ -724,6 +728,7 @@ def c_assign_deal_ETD(deal_id: str, source: str, data: dict):
                 "deal_id": deal_id,
                 "company_id": None,
                 "user_assigned_id": None,
+                "company_address_id": None,
                 "office_info": office_info,
             }
 
@@ -736,29 +741,57 @@ def c_assign_deal_ETD(deal_id: str, source: str, data: dict):
             f"(alias='{office_alias}'): user_assigned_id={user_assigned_id}, company_id={company_id}"
         )
 
-        # 3) Actualizar deal: asignar comercial + compañía del comercial/oficina
+        # --- 2C) Obtener company_address_id del usuario asignado ---
+        cur.execute(
+            """
+            SELECT pca.company_address_id
+            FROM public.profile_comp_addresses pca
+            WHERE pca.user_id = %s
+              AND pca.is_deleted = FALSE
+            ORDER BY pca.created_at DESC
+            LIMIT 1;
+            """,
+            (user_assigned_id,),
+        )
+        row_address = cur.fetchone()
+        
+        if row_address:
+            user_company_address_id = row_address[0]
+            app.logger.info(
+                f"[ASSIGN_ETD] company_address_id del usuario {user_assigned_id}: {user_company_address_id}"
+            )
+        else:
+            app.logger.warning(
+                f"[ASSIGN_ETD] No se encontró company_address_id para el usuario {user_assigned_id}. "
+                f"No se actualizará el campo company_address_id del deal."
+            )
+
+        # 3) Actualizar deal: asignar comercial + compañía + company_address_id del comercial
         cur.execute(
             """
             UPDATE public.deals
                SET user_assigned_id = %s,
                    company_id       = %s,
+                   company_address_id = %s,
                    updated_at       = now()
              WHERE id = %s
                AND is_deleted = FALSE;
             """,
-            (user_assigned_id, company_id, deal_id),
+            (user_assigned_id, company_id, user_company_address_id, deal_id),
         )
         conn.commit()
 
         app.logger.info(
             f"[ASSIGN_ETD] Deal {deal_id} actualizado: "
-            f"user_assigned_id={user_assigned_id}, company_id={company_id}"
+            f"user_assigned_id={user_assigned_id}, company_id={company_id}, "
+            f"company_address_id={user_company_address_id}"
         )
 
         return {
             "deal_id": deal_id,
             "company_id": str(company_id) if company_id else None,
             "user_assigned_id": str(user_assigned_id) if user_assigned_id else None,
+            "company_address_id": str(user_company_address_id) if user_company_address_id else None,
             "office_info": office_info,
         }
 
@@ -772,6 +805,7 @@ def c_assign_deal_ETD(deal_id: str, source: str, data: dict):
             "deal_id": deal_id,
             "company_id": None,
             "user_assigned_id": None,
+            "company_address_id": None,
             "office_info": office_info,
         }
     finally:
@@ -1557,7 +1591,7 @@ def receive_lead():
         mapped_key = mapping.get(k) or mapping.get(k.lstrip('¿'))
         if not mapped_key and k not in data:
             # Convertir a string si es necesario para consistencia
-            data[k] = str(v) if not isinstance(v, str) else v
+            data[k] = str(v) if not isinstance(v, str) : v
             app.logger.debug(f"SIN MAPEAR: '{k}' = '{v}' (tipo: {type(v)})")
     
     # Debug final de datos mapeados
@@ -1652,36 +1686,31 @@ def receive_alianza_lead():
     for original_key, mapped_key in mapping.items():
         value = raw.get(original_key)
         if value is not None:
-            data[mapped_key] = str(value) if not isinstance(value, str) else value
+            data[mapped_key] = str(value) if not isinstance(value, str) : value
             app.logger.debug(f"MAPEADO: '{original_key}' → '{mapped_key}' = '{value}' (tipo: {type(value)})")
 
     # 2.2 Fallback para críticos
     critical_fields = {
-        'nombre_y_apellidos': ['name', 'full_name', 'fullname', 'nombre', 'nombre_completo',
-                               'full name', 'Full Name', 'Nombre', 'Nombre '],
-        'correo_electrónico': ['email', 'correo', 'mail', 'Email', 'e-mail', 'Mail'],
-        'número_de_teléfono': ['phone', 'telefono', 'teléfono', 'phone_number', 'Phone Number',
-                               'tel', 'mobile', 'Teléfono'],
+        'nombre_y_apellidos': ['name', 'full_name', 'fullname', 'nombre', 'nombre_completo'],
+        'correo_electrónico': ['mail', 'email', 'correo', 'e-mail'],
+        'número_de_teléfono': ['teléfono', 'phone_number', 'telefono', 'tel', 'mobile'],
     }
-    for target_field, possible_sources in critical_fields.items():
-        current_value = str(data.get(target_field, '')).strip()
-        if not current_value:
-            app.logger.debug(f"FALLBACK: Buscando '{target_field}' (actual: '{current_value}')")
-            for possible_source in possible_sources:
-                raw_value_original = raw.get(possible_source, '')
+    for target_field, aliases in critical_fields.items():
+        cur = str(data.get(target_field, '')).strip()
+        if not cur:
+            for alias in aliases:
+                raw_value_original = raw.get(alias, '')
                 raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''
                 if raw_value:
                     data[target_field] = raw_value
-                    app.logger.debug(f"FALLBACK MAPEADO: '{possible_source}' → '{target_field}' = '{raw_value}'")
+                    app.logger.debug(f"FALLBACK: '{alias}' → '{target_field}' = {raw_value!r}")
                     break
-        else:
-            app.logger.debug(f"FALLBACK: '{target_field}' ya tiene valor: '{current_value}'")
 
     # 2.3 Agregar campos no mapeados
     for k, v in raw.items():
         mapped_key = mapping.get(k)
         if not mapped_key and k not in data:
-            data[k] = str(v) if not isinstance(v, str) else v
+            data[k] = str(v) if not isinstance(v, str) : v
             app.logger.debug(f"SIN MAPEAR: '{k}' = '{v}' (tipo: {type(v)})")
 
     # 2.4 Debug final
