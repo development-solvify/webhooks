@@ -1497,7 +1497,7 @@ def create_portal_user(data, source, config=None):
                 # Actualizar deal a "Nuevo Contacto"
                 cur.execute("""
                     UPDATE public.deals
-                    SET status = 'Nuevo Contacto',
+                    SET status = 'Nuevo contacto',
                         updated_at = now()
                     WHERE id = %s
                     AND is_deleted = FALSE
@@ -1505,7 +1505,7 @@ def create_portal_user(data, source, config=None):
                 conn.commit()
                 
                 app.logger.info(
-                    f"✅ Deal {deal_id} actualizado a 'Nuevo Contacto' | "
+                    f"✅ Deal {deal_id} actualizado a 'Nuevo contacto' | "
                     f"Cliente: {full} | TEL={phone} | Status anterior: {current_status}"
                 )
                 
