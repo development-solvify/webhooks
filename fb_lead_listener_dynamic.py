@@ -1918,7 +1918,7 @@ def receive_alianza_lead():
     for k, v in raw.items():
         mapped_key = mapping.get(k)
         if not mapped_key and k not in data:
-            data[k] = str(v) if not isinstance(v, str) : v
+            data[k] = str(v) if not isinstance(v, str) else v
             app.logger.debug(f"SIN MAPEAR: '{k}' = '{v}' (tipo: {type(v)})")
 
     # 2.4 Debug final
