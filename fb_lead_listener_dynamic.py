@@ -1735,7 +1735,7 @@ def receive_lead():
         value = raw.get(original_key) or raw.get(original_key.lstrip('¿'))
         if value is not None:
             # Convertir a string si es necesario para consistencia
-            data[mapped_key] = str(value) if not isinstance(value, str) : value
+            data[mapped_key] = str(value) if not isinstance(value, str) else value
             app.logger.debug(f"MAPEADO: '{original_key}' → '{mapped_key}' = '{value}' (tipo: {type(value)})")
     
     # Fallback inteligente para campos críticos si no se encontraron
@@ -1774,7 +1774,7 @@ def receive_lead():
         mapped_key = mapping.get(k) or mapping.get(k.lstrip('¿'))
         if not mapped_key and k not in data:
             # Convertir a string si es necesario para consistencia
-            data[k] = str(v) if not isinstance(v, str) : v
+            data[k] = str(v) if not isinstance(v, str) else v
             app.logger.debug(f"SIN MAPEAR: '{k}' = '{v}' (tipo: {type(v)})")
     
     # Debug final de datos mapeados
@@ -1868,7 +1868,7 @@ def receive_alianza_lead():
     for original_key, mapped_key in mapping.items():
         value = raw.get(original_key)
         if value is not None:
-            data[mapped_key] = str(value) if not isinstance(value, str) : value
+            data[mapped_key] = str(value) if not isinstance(value, str) else value
             app.logger.debug(f"MAPEADO: '{original_key}' → '{mapped_key}' = '{value}' (tipo: {type(value)})")
 
     # 2.2 Fallback para críticos
@@ -1892,7 +1892,7 @@ def receive_alianza_lead():
     for k, v in raw.items():
         mapped_key = mapping.get(k)
         if not mapped_key and k not in data:
-            data[k] = str(v) if not isinstance(v, str) : v
+            data[k] = str(v) if not isinstance(v, str) else v
             app.logger.debug(f"SIN MAPEAR: '{k}' = '{v}' (tipo: {type(v)})")
 
     # 2.4 Debug final
