@@ -13,6 +13,9 @@ from pathlib import Path
 # ----------------------------------------------------------------------------
 # Configuración y constantes
 # ----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# Configuración y constantes
+# ----------------------------------------------------------------------------
 TOKEN = os.getenv('SOLVIFY_API_TOKEN',
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjEyMmZlYTI1LWQ1OWEtNGE2Zi04YzQ0LWIzZTVmZTExZTZmZSIsImVtYWlsIjoic2VydmljZUBzb2x2aWZ5LmVzIiwiZmlyc3RfbmFtZSI6IlNlcnZpY2UiLCJsYXN0X25hbWUiOiJTb2x2aWZ5IiwiaXNfYWN0aXZlIjp0cnVlLCJjcmVhdGVkX2F0IjoiMjAyNC0xMC0xN1QxNzowODozOC4xNjY3OTEiLCJjcmVhdGVkX2J5IjpudWxsLCJ1cGRhdGVkX2F0IjoiMjAyNC0xMC0xN1QxNTowODozOC45OCIsInVwZGF0ZWRfYnkiOm51bGwsImRlbGV0ZWRfYXQiOm51bGwsImRlbGV0ZWRfYnkiOm51bGwsImlzX2RlbGV0ZWQiOmZhbHNlLCJyb2xlX2lkIjoiODQ5ZmFiZTgtNDhjYi00ZWY4LWE0YWUtZTJiN2MzZjNlYTViIiwic3RyaXBlX2N1c3RvbWVyX2lkIjpudWxsLCJleHBvX3B1c2hfdG9rZW4iOm51bGwsInBob25lIjoiMCIsInJvbGVfbmFtZSI6IkFETUlOIiwicm9sZXMiOltdLCJpYXQiOjE3MjkxNzc4OTIsImV4cCI6Nzc3NzE3Nzg5Mn0.TJWtiOnLW8XyWjQDR_LAWvEiqrw50tWUmYiKXxo_5Wg')
 
@@ -21,20 +24,14 @@ app.logger.setLevel(logging.DEBUG)
 
 FALLBACK_COMPANY_ID = "9d4c6ef7-b5fa-4890-893f-51cafc247875"  # SICUEL
 
+# Nombre del rol GESTOR_LEADS para asignaciones ETD (se busca en user_roles)
+GESTOR_LEADS_ROLE_NAME = "GESTOR_LEADS"
 
-CATALUNYA_OFFICE_ALIASES = {
-    "Badalona",
-    "Barcelona",
-    "Hospitalet del Llobregat",
-}
+# Oficinas para round-robin cuando no hay gestores disponibles
+ROUND_ROBIN_OFFICES = ["Bilbao", "Madrid", "Zaragoza"]
 
-CATALUNYA_REPS_USER_IDS = (
-    "2872e40c-fb2b-4bb9-900a-6eb2abd39bf3",
-    "137c4bc1-c606-445a-ba90-ca41ea04f2f6",
-    "4e09dd08-cc63-4084-83df-531827029436",
-)
-
-
+# Variable global para tracking de round-robin (en producción usar Redis/DB)
+_round_robin_counter = {"index": 0}
 # ----------------------------------------------------------------------------
 # Carga de configuración DB
 # ----------------------------------------------------------------------------
@@ -393,6 +390,390 @@ def _normalize_office_token(raw: str) -> str:
     text = text.replace(" ", "_")
 
     return text
+
+def _get_round_robin_office():
+    """
+    Retorna la siguiente oficina en round-robin entre Bilbao, Madrid y Zaragoza.
+    En producción, usar Redis o DB para persistir el contador.
+    """
+    global _round_robin_counter
+    
+    office = ROUND_ROBIN_OFFICES[_round_robin_counter["index"] % len(ROUND_ROBIN_OFFICES)]
+    _round_robin_counter["index"] += 1
+    
+    app.logger.info(
+        f"[ROUND_ROBIN] Oficina seleccionada: {office} "
+        f"(índice: {_round_robin_counter['index'] - 1})"
+    )
+    
+    return office
+
+
+def _get_gestores_leads_for_office(company_address_id, office_alias, cur):
+    """
+    Busca gestores de leads para una oficina específica.
+    IMPORTANTE: Busca en user_roles (roles secundarios), NO en profiles.role_id
+    
+    Retorna lista de tuplas (user_id, first_name, last_name, email, role_id, total_deals)
+    """
+    app.logger.info(
+        f"[GESTORES_LEADS] Buscando para oficina '{office_alias}' "
+        f"(company_address_id={company_address_id})"
+    )
+    
+    # Query CORRECTA: usa user_roles (roles secundarios) en lugar de profiles.role_id
+    query_gestores = """
+        SELECT 
+            p.id AS user_id,
+            p.first_name,
+            p.last_name,
+            p.email,
+            r.id AS role_id,
+            COUNT(d.id) AS total_deals
+        FROM public.profile_comp_addresses pca
+        JOIN public.profiles p
+          ON p.id = pca.user_id
+         AND p.is_deleted = FALSE
+        JOIN public.user_roles ur
+          ON ur.user_id = p.id
+         AND ur.is_deleted = FALSE
+        JOIN public.roles r
+          ON r.id = ur.role_id
+         AND r.is_deleted = FALSE
+         AND r.name = %s  -- ✅ FILTRO POR NOMBRE DE ROL EN user_roles
+        LEFT JOIN public.deals d
+          ON d.user_assigned_id = p.id
+         AND d.is_deleted = FALSE
+         AND d.status != 'Negocio perdido'  -- Excluir deals perdidos
+        WHERE pca.company_address_id = %s
+          AND pca.is_deleted = FALSE
+        GROUP BY p.id, p.first_name, p.last_name, p.email, r.id
+        ORDER BY COUNT(d.id) ASC, p.created_at ASC  -- Menor carga primero
+    """
+    
+    app.logger.debug(f"[GESTORES_LEADS] Query:\n{query_gestores}")
+    app.logger.debug(f"[GESTORES_LEADS] Parámetros:")
+    app.logger.debug(f"    - role_name: {GESTOR_LEADS_ROLE_NAME}")
+    app.logger.debug(f"    - company_address_id: {company_address_id}")
+    
+    cur.execute(query_gestores, (GESTOR_LEADS_ROLE_NAME, company_address_id))
+    rows_all = cur.fetchall()
+    
+    app.logger.info(f"[GESTORES_LEADS] Total encontrados: {len(rows_all)}")
+    
+    if rows_all:
+        app.logger.info(f"[GESTORES_LEADS] Lista completa para '{office_alias}':")
+        for i, row in enumerate(rows_all, 1):
+            uid, fname, lname, email, role_id, deals = row
+            app.logger.info(
+                f"  {i}. {fname} {lname} <{email}> | "
+                f"ID: {uid} | Role ID: {role_id} | Deals: {deals}"
+            )
+    else:
+        app.logger.warning(
+            f"[GESTORES_LEADS] ⚠️ No se encontraron gestores para '{office_alias}'"
+        )
+    
+    return rows_all
+
+
+def c_assign_deal_ETD(deal_id: str, source: str, data: dict):
+    """
+    Asigna el deal al GESTOR DE LEADS de la oficina con MENOR carga de trabajo.
+    
+    NUEVA LÓGICA CON FALLBACK:
+    1. Si viene oficina informada → buscar gestores en esa oficina
+    2. Si NO hay gestores en esa oficina → round-robin entre Bilbao, Madrid, Zaragoza
+    3. Si NO viene oficina → round-robin directo entre Bilbao, Madrid, Zaragoza
+    4. Contar deals activos de cada gestor (no perdidos, no borrados)
+    5. Asignar al que tiene MENOS deals
+    
+    IMPORTANTE: Los GESTORES_LEADS se buscan en user_roles (roles secundarios)
+    
+    - Si algo falla, NO toca company_id (se queda el fallback SICUEL).
+    """
+    
+    app.logger.info("="*80)
+    app.logger.info(f"[ASSIGN_ETD] INICIO - deal_id={deal_id}, source={source}")
+    app.logger.info(f"[ASSIGN_ETD] Datos recibidos: {data}")
+    app.logger.info(f"[ASSIGN_ETD] 🎯 ROL GESTOR_LEADS: {GESTOR_LEADS_ROLE_NAME}")
+    app.logger.info("="*80)
+
+    if not deal_id:
+        app.logger.warning("[ASSIGN_ETD] ❌ deal_id vacío, no se puede asignar.")
+        return None
+
+    # 1) Resolver oficina -> company_address_id
+    app.logger.info(f"[ASSIGN_ETD] 🔍 Paso 1: Resolviendo oficina para source={source}")
+    office_info = c_lead_assigment_ETD(source, data)
+    
+    app.logger.info(f"[ASSIGN_ETD] 📋 office_info completo: {office_info}")
+
+    conn = None
+    cur = None
+    user_assigned_id = None
+    company_id = None
+    user_company_address_id = None
+    company_address_id = None
+    office_alias = None
+    rows_all = []
+
+    try:
+        app.logger.info(f"[ASSIGN_ETD] 🔌 Conectando a base de datos...")
+        conn = get_supabase_connection()
+        cur = conn.cursor()
+        app.logger.info(f"[ASSIGN_ETD] ✅ Conexión establecida")
+
+        # --- 2) LÓGICA CON FALLBACK ROUND-ROBIN ---
+        
+        # 2A) Si tenemos oficina del formulario, intentar buscar gestores ahí
+        if office_info and office_info.get("company_address_id"):
+            company_address_id = office_info["company_address_id"]
+            office_alias = office_info.get("alias")
+            
+            app.logger.info(
+                f"[ASSIGN_ETD] ✅ Oficina del formulario: "
+                f"alias='{office_alias}', company_address_id={company_address_id}"
+            )
+            
+            # Obtener company_id
+            cur.execute(
+                """
+                SELECT company_id
+                FROM public.company_addresses
+                WHERE id = %s
+                  AND (is_deleted = FALSE OR is_deleted IS NULL)
+                LIMIT 1;
+                """,
+                (company_address_id,),
+            )
+            row_company = cur.fetchone()
+            
+            if row_company:
+                company_id = row_company[0]
+                app.logger.info(f"[ASSIGN_ETD] ✅ company_id obtenido: {company_id}")
+                
+                # Buscar gestores en esta oficina
+                rows_all = _get_gestores_leads_for_office(company_address_id, office_alias, cur)
+            else:
+                app.logger.warning(
+                    f"[ASSIGN_ETD] ⚠️ No se encontró company_id para "
+                    f"company_address_id={company_address_id}"
+                )
+        
+        # 2B) Si NO hay oficina o NO hay gestores → FALLBACK ROUND-ROBIN
+        if not rows_all:
+            if office_info and office_info.get("company_address_id"):
+                app.logger.warning(
+                    f"[ASSIGN_ETD] ⚠️ No hay GESTORES DE LEADS en oficina '{office_alias}'. "
+                    f"Aplicando FALLBACK: round-robin entre {ROUND_ROBIN_OFFICES}"
+                )
+            else:
+                app.logger.info(
+                    f"[ASSIGN_ETD] 💡 No viene oficina informada. "
+                    f"Aplicando FALLBACK: round-robin entre {ROUND_ROBIN_OFFICES}"
+                )
+            
+            # Intentar oficinas de round-robin hasta encontrar gestores
+            max_attempts = len(ROUND_ROBIN_OFFICES)
+            attempts = 0
+            
+            while not rows_all and attempts < max_attempts:
+                fallback_alias = _get_round_robin_office()
+                attempts += 1
+                
+                app.logger.info(
+                    f"[ASSIGN_ETD] 🔄 Intento {attempts}/{max_attempts}: "
+                    f"Buscando en oficina '{fallback_alias}'"
+                )
+                
+                # Buscar company_address_id de la oficina fallback
+                cur.execute(
+                    """
+                    SELECT id, company_id
+                    FROM public.company_addresses
+                    WHERE alias = %s
+                      AND (is_deleted = FALSE OR is_deleted IS NULL)
+                    LIMIT 1;
+                    """,
+                    (fallback_alias,),
+                )
+                row_office = cur.fetchone()
+                
+                if row_office:
+                    company_address_id, company_id = row_office
+                    office_alias = fallback_alias
+                    
+                    app.logger.info(
+                        f"[ASSIGN_ETD] ✅ Oficina fallback encontrada: "
+                        f"'{office_alias}' (company_address_id={company_address_id}, "
+                        f"company_id={company_id})"
+                    )
+                    
+                    # Buscar gestores en esta oficina
+                    rows_all = _get_gestores_leads_for_office(
+                        company_address_id, office_alias, cur
+                    )
+                else:
+                    app.logger.warning(
+                        f"[ASSIGN_ETD] ⚠️ Oficina '{fallback_alias}' no encontrada en DB"
+                    )
+            
+            if not rows_all:
+                app.logger.error(
+                    f"[ASSIGN_ETD] ❌ CRÍTICO: No se encontraron GESTORES DE LEADS "
+                    f"en ninguna oficina de round-robin: {ROUND_ROBIN_OFFICES}"
+                )
+                return {
+                    "deal_id": deal_id,
+                    "company_id": None,
+                    "user_assigned_id": None,
+                    "company_address_id": None,
+                    "office_info": office_info,
+                    "error": "No hay GESTORES DE LEADS disponibles en ninguna oficina"
+                }
+
+        # --- 3) Seleccionar gestor con MENOR carga ---
+        row = rows_all[0]
+        user_assigned_id, first_name, last_name, email, role_id, total_deals = row
+        comercial_nombre = f"{first_name} {last_name}".strip()
+
+        app.logger.info(
+            f"[ASSIGN_ETD] 🎯 GESTOR DE LEADS SELECCIONADO: {comercial_nombre} <{email}>"
+        )
+        app.logger.info(
+            f"[ASSIGN_ETD] 📊 ID: {user_assigned_id} | "
+            f"Role ID: {role_id} | "
+            f"Carga actual: {total_deals} deals activos | "
+            f"Oficina: '{office_alias}'"
+        )
+
+        # --- 4) Obtener company_address_id del usuario asignado ---
+        app.logger.info(
+            f"[ASSIGN_ETD] 🔍 Paso 4: Obteniendo company_address_id del usuario "
+            f"{user_assigned_id}"
+        )
+        
+        cur.execute(
+            """
+            SELECT pca.company_address_id
+            FROM public.profile_comp_addresses pca
+            WHERE pca.user_id = %s
+              AND pca.is_deleted = FALSE
+            ORDER BY pca.created_at DESC
+            LIMIT 1;
+            """,
+            (user_assigned_id,),
+        )
+        row_address = cur.fetchone()
+        
+        if row_address:
+            user_company_address_id = row_address[0]
+            app.logger.info(
+                f"[ASSIGN_ETD] ✅ company_address_id del usuario: "
+                f"{user_company_address_id}"
+            )
+        else:
+            app.logger.warning(
+                f"[ASSIGN_ETD] ⚠️ No se encontró company_address_id para el usuario. "
+                f"Se usará el de la oficina: {company_address_id}"
+            )
+            user_company_address_id = company_address_id
+
+        # --- 5) Actualizar deal ---
+        app.logger.info(f"[ASSIGN_ETD] 🔍 Paso 5: Actualizando deal {deal_id}")
+        app.logger.info(f"[ASSIGN_ETD] 📝 Valores a actualizar:")
+        app.logger.info(f"    - user_assigned_id: {user_assigned_id} ({comercial_nombre})")
+        app.logger.info(f"    - company_id: {company_id}")
+        app.logger.info(f"    - company_address_id: {user_company_address_id}")
+        
+        cur.execute(
+            """
+            UPDATE public.deals
+               SET user_assigned_id = %s,
+                   company_id       = %s,
+                   company_address_id = %s,
+                   updated_at       = now()
+             WHERE id = %s
+               AND is_deleted = FALSE;
+            """,
+            (user_assigned_id, company_id, user_company_address_id, deal_id),
+        )
+        
+        rows_affected = cur.rowcount
+        app.logger.info(f"[ASSIGN_ETD] 📊 Filas afectadas por UPDATE: {rows_affected}")
+        
+        if rows_affected == 0:
+            app.logger.warning(
+                f"[ASSIGN_ETD] ⚠️ UPDATE no afectó ninguna fila. "
+                f"Verificar que el deal {deal_id} existe y no está borrado."
+            )
+        
+        conn.commit()
+        app.logger.info(f"[ASSIGN_ETD] ✅ Commit exitoso")
+
+        resultado = {
+            "deal_id": deal_id,
+            "company_id": str(company_id) if company_id else None,
+            "user_assigned_id": str(user_assigned_id) if user_assigned_id else None,
+            "company_address_id": str(user_company_address_id) if user_company_address_id else None,
+            "office_info": office_info,
+            "office_final": office_alias,
+            "comercial_nombre": comercial_nombre,
+            "comercial_email": email,
+            "comercial_role_id": str(role_id),
+            "carga_actual": int(total_deals),
+            "total_gestores_disponibles": len(rows_all),
+            "fallback_usado": office_alias in ROUND_ROBIN_OFFICES and (
+                not office_info or 
+                not office_info.get("company_address_id") or 
+                office_info.get("alias") != office_alias
+            )
+        }
+
+        app.logger.info("="*80)
+        app.logger.info(f"[ASSIGN_ETD] ✅ ÉXITO - Deal {deal_id} asignado correctamente")
+        app.logger.info(f"[ASSIGN_ETD] 📊 Resultado final:")
+        for key, value in resultado.items():
+            app.logger.info(f"    {key}: {value}")
+        app.logger.info("="*80)
+
+        return resultado
+
+    except Exception as e:
+        app.logger.error("="*80)
+        app.logger.error(f"[ASSIGN_ETD] ❌ ERROR CRÍTICO asignando deal {deal_id}")
+        app.logger.error(f"[ASSIGN_ETD] Tipo de error: {type(e).__name__}")
+        app.logger.error(f"[ASSIGN_ETD] Mensaje: {e}")
+        app.logger.error(f"[ASSIGN_ETD] Traceback completo:", exc_info=True)
+        app.logger.error(f"[ASSIGN_ETD] Contexto:")
+        app.logger.error(f"    - source: {source}")
+        app.logger.error(f"    - office_alias: {office_alias}")
+        app.logger.error(f"    - company_address_id: {company_address_id}")
+        app.logger.error(f"    - company_id: {company_id}")
+        app.logger.error("="*80)
+        
+        return {
+            "deal_id": deal_id,
+            "company_id": None,
+            "user_assigned_id": None,
+            "company_address_id": None,
+            "office_info": office_info,
+            "error": f"{type(e).__name__}: {str(e)}"
+        }
+    finally:
+        try:
+            if cur:
+                cur.close()
+                app.logger.debug("[ASSIGN_ETD] 🔌 Cursor cerrado")
+            if conn:
+                conn.close()
+                app.logger.debug("[ASSIGN_ETD] 🔌 Conexión cerrada")
+        except Exception as cleanup_error:
+            app.logger.error(
+                f"[ASSIGN_ETD] ⚠️ Error cerrando conexión: {cleanup_error}"
+            )
+
 def c_lead_assigment_ETD(source: str, data: dict):
     """
     1) Lee la oficina del formulario:
@@ -581,777 +962,6 @@ def c_lead_assigment_ETD(source: str, data: dict):
             "alias": alias,
             "company_address_id": None,
             "sales_reps": [],
-        }
-    finally:
-        try:
-            if cur:
-                cur.close()
-            if conn:
-                conn.close()
-        except Exception:
-            pass
-
-
-def c_assign_deal_ETD(deal_id: str, source: str, data: dict):
-    """
-    Asigna el deal al GESTOR DE LEADS de la oficina con MENOR carga de trabajo.
-    
-    LÓGICA UNIFICADA (aplica a TODAS las oficinas):
-    1. Obtener oficina del formulario
-    2. Buscar GESTORES DE LEADS (rol d8f024ae-ff3f-45a1-88b5-e07d86a1297a) de esa oficina
-    3. Contar deals activos de cada gestor (no perdidos, no borrados)
-    4. Asignar al que tiene MENOS deals
-    
-    - Si algo falla, NO toca company_id (se queda el fallback SICUEL).
-    """
-    
-    # Constante del rol GESTOR_LEADS
-    GESTOR_LEADS_ROLE_ID = "d8f024ae-ff3f-45a1-88b5-e07d86a1297a"
-    
-    app.logger.info("="*80)
-    app.logger.info(f"[ASSIGN_ETD] INICIO - deal_id={deal_id}, source={source}")
-    app.logger.info(f"[ASSIGN_ETD] Datos recibidos: {data}")
-    app.logger.info(f"[ASSIGN_ETD] 🎯 ROL GESTOR_LEADS: {GESTOR_LEADS_ROLE_ID}")
-    app.logger.info("="*80)
-
-    if not deal_id:
-        app.logger.warning("[ASSIGN_ETD] ❌ deal_id vacío, no se puede asignar.")
-        return None
-
-    # 1) Resolver oficina -> company_address_id
-    app.logger.info(f"[ASSIGN_ETD] 🔍 Paso 1: Resolviendo oficina para source={source}")
-    office_info = c_lead_assigment_ETD(source, data)
-    
-    app.logger.info(f"[ASSIGN_ETD] 📋 office_info completo: {office_info}")
-
-    if not office_info or not office_info.get("company_address_id"):
-        app.logger.warning(
-            f"[ASSIGN_ETD] ⚠️ No se pudo resolver company_address_id "
-            f"para source={source}, deal_id={deal_id}. "
-            f"office_info={office_info}. "
-            f"Se mantiene company_id (fallback SICUEL)."
-        )
-        return {
-            "deal_id": deal_id,
-            "company_id": None,
-            "user_assigned_id": None,
-            "company_address_id": None,
-            "office_info": office_info,
-            "error": "No se pudo resolver company_address_id"
-        }
-
-    company_address_id = office_info["company_address_id"]
-    office_alias = office_info.get("alias")
-
-    app.logger.info(
-        f"[ASSIGN_ETD] ✅ Oficina resuelta: "
-        f"alias='{office_alias}', company_address_id={company_address_id}"
-    )
-
-    conn = None
-    cur = None
-    user_assigned_id = None
-    company_id = None
-    user_company_address_id = None
-
-    try:
-        app.logger.info(f"[ASSIGN_ETD] 🔌 Conectando a base de datos...")
-        conn = get_supabase_connection()
-        cur = conn.cursor()
-        app.logger.info(f"[ASSIGN_ETD] ✅ Conexión establecida")
-
-        # --- 2A) Obtener company_id de la oficina ---
-        app.logger.info(
-            f"[ASSIGN_ETD] 🔍 Paso 2A: Buscando company_id para "
-            f"company_address_id={company_address_id}"
-        )
-        
-        cur.execute(
-            """
-            SELECT company_id
-            FROM public.company_addresses
-            WHERE id = %s
-              AND (is_deleted = FALSE OR is_deleted IS NULL)
-            LIMIT 1;
-            """,
-            (company_address_id,),
-        )
-        row_company = cur.fetchone()
-        
-        app.logger.info(f"[ASSIGN_ETD] 📊 Resultado query company_id: {row_company}")
-        
-        if not row_company:
-            app.logger.warning(
-                f"[ASSIGN_ETD] ❌ No se encontró company_id para "
-                f"company_address_id={company_address_id}. "
-                f"Se mantiene company_id actual (fallback SICUEL)."
-            )
-            return {
-                "deal_id": deal_id,
-                "company_id": None,
-                "user_assigned_id": None,
-                "company_address_id": None,
-                "office_info": office_info,
-                "error": "company_id no encontrado en company_addresses"
-            }
-
-        company_id = row_company[0]
-        app.logger.info(f"[ASSIGN_ETD] ✅ company_id obtenido: {company_id}")
-
-        # --- 2B) LÓGICA UNIFICADA: Selección por carga de trabajo (SOLO GESTORES DE LEADS) ---
-        app.logger.info(
-            f"[ASSIGN_ETD] 🔍 Paso 2B: Buscando GESTORES DE LEADS para oficina '{office_alias}' "
-            f"(company_address_id={company_address_id})"
-        )
-        app.logger.info(f"[ASSIGN_ETD] 🎯 Filtrando profiles con role_id = {GESTOR_LEADS_ROLE_ID}")
-
-        # Query UNIFICADA: obtiene SOLO GESTORES DE LEADS de la oficina con su carga actual
-        query_gestores = """
-            SELECT 
-                p.id AS user_id,
-                p.first_name,
-                p.last_name,
-                p.email,
-                p.role_id,
-                COUNT(d.id) AS total_deals
-            FROM public.profile_comp_addresses pca
-            JOIN public.profiles p
-              ON p.id = pca.user_id
-             AND p.is_deleted = FALSE
-             AND p.role_id = %s  -- ✅ FILTRO POR ROL GESTOR_LEADS
-            LEFT JOIN public.deals d
-              ON d.user_assigned_id = p.id
-             AND d.is_deleted = FALSE
-             AND d.status != 'Negocio perdido'  -- Excluir deals perdidos
-            WHERE pca.company_address_id = %s
-              AND pca.is_deleted = FALSE
-            GROUP BY p.id, p.first_name, p.last_name, p.email, p.role_id
-            ORDER BY COUNT(d.id) ASC, p.created_at ASC  -- Menor carga primero
-        """
-        
-        app.logger.debug(f"[ASSIGN_ETD] 📝 Query GESTORES DE LEADS:\n{query_gestores}")
-        app.logger.debug(f"[ASSIGN_ETD] 📝 Parámetros:")
-        app.logger.debug(f"    - role_id (GESTOR_LEADS): {GESTOR_LEADS_ROLE_ID}")
-        app.logger.debug(f"    - company_address_id: {company_address_id}")
-        
-        cur.execute(query_gestores, (GESTOR_LEADS_ROLE_ID, company_address_id))
-        rows_all = cur.fetchall()
-        
-        app.logger.info(f"[ASSIGN_ETD] 📊 Total GESTORES DE LEADS encontrados: {len(rows_all)}")
-        
-        # Log de TODOS los gestores encontrados
-        if rows_all:
-            app.logger.info(f"[ASSIGN_ETD] 📋 Lista completa de GESTORES DE LEADS:")
-            for i, row in enumerate(rows_all, 1):
-                uid, fname, lname, email, role_id, deals = row
-                app.logger.info(
-                    f"  {i}. {fname} {lname} <{email}> | "
-                    f"ID: {uid} | Role ID: {role_id} | Deals activos: {deals}"
-                )
-        else:
-            app.logger.warning(
-                f"[ASSIGN_ETD] ⚠️ No se encontraron GESTORES DE LEADS para "
-                f"company_address_id={company_address_id} (alias='{office_alias}')"
-            )
-            app.logger.warning(
-                f"[ASSIGN_ETD] 💡 Verificar que existan profiles con role_id={GESTOR_LEADS_ROLE_ID} "
-                f"asignados a esta oficina en profile_comp_addresses"
-            )
-
-        # Seleccionar el primero (menor carga)
-        if not rows_all:
-            app.logger.warning(
-                f"[ASSIGN_ETD] ❌ Sin GESTORES DE LEADS activos para "
-                f"company_address_id={company_address_id} (alias='{office_alias}'). "
-                f"Se mantiene company_id actual (probablemente SICUEL)."
-            )
-            return {
-                "deal_id": deal_id,
-                "company_id": None,
-                "user_assigned_id": None,
-                "company_address_id": None,
-                "office_info": office_info,
-                "error": "Sin GESTORES DE LEADS disponibles en la oficina"
-            }
-
-        # Extraer datos del gestor seleccionado (el primero = menor carga)
-        row = rows_all[0]
-        user_assigned_id, first_name, last_name, email, role_id, total_deals = row
-        comercial_nombre = f"{first_name} {last_name}".strip()
-
-        app.logger.info(
-            f"[ASSIGN_ETD] 🎯 GESTOR DE LEADS SELECCIONADO: {comercial_nombre} <{email}>"
-        )
-        app.logger.info(
-            f"[ASSIGN_ETD] 📊 ID: {user_assigned_id} | "
-            f"Role ID: {role_id} | "
-            f"Carga actual: {total_deals} deals activos | "
-            f"Oficina: '{office_alias}'"
-        )
-        
-        # Verificación adicional de que el role_id es correcto
-        if str(role_id) != GESTOR_LEADS_ROLE_ID:
-            app.logger.error(
-                f"[ASSIGN_ETD] ⚠️ ALERTA: El usuario seleccionado {user_assigned_id} "
-                f"tiene role_id={role_id} en lugar de {GESTOR_LEADS_ROLE_ID}. "
-                f"Esto NO debería pasar si el filtro SQL funciona correctamente."
-            )
-
-        # --- 2C) Obtener company_address_id del usuario asignado ---
-        app.logger.info(
-            f"[ASSIGN_ETD] 🔍 Paso 2C: Obteniendo company_address_id del usuario "
-            f"{user_assigned_id}"
-        )
-        
-        cur.execute(
-            """
-            SELECT pca.company_address_id
-            FROM public.profile_comp_addresses pca
-            WHERE pca.user_id = %s
-              AND pca.is_deleted = FALSE
-            ORDER BY pca.created_at DESC
-            LIMIT 1;
-            """,
-            (user_assigned_id,),
-        )
-        row_address = cur.fetchone()
-        
-        app.logger.info(f"[ASSIGN_ETD] 📊 Resultado company_address_id: {row_address}")
-        
-        if row_address:
-            user_company_address_id = row_address[0]
-            app.logger.info(
-                f"[ASSIGN_ETD] ✅ company_address_id del usuario {user_assigned_id}: "
-                f"{user_company_address_id}"
-            )
-        else:
-            app.logger.warning(
-                f"[ASSIGN_ETD] ⚠️ No se encontró company_address_id para el usuario "
-                f"{user_assigned_id}. No se actualizará el campo company_address_id del deal."
-            )
-
-        # --- 3) Actualizar deal ---
-        app.logger.info(
-            f"[ASSIGN_ETD] 🔍 Paso 3: Actualizando deal {deal_id}"
-        )
-        app.logger.info(
-            f"[ASSIGN_ETD] 📝 Valores a actualizar:"
-        )
-        app.logger.info(f"    - user_assigned_id: {user_assigned_id} ({comercial_nombre})")
-        app.logger.info(f"    - company_id: {company_id}")
-        app.logger.info(f"    - company_address_id: {user_company_address_id}")
-        
-        update_query = """
-            UPDATE public.deals
-               SET user_assigned_id = %s,
-                   company_id       = %s,
-                   company_address_id = %s,
-                   updated_at       = now()
-             WHERE id = %s
-               AND is_deleted = FALSE;
-        """
-        
-        app.logger.debug(f"[ASSIGN_ETD] 📝 Query update:\n{update_query}")
-        
-        cur.execute(
-            update_query,
-            (user_assigned_id, company_id, user_company_address_id, deal_id),
-        )
-        
-        rows_affected = cur.rowcount
-        app.logger.info(f"[ASSIGN_ETD] 📊 Filas afectadas por UPDATE: {rows_affected}")
-        
-        if rows_affected == 0:
-            app.logger.warning(
-                f"[ASSIGN_ETD] ⚠️ UPDATE no afectó ninguna fila. "
-                f"Verificar que el deal {deal_id} existe y no está borrado."
-            )
-        
-        conn.commit()
-        app.logger.info(f"[ASSIGN_ETD] ✅ Commit exitoso")
-
-        resultado = {
-            "deal_id": deal_id,
-            "company_id": str(company_id) if company_id else None,
-            "user_assigned_id": str(user_assigned_id) if user_assigned_id else None,
-            "company_address_id": str(user_company_address_id) if user_company_address_id else None,
-            "office_info": office_info,
-            "comercial_nombre": comercial_nombre,
-            "comercial_email": email,
-            "comercial_role_id": str(role_id),
-            "carga_actual": int(total_deals),
-            "total_gestores_disponibles": len(rows_all)
-        }
-
-        app.logger.info("="*80)
-        app.logger.info(f"[ASSIGN_ETD] ✅ ÉXITO - Deal {deal_id} asignado correctamente")
-        app.logger.info(f"[ASSIGN_ETD] 📊 Resultado final:")
-        for key, value in resultado.items():
-            app.logger.info(f"    {key}: {value}")
-        app.logger.info("="*80)
-
-        return resultado
-
-    except Exception as e:
-        app.logger.error("="*80)
-        app.logger.error(
-            f"[ASSIGN_ETD] ❌ ERROR CRÍTICO asignando deal {deal_id}"
-        )
-        app.logger.error(f"[ASSIGN_ETD] Tipo de error: {type(e).__name__}")
-        app.logger.error(f"[ASSIGN_ETD] Mensaje: {e}")
-        app.logger.error(f"[ASSIGN_ETD] Traceback completo:", exc_info=True)
-        app.logger.error(f"[ASSIGN_ETD] Contexto:")
-        app.logger.error(f"    - source: {source}")
-        app.logger.error(f"    - office_alias: {office_alias}")
-        app.logger.error(f"    - company_address_id: {company_address_id}")
-        app.logger.error(f"    - company_id: {company_id}")
-        app.logger.error(f"    - GESTOR_LEADS_ROLE_ID: {GESTOR_LEADS_ROLE_ID}")
-        app.logger.error("="*80)
-        
-        return {
-            "deal_id": deal_id,
-            "company_id": None,
-            "user_assigned_id": None,
-            "company_address_id": None,
-            "office_info": office_info,
-            "error": f"{type(e).__name__}: {str(e)}"
-        }
-    finally:
-        try:
-            if cur:
-                cur.close()
-                app.logger.debug("[ASSIGN_ETD] 🔌 Cursor cerrado")
-            if conn:
-                conn.close()
-                app.logger.debug("[ASSIGN_ETD] 🔌 Conexión cerrada")
-        except Exception as cleanup_error:
-            app.logger.error(
-                f"[ASSIGN_ETD] ⚠️ Error cerrando conexión: {cleanup_error}"
-            )
-            
-def c_assign_deal_ETD2(deal_id: str, source: str, data: dict):
-    """
-    Asigna el deal al comercial de la oficina con MENOR carga de trabajo.
-    
-    LÓGICA UNIFICADA (aplica a TODAS las oficinas):
-    1. Obtener oficina del formulario
-    2. Buscar comerciales de esa oficina
-    3. Contar deals activos de cada comercial (no perdidos, no borrados)
-    4. Asignar al que tiene MENOS deals
-    
-    - Si algo falla, NO toca company_id (se queda el fallback SICUEL).
-    """
-
-    if not deal_id:
-        app.logger.warning("[ASSIGN_ETD] deal_id vacío, no se puede asignar.")
-        return None
-
-    # 1) Resolver oficina -> company_address_id
-    office_info = c_lead_assigment_ETD(source, data)
-    app.logger.info(f"[ASSIGN_ETD] office_info: {office_info}")
-
-    if not office_info or not office_info.get("company_address_id"):
-        app.logger.warning(
-            f"[ASSIGN_ETD] No se ha podido resolver company_address_id "
-            f"para source={source}, deal_id={deal_id}. Se mantiene company_id (fallback SICUEL)."
-        )
-        return {
-            "deal_id": deal_id,
-            "company_id": None,
-            "user_assigned_id": None,
-            "company_address_id": None,
-            "office_info": office_info,
-        }
-
-    company_address_id = office_info["company_address_id"]
-    office_alias = office_info.get("alias")
-
-    conn = None
-    cur = None
-    user_assigned_id = None
-    company_id = None
-    user_company_address_id = None
-
-    try:
-        conn = get_supabase_connection()
-        cur = conn.cursor()
-
-        # --- 2A) Obtener company_id de la oficina ---
-        cur.execute(
-            """
-            SELECT company_id
-            FROM public.company_addresses
-            WHERE id = %s
-              AND (is_deleted = FALSE OR is_deleted IS NULL)
-            LIMIT 1;
-            """,
-            (company_address_id,),
-        )
-        row_company = cur.fetchone()
-        if not row_company:
-            app.logger.warning(
-                f"[ASSIGN_ETD] No se ha encontrado company_id para company_address_id={company_address_id}. "
-                f"Se mantiene company_id actual (fallback SICUEL)."
-            )
-            return {
-                "deal_id": deal_id,
-                "company_id": None,
-                "user_assigned_id": None,
-                "company_address_id": None,
-                "office_info": office_info,
-            }
-
-        company_id = row_company[0]
-
-        # --- 2B) LÓGICA UNIFICADA: Selección por carga de trabajo ---
-        app.logger.info(
-            f"[ASSIGN_ETD] Oficina '{office_alias}' → "
-            f"Buscando comerciales con MENOR carga de trabajo..."
-        )
-
-        # Query UNIFICADA: obtiene comerciales de la oficina con su carga actual
-        cur.execute(
-            """
-            SELECT 
-                p.id AS user_id,
-                p.first_name,
-                p.last_name,
-                COUNT(d.id) AS total_deals
-            FROM public.profile_comp_addresses pca
-            JOIN public.profiles p
-              ON p.id = pca.user_id
-             AND p.is_deleted = FALSE
-            LEFT JOIN public.deals d
-              ON d.user_assigned_id = p.id
-             AND d.is_deleted = FALSE
-             AND d.status != 'Negocio perdido'  -- Excluir deals perdidos
-            WHERE pca.company_address_id = %s
-              AND pca.is_deleted = FALSE
-            GROUP BY p.id, p.first_name, p.last_name
-            ORDER BY COUNT(d.id) ASC, p.created_at ASC  -- Menor carga primero, más antiguo como desempate
-            LIMIT 1;
-            """,
-            (company_address_id,),
-        )
-        row = cur.fetchone()
-
-        if not row:
-            app.logger.warning(
-                f"[ASSIGN_ETD] Sin comerciales activos para company_address_id={company_address_id} "
-                f"(alias='{office_alias}'). Se mantiene company_id actual (probablemente SICUEL)."
-            )
-            return {
-                "deal_id": deal_id,
-                "company_id": None,
-                "user_assigned_id": None,
-                "company_address_id": None,
-                "office_info": office_info,
-            }
-
-        # Extraer datos del comercial seleccionado
-        user_assigned_id, first_name, last_name, total_deals = row
-        comercial_nombre = f"{first_name} {last_name}".strip()
-
-        app.logger.info(
-            f"[ASSIGN_ETD] ✅ Comercial seleccionado para '{office_alias}': "
-            f"{comercial_nombre} (ID: {user_assigned_id}) | "
-            f"Carga actual: {total_deals} deals activos"
-        )
-
-        # --- 2C) Obtener company_address_id del usuario asignado ---
-        cur.execute(
-            """
-            SELECT pca.company_address_id
-            FROM public.profile_comp_addresses pca
-            WHERE pca.user_id = %s
-              AND pca.is_deleted = FALSE
-            ORDER BY pca.created_at DESC
-            LIMIT 1;
-            """,
-            (user_assigned_id,),
-        )
-        row_address = cur.fetchone()
-        
-        if row_address:
-            user_company_address_id = row_address[0]
-            app.logger.info(
-                f"[ASSIGN_ETD] company_address_id del usuario {user_assigned_id}: {user_company_address_id}"
-            )
-        else:
-            app.logger.warning(
-                f"[ASSIGN_ETD] No se encontró company_address_id para el usuario {user_assigned_id}. "
-                f"No se actualizará el campo company_address_id del deal."
-            )
-
-        # --- 3) Actualizar deal ---
-        cur.execute(
-            """
-            UPDATE public.deals
-               SET user_assigned_id = %s,
-                   company_id       = %s,
-                   company_address_id = %s,
-                   updated_at       = now()
-             WHERE id = %s
-               AND is_deleted = FALSE;
-            """,
-            (user_assigned_id, company_id, user_company_address_id, deal_id),
-        )
-        conn.commit()
-
-        app.logger.info(
-            f"[ASSIGN_ETD] ✅ Deal {deal_id} actualizado: "
-            f"user_assigned_id={user_assigned_id} ({comercial_nombre}), "
-            f"company_id={company_id}, "
-            f"company_address_id={user_company_address_id}"
-        )
-
-        return {
-            "deal_id": deal_id,
-            "company_id": str(company_id) if company_id else None,
-            "user_assigned_id": str(user_assigned_id) if user_assigned_id else None,
-            "company_address_id": str(user_company_address_id) if user_company_address_id else None,
-            "office_info": office_info,
-            "comercial_nombre": comercial_nombre,
-            "carga_actual": int(total_deals),
-        }
-
-    except Exception as e:
-        app.logger.error(
-            f"[ASSIGN_ETD] Error general asignando deal {deal_id}: {e}",
-            exc_info=True,
-        )
-        return {
-            "deal_id": deal_id,
-            "company_id": None,
-            "user_assigned_id": None,
-            "company_address_id": None,
-            "office_info": office_info,
-        }
-    finally:
-        try:
-            if cur:
-                cur.close()
-            if conn:
-                conn.close()
-        except Exception:
-            pass
-
-def c_assign_deal_ETD1(deal_id: str, source: str, data: dict):
-    """
-    Asigna el deal al comercial de la oficina y a la compañía
-    a la que pertenece ese comercial (vía company_addresses.company_id).
-    También asigna el company_address_id del usuario asignado al deal.
-
-    - Si algo falla, NO toca company_id (se queda el fallback SICUEL).
-    """
-
-    if not deal_id:
-        app.logger.warning("[ASSIGN_ETD] deal_id vacío, no se puede asignar.")
-        return None
-
-    # 1) Resolver oficina -> company_address_id
-    office_info = c_lead_assigment_ETD(source, data)
-    app.logger.info(f"[ASSIGN_ETD] office_info: {office_info}")
-
-    if not office_info or not office_info.get("company_address_id"):
-        app.logger.warning(
-            f"[ASSIGN_ETD] No se ha podido resolver company_address_id "
-            f"para source={source}, deal_id={deal_id}. Se mantiene company_id (fallback SICUEL)."
-        )
-        return {
-            "deal_id": deal_id,
-            "company_id": None,
-            "user_assigned_id": None,
-            "company_address_id": None,
-            "office_info": office_info,
-        }
-
-    company_address_id = office_info["company_address_id"]
-    office_alias = office_info.get("alias")
-
-    conn = None
-    cur = None
-    user_assigned_id = None
-    company_id = None
-    user_company_address_id = None
-
-    try:
-        conn = get_supabase_connection()
-        cur = conn.cursor()
-
-        # --- 2A) Obtener company_id de la oficina (lo usaremos en cualquier caso) ---
-        cur.execute(
-            """
-            SELECT company_id
-            FROM public.company_addresses
-            WHERE id = %s
-              AND (is_deleted = FALSE OR is_deleted IS NULL)
-            LIMIT 1;
-            """,
-            (company_address_id,),
-        )
-        row_company = cur.fetchone()
-        if not row_company:
-            app.logger.warning(
-                f"[ASSIGN_ETD] No se ha encontrado company_id para company_address_id={company_address_id}. "
-                f"Se mantiene company_id actual (fallback SICUEL)."
-            )
-            return {
-                "deal_id": deal_id,
-                "company_id": None,
-                "user_assigned_id": None,
-                "company_address_id": None,
-                "office_info": office_info,
-            }
-
-        company_id = row_company[0]
-
-        # --- 2B) Selección de comercial ---
-
-        if office_alias in CATALUNYA_OFFICE_ALIASES:
-            # Caso especial Cataluña: Badalona, Barcelona, Hospitalet
-            app.logger.info(
-                f"[ASSIGN_ETD] Oficina '{office_alias}' es de Cataluña → "
-                f"asignamos entre pool fijo: {CATALUNYA_REPS_USER_IDS}"
-            )
-
-            cur.execute(
-                """
-                SELECT p.id AS user_id
-                FROM public.profiles p
-                LEFT JOIN public.deals d
-                  ON d.user_assigned_id = p.id
-                 AND d.is_deleted = FALSE
-                WHERE p.id IN (%s, %s, %s)
-                  AND p.is_deleted = FALSE
-                GROUP BY p.id
-                ORDER BY COUNT(d.id) ASC, MIN(p.created_at) ASC
-                LIMIT 1;
-                """,
-                CATALUNYA_REPS_USER_IDS,
-            )
-            row = cur.fetchone()
-
-        else:
-            # Caso general: usar comerciales ligados a esa oficina
-            cur.execute(
-                """
-                SELECT p.id AS user_id,
-                       ca.company_id AS company_id
-                FROM public.profile_comp_addresses pca
-                JOIN public.profiles p
-                  ON p.id = pca.user_id
-                 AND p.is_deleted = FALSE
-                JOIN public.company_addresses ca
-                  ON ca.id = pca.company_address_id
-                 AND (ca.is_deleted = FALSE OR ca.is_deleted IS NULL)
-                LEFT JOIN public.deals d
-                  ON d.user_assigned_id = p.id
-                 AND d.is_deleted = FALSE
-                WHERE pca.company_address_id = %s
-                  AND pca.is_deleted = FALSE
-                GROUP BY p.id, ca.company_id
-                ORDER BY COUNT(d.id) ASC, MIN(p.created_at) ASC
-                LIMIT 1;
-                """,
-                (company_address_id,),
-            )
-            row = cur.fetchone()
-            # En este caso, company_id puede venir del SELECT de arriba
-            if row:
-                user_assigned_id_tmp, company_id_tmp = row
-                user_assigned_id = user_assigned_id_tmp
-                if company_id_tmp:
-                    company_id = company_id_tmp
-
-        if not row:
-            app.logger.warning(
-                f"[ASSIGN_ETD] Sin comerciales activos para company_address_id={company_address_id} "
-                f"(alias='{office_alias}'). Se mantiene company_id actual (probablemente SICUEL)."
-            )
-            return {
-                "deal_id": deal_id,
-                "company_id": None,
-                "user_assigned_id": None,
-                "company_address_id": None,
-                "office_info": office_info,
-            }
-
-        # Si venimos del caso Cataluña, row solo trae user_id
-        if office_alias in CATALUNYA_OFFICE_ALIASES:
-            (user_assigned_id,) = row
-
-        app.logger.info(
-            f"[ASSIGN_ETD] Comercial elegido para office={company_address_id} "
-            f"(alias='{office_alias}'): user_assigned_id={user_assigned_id}, company_id={company_id}"
-        )
-
-        # --- 2C) Obtener company_address_id del usuario asignado ---
-        cur.execute(
-            """
-            SELECT pca.company_address_id
-            FROM public.profile_comp_addresses pca
-            WHERE pca.user_id = %s
-              AND pca.is_deleted = FALSE
-            ORDER BY pca.created_at DESC
-            LIMIT 1;
-            """,
-            (user_assigned_id,),
-        )
-        row_address = cur.fetchone()
-        
-        if row_address:
-            user_company_address_id = row_address[0]
-            app.logger.info(
-                f"[ASSIGN_ETD] company_address_id del usuario {user_assigned_id}: {user_company_address_id}"
-            )
-        else:
-            app.logger.warning(
-                f"[ASSIGN_ETD] No se encontró company_address_id para el usuario {user_assigned_id}. "
-                f"No se actualizará el campo company_address_id del deal."
-            )
-
-        # 3) Actualizar deal: asignar comercial + compañía + company_address_id del comercial
-        cur.execute(
-            """
-            UPDATE public.deals
-               SET user_assigned_id = %s,
-                   company_id       = %s,
-                   company_address_id = %s,
-                   updated_at       = now()
-             WHERE id = %s
-               AND is_deleted = FALSE;
-            """,
-            (user_assigned_id, company_id, user_company_address_id, deal_id),
-        )
-        conn.commit()
-
-        app.logger.info(
-            f"[ASSIGN_ETD] Deal {deal_id} actualizado: "
-            f"user_assigned_id={user_assigned_id}, company_id={company_id}, "
-            f"company_address_id={user_company_address_id}"
-        )
-
-        return {
-            "deal_id": deal_id,
-            "company_id": str(company_id) if company_id else None,
-            "user_assigned_id": str(user_assigned_id) if user_assigned_id else None,
-            "company_address_id": str(user_company_address_id) if user_company_address_id else None,
-            "office_info": office_info,
-        }
-
-    except Exception as e:
-        app.logger.error(
-            f"[ASSIGN_ETD] Error general asignando deal {deal_id}: {e}",
-            exc_info=True,
-        )
-        # No tocamos company_id → se queda el fallback SICUEL
-        return {
-            "deal_id": deal_id,
-            "company_id": None,
-            "user_assigned_id": None,
-            "company_address_id": None,
-            "office_info": office_info,
         }
     finally:
         try:
