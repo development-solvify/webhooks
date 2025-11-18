@@ -1367,53 +1367,61 @@ def create_portal_user(data, source, config=None):
     app.logger.debug(f"Company name final antes de DB lookup: '{company_name}'")
 
     # 4️⃣ Lookup dinámico de company_id y company_address_id
-    company_id = None
-    company_address_id = None
-
-    try:
-        conn = get_supabase_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-            SELECT 
-                c.id AS company_id,
-                ca.id AS company_address_id
-            FROM companies c
-            LEFT JOIN LATERAL (
-                SELECT 
-                    a.id,
-                    a.created_at
-                FROM company_addresses a
-                WHERE a.company_id = c.id
-                  AND a.is_deleted = FALSE
-                ORDER BY a.created_at ASC
-                LIMIT 1
-            ) ca ON TRUE
-            WHERE c.is_deleted = FALSE
-              AND LOWER(c.name) = LOWER(%s)
-            LIMIT 1;
-        """, (company_name,))
-
-        row = cur.fetchone()
-
-        if row:
-            company_id = str(row[0]) if row[0] is not None else None
-            company_address_id = str(row[1]) if row[1] is not None else None
-
-            app.logger.debug(f"Company ID encontrado para '{company_name}': {company_id}")
-            app.logger.debug(f"Company Address ID encontrado para '{company_name}': {company_address_id}")
-        else:
-            app.logger.warning(f"No se encontró company para '{company_name}'")
-
-    except Exception as e:
-        app.logger.error(f"Error buscando company_id / company_address_id para '{company_name}': {e}")
-
-    finally:
+    # NUEVO: Si config ya trae company_id directo, usarlo
+    if config and config.get("company_id"):
+        company_id = config.get("company_id")
+        company_address_id = config.get("company_address_id")
+        app.logger.debug(f"Company ID desde config (directo): {company_id}")
+        app.logger.debug(f"Company Address ID desde config (directo): {company_address_id}")
+    else:
+        # Lookup normal por company_name
+        company_id = None
+        company_address_id = None
+        
         try:
-            cur.close()
-            conn.close()
-        except Exception:
-            pass
+            conn = get_supabase_connection()
+            cur = conn.cursor()
+
+            cur.execute("""
+                SELECT 
+                    c.id AS company_id,
+                    ca.id AS company_address_id
+                FROM companies c
+                LEFT JOIN LATERAL (
+                    SELECT 
+                        a.id,
+                        a.created_at
+                    FROM company_addresses a
+                    WHERE a.company_id = c.id
+                      AND a.is_deleted = FALSE
+                    ORDER BY a.created_at ASC
+                    LIMIT 1
+                ) ca ON TRUE
+                WHERE c.is_deleted = FALSE
+                  AND LOWER(c.name) = LOWER(%s)
+                LIMIT 1;
+            """, (company_name,))
+
+            row = cur.fetchone()
+
+            if row:
+                company_id = str(row[0]) if row[0] is not None else None
+                company_address_id = str(row[1]) if row[1] is not None else None
+
+                app.logger.debug(f"Company ID encontrado para '{company_name}': {company_id}")
+                app.logger.debug(f"Company Address ID encontrado para '{company_name}': {company_address_id}")
+            else:
+                app.logger.warning(f"No se encontró company para '{company_name}'")
+
+        except Exception as e:
+            app.logger.error(f"Error buscando company_id / company_address_id para '{company_name}': {e}")
+
+        finally:
+            try:
+                cur.close()
+                conn.close()
+            except Exception:
+                pass
 
     # 4.5️⃣ Verificar si el cliente (número) ya existe para ESTE company_id
     if phone and company_id:
@@ -1727,7 +1735,7 @@ def receive_lead():
         value = raw.get(original_key) or raw.get(original_key.lstrip('¿'))
         if value is not None:
             # Convertir a string si es necesario para consistencia
-            data[mapped_key] = str(value) if not isinstance(value, str) else value
+            data[mapped_key] = str(value) if not isinstance(value, str) : value
             app.logger.debug(f"MAPEADO: '{original_key}' → '{mapped_key}' = '{value}' (tipo: {type(value)})")
     
     # Fallback inteligente para campos críticos si no se encontraron
@@ -1766,13 +1774,12 @@ def receive_lead():
         mapped_key = mapping.get(k) or mapping.get(k.lstrip('¿'))
         if not mapped_key and k not in data:
             # Convertir a string si es necesario para consistencia
-            data[k] = str(v) if not isinstance(v, str) else v
+            data[k] = str(v) if not isinstance(v, str) : v
             app.logger.debug(f"SIN MAPEAR: '{k}' = '{v}' (tipo: {type(v)})")
     
     # Debug final de datos mapeados
     app.logger.debug("DATOS FINALES MAPEADOS:")
     for key, value in data.items():
-        app.logger.debug(f"  '{key}': '{value}' (tipo: {type(value)})")    # 3️⃣ Crear portal user con configuración específica
         app.logger.debug(f"  '{key}': '{value}' (tipo: {type(value)})")    # 3️⃣ Crear portal user con configuración específica
     if source in ('fb', 'Backup_FB', 'Alianza_FB'):
         portal_resp = create_portal_user(data, source, config)
@@ -1861,7 +1868,7 @@ def receive_alianza_lead():
     for original_key, mapped_key in mapping.items():
         value = raw.get(original_key)
         if value is not None:
-            data[mapped_key] = str(value) if not isinstance(value, str) else value
+            data[mapped_key] = str(value) if not isinstance(value, str) : value
             app.logger.debug(f"MAPEADO: '{original_key}' → '{mapped_key}' = '{value}' (tipo: {type(value)})")
 
     # 2.2 Fallback para críticos
@@ -1885,7 +1892,7 @@ def receive_alianza_lead():
     for k, v in raw.items():
         mapped_key = mapping.get(k)
         if not mapped_key and k not in data:
-            data[k] = str(v) if not isinstance(v, str) else v
+            data[k] = str(v) if not isinstance(v, str) : v
             app.logger.debug(f"SIN MAPEAR: '{k}' = '{v}' (tipo: {type(v)})")
 
     # 2.4 Debug final
@@ -1955,7 +1962,7 @@ def receive_b2b_lead():
 
     # 4) Fallback mínimo para críticos si no vienen en el mapping
     critical_fallbacks = {
-        'nombre_y_apellidos': ['Nombre', 'Full Name', 'fullname', 'nombre', 'nombre_completo'],
+        'nombre_y_apellidos': ['Nombre', 'Full Name', 'email'],
         'correo_electrónico': ['Mail', 'Email', 'email', 'correo', 'e-mail'],
         'número_de_teléfono': ['Teléfono', 'Phone Number', 'phone_number', 'telefono', 'teléfono', 'tel', 'mobile'],
     }
@@ -2010,5 +2017,217 @@ def health_check():
         "timestamp": datetime.datetime.now().isoformat()
     }), 200
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5008, debug=True)
+@app.route('/B2B_Manual', methods=['POST'])
+def receive_b2b_manual_lead():
+    """
+    Endpoint para leads creados manualmente en el sistema (presencial, etc.)
+    
+    Payload esperado:
+    {
+        "first_name": "nombre",
+        "last_name": "apellido",
+        "email": "email@example.com",
+        "phone": "123456789",
+        "channel": "presencial",
+        "company_id": "uuid",
+        "company_address_id": "uuid",
+        "campaign": null,
+        "form_name": null
+    }
+    
+    Normaliza el payload y reutiliza process_lead_common().
+    """
+    raw = request.json or {}
+    
+    app.logger.info("="*80)
+    app.logger.info("NUEVO LEAD B2B_MANUAL RECIBIDO:")
+    for key, value in raw.items():
+        app.logger.info(f"  {key}: {value}")
+    app.logger.info("="*80)
+    
+    # 1️⃣ Validar campos requeridos
+    required_fields = ['first_name', 'last_name', 'email', 'phone', 'company_id', 'company_address_id']
+    missing_fields = [field for field in required_fields if not raw.get(field)]
+    
+    if missing_fields:
+        error_msg = f"Campos requeridos faltantes: {', '.join(missing_fields)}"
+        app.logger.error(f"[B2B_MANUAL] ❌ {error_msg}")
+        return jsonify({
+            "success": False,
+            "error": error_msg,
+            "missing_fields": missing_fields
+        }), 400
+    
+    # 2️⃣ Sanitizar teléfono
+    phone = _sanitize_phone(raw.get('phone', ''))
+    
+    if not phone:
+        error_msg = "Teléfono inválido después de sanitización"
+        app.logger.error(f"[B2B_MANUAL] ❌ {error_msg}: {raw.get('phone')}")
+        return jsonify({
+            "success": False,
+            "error": error_msg,
+            "original_phone": raw.get('phone')
+        }), 400
+    
+    # 3️⃣ NORMALIZAR a formato esperado por process_lead_common
+    # Transformar payload manual → formato estándar
+    data_normalized = {
+        'nombre_y_apellidos': f"{raw['first_name']} {raw['last_name']}".strip(),
+        'correo_electrónico': raw['email'],
+        'número_de_teléfono': phone,
+        'form_name': raw.get('form_name', 'Manual'),
+        'campaign_name': raw.get('campaign', 'Manual'),
+        'lead_gen_id': raw.get('lead_gen_id', '')
+    }
+    
+    # 4️⃣ Config especial que incluye company_id y company_address_id directos
+    config_manual = {
+        "fields": {},
+        "validations": {},
+        "company_name": None,  # No usamos company_name, tenemos IDs directos
+        "company_id": raw['company_id'],
+        "company_address_id": raw['company_address_id'],
+        "channel": raw.get('channel', 'presencial')
+    }
+    
+    source = 'B2B_Manual'
+    
+    app.logger.info(f"[B2B_MANUAL] Datos normalizados: {data_normalized}")
+    app.logger.info(f"[B2B_MANUAL] Config: {config_manual}")
+    
+    # 5️⃣ MODIFICAR create_portal_user para aceptar company_id directo desde config
+    # (necesitamos un pequeño ajuste en create_portal_user)
+    
+    # 6️⃣ REUTILIZAR process_lead_common (con pequeño ajuste)
+    result = process_lead_common(source, data_normalized, raw, config_manual)
+    
+    # 7️⃣ Si hay deal_id, REUTILIZAR lógica de asignación
+    if result.get("deal_id") and config_manual.get("company_address_id"):
+        try:
+            # Simular data para asignación con company_address_id
+            data_for_assignment = {
+                "company_address_id": config_manual["company_address_id"]
+            }
+            
+            # Crear un pseudo office_info
+            conn = get_supabase_connection()
+            cur = conn.cursor()
+            
+            cur.execute(
+                """
+                SELECT alias, company_id
+                FROM public.company_addresses
+                WHERE id = %s AND is_deleted = FALSE
+                LIMIT 1;
+                """,
+                (config_manual['company_address_id'],)
+            )
+            
+            row = cur.fetchone()
+            
+            if row:
+                office_alias = row[0]
+                company_id = row[1]
+                
+                # REUTILIZAR _get_gestores_leads_for_office
+                rows_gestores = _get_gestores_leads_for_office(
+                    config_manual['company_address_id'],
+                    office_alias,
+                    cur
+                )
+                
+                if not rows_gestores:
+                    # REUTILIZAR round-robin
+                    app.logger.info(f"[B2B_MANUAL] Sin gestores en {office_alias}, round-robin")
+                    
+                    for attempt in range(len(ROUND_ROBIN_OFFICES)):
+                        rr_office = _get_round_robin_office()
+                        
+                        cur.execute(
+                            """
+                            SELECT id, company_id
+                            FROM public.company_addresses
+                            WHERE alias = %s AND is_deleted = FALSE
+                            LIMIT 1;
+                            """,
+                            (rr_office,)
+                        )
+                        
+                        row_rr = cur.fetchone()
+                        
+                        if row_rr:
+                            config_manual['company_address_id'] = row_rr[0]
+                            company_id = row_rr[1]
+                            office_alias = rr_office
+                            
+                            rows_gestores = _get_gestores_leads_for_office(
+                                config_manual['company_address_id'],
+                                office_alias,
+                                cur
+                            )
+                            
+                            if rows_gestores:
+                                break
+                
+                if rows_gestores:
+                    # Asignar al gestor con menor carga
+                    gestor = rows_gestores[0]
+                    user_id, fname, lname, email, role_id, deals = gestor
+                    
+                    # Obtener company_address_id del usuario
+                    cur.execute(
+                        """
+                        SELECT company_address_id
+                        FROM public.profile_comp_addresses
+                        WHERE user_id = %s AND is_deleted = FALSE
+                        ORDER BY created_at DESC
+                        LIMIT 1;
+                        """,
+                        (user_id,)
+                    )
+                    
+                    user_ca = cur.fetchone()
+                    user_company_address_id = user_ca[0] if user_ca else config_manual['company_address_id']
+                    
+                    # UPDATE del deal
+                    cur.execute(
+                        """
+                        UPDATE public.deals
+                        SET user_assigned_id = %s,
+                            company_id = %s,
+                            company_address_id = %s,
+                            updated_at = now()
+                        WHERE id = %s AND is_deleted = FALSE;
+                        """,
+                        (user_id, company_id, user_company_address_id, result['deal_id'])
+                    )
+                    
+                    conn.commit()
+                    
+                    result['assignment'] = {
+                        "success": True,
+                        "user_assigned": f"{fname} {lname}",
+                        "office": office_alias,
+                        "carga": int(deals)
+                    }
+                    
+                    app.logger.info(f"[B2B_MANUAL] ✅ Deal asignado a {fname} {lname}")
+                else:
+                    app.logger.warning(f"[B2B_MANUAL] ⚠️ Sin gestores disponibles")
+            
+            cur.close()
+            conn.close()
+            
+        except Exception as e:
+            app.logger.error(f"[B2B_MANUAL] Error en asignación: {e}", exc_info=True)
+    
+    # 8️⃣ Respuesta
+    return jsonify({
+        "success": True,
+        "portal_user_created": result["portal_user_created"],
+        "deal_id": result["deal_id"],
+        "assignment": result.get("assignment"),
+        "info_lead_created": result["info_lead_created"],
+        "message": "Lead manual procesado"
+    }), 200
