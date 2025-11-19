@@ -31,6 +31,7 @@ CORS(
         r"https://clientes\.solvify\.es",
         r"https://portal\..*",      # mejor regex para portal.*
         r"http://localhost:3000",
+        r"http://.*localhost:3000",  # ← cualquier subdominio .localhost:3000
     ],
     supports_credentials=True,   # ponlo a True solo si usas cookies / auth de navegador
 )
