@@ -1,4 +1,3 @@
-
 import os
 import logging
 from datetime import datetime, timedelta, timezone
@@ -71,6 +70,7 @@ CORS(
     resources={r"/google/*": {"origins": "*"}},
     supports_credentials=True
 )
+
 
 def get_db_conn():
     logger.debug(
@@ -237,6 +237,26 @@ def fetch_task_context(annotation_task_id: str):
 def create_calendar_event_from_task_context(task: dict):
     logger.debug("LOG: Creando evento desde contexto de tarea: %s", task)
 
+    # 🔹 FILTRO: Solo crear evento para tipos específicos
+    ALLOWED_ANNOTATION_TYPES = {
+        "Llamada seguimiento",
+        "Visita programada",
+        "Llamada programada",
+        "Visita presencial agendada",
+        "llamada",
+        "Llamada agendada"
+    }
+    
+    annotation_type = task.get("annotation_type")
+    if annotation_type not in ALLOWED_ANNOTATION_TYPES:
+        logger.info(
+            "LOG: Tarea con annotation_type='%s' NO requiere evento de calendario. Se omite creación.",
+            annotation_type
+        )
+        return None, f"Tipo de tarea '{annotation_type}' no requiere evento de calendario"
+
+    logger.info("LOG: Tipo de tarea '%s' válido para crear evento de calendario", annotation_type)
+
     profile_id = task.get("profile_id")
     if not profile_id:
         logger.error("LOG: La tarea no tiene user_assigned_id (profile_id)")
@@ -270,7 +290,6 @@ def create_calendar_event_from_task_context(task: dict):
     lead_last_name = task.get("lead_last_name") or ""
     lead_name = (lead_first_name + " " + lead_last_name).strip() or "Cliente"
 
-    annotation_type = task.get("annotation_type") or "Llamada programada"
     summary = f"{annotation_type} - {lead_name}"
 
     task_content = task.get("task_content") or ""
@@ -519,6 +538,16 @@ def create_event_from_task():
             return jsonify({"error": "No se ha encontrado la tarea o sus datos asociados"}), 404
 
         event, err = create_calendar_event_from_task_context(task)
+        
+        # 🔹 Si el error indica que el tipo no requiere calendario, devolver 200 OK (no es un error)
+        if err and "no requiere evento de calendario" in err:
+            logger.info("LOG: Tarea procesada pero no requiere evento de calendario")
+            return jsonify({
+                "status": "skipped",
+                "message": err,
+                "annotation_task_id": annotation_task_id
+            }), 200
+        
         if err or not event:
             logger.error("LOG: Error creando evento desde tarea: %s", err)
             return jsonify({"error": err or "Error desconocido creando el evento"}), 500
@@ -537,4 +566,45 @@ def create_event_from_task():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=3000, debug=True)
+    import ssl
+    from threading import Thread
+    
+    # Configuración de puertos
+    HTTP_PORT = 5106
+    HTTPS_PORT = 5107
+    
+    # Cargar rutas de certificados SSL desde configuración
+    SSL_CERT_PATH = config.get("GOOGLE", "SSL_CERT_PATH", fallback=None)
+    SSL_KEY_PATH = config.get("GOOGLE", "SSL_KEY_PATH", fallback=None)
+    
+    # Función para ejecutar servidor HTTP
+    def run_http():
+        logger.info("Iniciando servidor HTTP en puerto %d", HTTP_PORT)
+        app.run(host="0.0.0.0", port=HTTP_PORT, debug=False, use_reloader=False)
+    
+    # Función para ejecutar servidor HTTPS
+    def run_https():
+        if SSL_CERT_PATH and SSL_KEY_PATH:
+            if os.path.exists(SSL_CERT_PATH) and os.path.exists(SSL_KEY_PATH):
+                logger.info("Iniciando servidor HTTPS en puerto %d con certificados: %s", HTTPS_PORT, SSL_CERT_PATH)
+                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                ssl_context.load_cert_chain(SSL_CERT_PATH, SSL_KEY_PATH)
+                app.run(host="0.0.0.0", port=HTTPS_PORT, debug=False, use_reloader=False, ssl_context=ssl_context)
+            else:
+                logger.error("Certificados SSL configurados pero no encontrados:")
+                logger.error("  SSL_CERT_PATH: %s (existe: %s)", SSL_CERT_PATH, os.path.exists(SSL_CERT_PATH))
+                logger.error("  SSL_KEY_PATH: %s (existe: %s)", SSL_KEY_PATH, os.path.exists(SSL_KEY_PATH))
+        else:
+            logger.warning("SSL_CERT_PATH y/o SSL_KEY_PATH no configurados en [GOOGLE]. Servidor HTTPS no iniciado.")
+    
+    # Iniciar servidor HTTP en thread principal
+    http_thread = Thread(target=run_http, daemon=False)
+    http_thread.start()
+    
+    # Iniciar servidor HTTPS en thread secundario
+    https_thread = Thread(target=run_https, daemon=False)
+    https_thread.start()
+    
+    # Esperar a que terminen ambos threads
+    http_thread.join()
+    https_thread.join()
