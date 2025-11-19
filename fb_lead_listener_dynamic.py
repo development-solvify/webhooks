@@ -11,6 +11,7 @@ import datetime
 from pathlib import Path
 from flask import Flask, request, jsonify
 import datetime
+from flask_cors import CORS
 # ----------------------------------------------------------------------------
 # Configuración y constantes
 # ----------------------------------------------------------------------------
