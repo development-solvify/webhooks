@@ -9,7 +9,8 @@ import configparser
 import pg8000
 import datetime
 from pathlib import Path
-
+from flask import Flask, request, jsonify
+import datetime
 # ----------------------------------------------------------------------------
 # Configuración y constantes
 # ----------------------------------------------------------------------------
@@ -21,6 +22,17 @@ TOKEN = os.getenv('SOLVIFY_API_TOKEN',
 
 app = Flask(__name__)
 app.logger.setLevel(logging.DEBUG)
+
+CORS(
+    app,
+    origins=[
+        r"https://app\.solvify\.es",
+        r"https://clientes\.solvify\.es",
+        r"https://portal\..*",      # mejor regex para portal.*
+        r"http://localhost:3000",
+    ],
+    supports_credentials=True,   # ponlo a True solo si usas cookies / auth de navegador
+)
 
 FALLBACK_COMPANY_ID = "9d4c6ef7-b5fa-4890-893f-51cafc247875"  # SICUEL
 
@@ -332,7 +344,6 @@ def get_supabase_connection():
         'database': config_supabase.get('DB','DB_NAME',fallback=None),
     }
     return pg8000.connect(**params)
-
 
 
 def _sanitize_phone(raw_phone: str) -> str | None:
@@ -2017,8 +2028,11 @@ def health_check():
         "timestamp": datetime.datetime.now().isoformat()
     }), 200
 
-@app.route('/B2B_Manual', methods=['POST'])
+@app.route('/B2B_Manual', methods=['POST', 'OPTIONS'])
 def receive_b2b_manual_lead():
+    if request.method == 'OPTIONS':
+        # flask-cors se encarga de las cabeceras, solo respondemos vacío
+        return '', 204
     """
     Endpoint para leads creados manualmente en el sistema (presencial, etc.)
     
