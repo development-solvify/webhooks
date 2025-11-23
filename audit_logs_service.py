@@ -389,5 +389,20 @@ def audit_for_deal_post():
 
 if __name__ == "__main__":
     HTTP_PORT = int(os.environ.get("HTTP_PORT", "5110"))
-    logger.info("Iniciando audit-logs-humanizer en puerto %d", HTTP_PORT)
-    app.run(host="0.0.0.0", port=HTTP_PORT, debug=False, use_reloader=False)
+    
+    # Rutas a tus certificados SSL
+    SSL_CERT = os.environ.get("SSL_CERT", "cert.pem")
+    SSL_KEY = os.environ.get("SSL_KEY", "key.pem")
+    
+    logger.info("Iniciando audit-logs-humanizer en puerto %d con HTTPS", HTTP_PORT)
+    
+    # Para desarrollo, puedes generar certificados autofirmados:
+    # openssl req -x509 -newkey rsa:4096 -nodes -out cert.pem -keyout key.pem -days 365
+    
+    app.run(
+        host="0.0.0.0",
+        port=HTTP_PORT,
+        debug=False,
+        use_reloader=False,
+        ssl_context=(SSL_CERT, SSL_KEY)  # ← Habilita HTTPS
+    )
