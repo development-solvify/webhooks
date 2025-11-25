@@ -9,7 +9,7 @@ import configparser
 from flask import Flask, redirect, request, session, jsonify, render_template
 
 # ============================================================
-# CONFIGURACIÓN: scripts.conf + entorno
+# CONFIGURACI脫N: scripts.conf + entorno
 # ============================================================
 
 DEFAULT_CONF_PATH = os.path.join(os.path.dirname(__file__), "scripts.conf")
@@ -22,7 +22,7 @@ if not read_files:
     raise RuntimeError(f"No se ha podido leer scripts.conf en: {CONF_PATH}")
 
 if "GOOGLE" not in config:
-    raise RuntimeError("No se ha encontrado la sección [GOOGLE] en scripts.conf")
+    raise RuntimeError("No se ha encontrado la secci贸n [GOOGLE] en scripts.conf")
 
 GOOGLE_CLIENT_ID = config.get("GOOGLE", "GOOGLE_CLIENT_ID", fallback=None)
 GOOGLE_CLIENT_SECRET = config.get("GOOGLE", "GOOGLE_CLIENT_SECRET", fallback=None)
@@ -34,13 +34,21 @@ if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI):
 GOOGLE_SCOPES = "https://www.googleapis.com/auth/calendar.events"
 
 if "DB" not in config:
-    raise RuntimeError("No se ha encontrado la sección [DB] en scripts.conf")
+    raise RuntimeError("No se ha encontrado la secci贸n [DB] en scripts.conf")
 
 DB_HOST = config.get("DB", "DB_HOST")
 DB_PORT = config.getint("DB", "DB_PORT", fallback=5432)
 DB_NAME = config.get("DB", "DB_NAME")
 DB_USER = config.get("DB", "DB_USER")
 DB_PASS = config.get("DB", "DB_PASS")
+
+# URL base del portal de Eliminamos tu Deuda (para links a negocios)
+# Se puede sobreescribir con la variable de entorno PORTAL_BASE_URL si hiciera falta.
+PORTAL_BASE_URL = os.environ.get(
+    "PORTAL_BASE_URL",
+    "https://portal.eliminamostudeuda.com"
+)
+
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 
@@ -64,7 +72,7 @@ app = Flask(
 )
 app.secret_key = SECRET_KEY
 
-# 🔹 Habilitar CORS para las rutas /google/*
+# 馃敼 Habilitar CORS para las rutas /google/*
 CORS(
     app,
     resources={r"/google/*": {"origins": "*"}},
@@ -74,7 +82,7 @@ CORS(
 
 def get_db_conn():
     logger.debug(
-        "LOG: Abriendo conexión a BD %s@%s:%s/%s",
+        "LOG: Abriendo conexi贸n a BD %s@%s:%s/%s",
         DB_USER,
         DB_HOST,
         DB_PORT,
@@ -132,7 +140,7 @@ def get_fresh_access_token(profile_id: str):
         logger.debug("LOG: token_expiry=%s ahora=%s", token_expiry, now)
 
         if token_expiry and token_expiry > now + timedelta(minutes=2):
-            logger.info("LOG: Access token aún válido para profile_id=%s", profile_id)
+            logger.info("LOG: Access token a煤n v谩lido para profile_id=%s", profile_id)
             return access_token, None
 
         logger.info("LOG: Renovando access token para profile_id=%s", profile_id)
@@ -144,7 +152,7 @@ def get_fresh_access_token(profile_id: str):
             "grant_type": "refresh_token",
         }
         resp = requests.post(token_url, data=data)
-        logger.debug("LOG: Respuesta renovación token: %s %s", resp.status_code, resp.text)
+        logger.debug("LOG: Respuesta renovaci贸n token: %s %s", resp.status_code, resp.text)
 
         if resp.status_code != 200:
             logger.error("LOG: Error renovando token: %s", resp.text)
@@ -174,6 +182,7 @@ def get_fresh_access_token(profile_id: str):
         conn.close()
 
 
+
 def fetch_task_context(annotation_task_id: str):
     logger.info("LOG: Recuperando contexto de tarea para annotation_task_id=%s", annotation_task_id)
 
@@ -199,12 +208,18 @@ def fetch_task_context(annotation_task_id: str):
 
         p.email AS profile_email,
         p.first_name AS profile_first_name,
-        p.last_name AS profile_last_name
+        p.last_name AS profile_last_name,
+
+        pc.first_name AS creator_first_name,
+        pc.last_name  AS creator_last_name,
+        pc.email      AS creator_email
+
     FROM annotation_tasks at
     JOIN annotations a ON a.id = at.annotation_id
     JOIN deals d ON d.id = a.object_reference_id
     JOIN leads l ON l.id = d.lead_id
-    LEFT JOIN profiles p ON p.id = at.user_assigned_id
+    LEFT JOIN profiles p  ON p.id  = at.user_assigned_id
+    LEFT JOIN profiles pc ON pc.id = at.created_by
     WHERE at.id = %s
       AND a.is_deleted = false
       AND at.is_deleted = false
@@ -220,7 +235,7 @@ def fetch_task_context(annotation_task_id: str):
             cur.execute(sql, (annotation_task_id,))
             row = cur.fetchone()
             if not row:
-                logger.warning("LOG: No se encontró tarea para annotation_task_id=%s", annotation_task_id)
+                logger.warning("LOG: No se encontr贸 tarea para annotation_task_id=%s", annotation_task_id)
                 return None
 
             columns = [desc[0] for desc in cur.description]
@@ -234,28 +249,29 @@ def fetch_task_context(annotation_task_id: str):
         conn.close()
 
 
+
 def create_calendar_event_from_task_context(task: dict):
     logger.debug("LOG: Creando evento desde contexto de tarea: %s", task)
 
-    # 🔹 FILTRO: Solo crear evento para tipos específicos
+    # 馃敼 FILTRO: Solo crear evento para tipos espec铆ficos
     ALLOWED_ANNOTATION_TYPES = {
         "Llamada seguimiento",
         "Visita programada",
         "Llamada programada",
         "Visita presencial agendada",
         "llamada",
-        "Llamada agendada"
+        "Llamada agendada",
     }
-    
+
     annotation_type = task.get("annotation_type")
     if annotation_type not in ALLOWED_ANNOTATION_TYPES:
         logger.info(
-            "LOG: Tarea con annotation_type='%s' NO requiere evento de calendario. Se omite creación.",
-            annotation_type
+            "LOG: Tarea con annotation_type='%s' NO requiere evento de calendario. Se omite creaci贸n.",
+            annotation_type,
         )
         return None, f"Tipo de tarea '{annotation_type}' no requiere evento de calendario"
 
-    logger.info("LOG: Tipo de tarea '%s' válido para crear evento de calendario", annotation_type)
+    logger.info("LOG: Tipo de tarea '%s' v谩lido para crear evento de calendario", annotation_type)
 
     profile_id = task.get("profile_id")
     if not profile_id:
@@ -274,7 +290,7 @@ def create_calendar_event_from_task_context(task: dict):
 
     if not isinstance(due_date, datetime):
         logger.error("LOG: due_date no es datetime: %s", due_date)
-        return None, "La tarea no tiene due_date válido"
+        return None, "La tarea no tiene due_date v谩lido"
 
     tz = ZoneInfo("Europe/Madrid")
     if due_date.tzinfo is None:
@@ -286,30 +302,81 @@ def create_calendar_event_from_task_context(task: dict):
 
     logger.debug("LOG: start_dt=%s end_dt=%s", start_dt.isoformat(), end_dt.isoformat())
 
+    # ---------- Datos del lead ----------
     lead_first_name = task.get("lead_first_name") or ""
     lead_last_name = task.get("lead_last_name") or ""
     lead_name = (lead_first_name + " " + lead_last_name).strip() or "Cliente"
 
-    summary = f"{annotation_type} - {lead_name}"
-
-    task_content = task.get("task_content") or ""
     lead_email = task.get("lead_email") or ""
     lead_phone = task.get("lead_phone") or ""
+
     deal_id = task.get("deal_id")
+    lead_id = task.get("lead_id")
     annotation_task_id = task.get("annotation_task_id")
 
+    # Link al negocio en el portal ETD
+    portal_link = None
+    if deal_id and lead_id:
+        portal_link = (
+            f"{PORTAL_BASE_URL.rstrip('/')}/admin/negocios/{deal_id}/lead/{lead_id}"
+        )
+
+    # ---------- Datos de quien crea la tarea ----------
+    creator_first_name = task.get("creator_first_name") or ""
+    creator_last_name = task.get("creator_last_name") or ""
+    creator_email = task.get("creator_email") or ""
+    creator_name = (creator_first_name + " " + creator_last_name).strip() or "No informado"
+
+    # ---------- Datos del agente asignado ----------
+    profile_email = task.get("profile_email") or ""
+    profile_first_name = task.get("profile_first_name") or ""
+    profile_last_name = task.get("profile_last_name") or ""
+    profile_name = (profile_first_name + " " + profile_last_name).strip() or "No asignado"
+
+    # ---------- Summary del evento ----------
+    summary = f"{annotation_type} - {lead_name}"
+
+    # ---------- Descripci贸n en el formato solicitado ----------
+    task_content = task.get("task_content") or ""
+
     description_lines = []
+
+    # 1. Tipo de visita/llamada + Hora y d铆a
+    description_lines.append(f"Tipo de visita/llamada: {annotation_type or 'No indicado'}")
+    description_lines.append(f"Hora y d铆a: {start_dt.strftime('%d/%m/%Y %H:%M')}")
+    description_lines.append("")
+
+    # 2. Nombre de quien lo crea
+    if creator_email:
+        description_lines.append(f"Nombre de quien lo crea: {creator_name} ({creator_email})")
+    else:
+        description_lines.append(f"Nombre de quien lo crea: {creator_name}")
+
+    # 3. Nombre del agente asignado
+    if profile_email:
+        description_lines.append(
+            f"Nombre del agente asignado: {profile_name} ({profile_email})"
+        )
+    else:
+        description_lines.append(f"Nombre del agente asignado: {profile_name}")
+    description_lines.append("")
+
+    # 4. Datos del lead
+    description_lines.append("Datos del lead:")
+    description_lines.append(f"- Nombre: {lead_name}")
+    description_lines.append(f"- M贸vil: {lead_phone or 'No informado'}")
+    description_lines.append(f"- Correo: {lead_email or 'No informado'}")
+    if portal_link:
+        description_lines.append(f"- Link a su negocio en el portal: {portal_link}")
+    description_lines.append("")
+
+    # 5. Notas adicionales (contenido de la tarea, si lo hay)
     if task_content:
+        description_lines.append("Notas de la tarea:")
         description_lines.append(task_content)
         description_lines.append("")
 
-    description_lines.append(f"Cliente: {lead_name}")
-    if lead_email:
-        description_lines.append(f"Email cliente: {lead_email}")
-    if lead_phone:
-        description_lines.append(f"Teléfono cliente: {lead_phone}")
-
-    description_lines.append("")
+    # 6. Info t茅cnica opcional
     if deal_id:
         description_lines.append(f"Deal ID: {deal_id}")
     if annotation_task_id:
@@ -320,12 +387,8 @@ def create_calendar_event_from_task_context(task: dict):
     logger.debug("LOG: summary=%s", summary)
     logger.debug("LOG: description=%s", description)
 
+    # ---------- Asistentes ----------
     attendees = []
-
-    profile_email = task.get("profile_email")
-    profile_first_name = task.get("profile_first_name") or ""
-    profile_last_name = task.get("profile_last_name") or ""
-    profile_name = (profile_first_name + " " + profile_last_name).strip()
 
     if profile_email:
         att = {"email": profile_email}
@@ -354,13 +417,13 @@ def create_calendar_event_from_task_context(task: dict):
         },
         "attendees": attendees,
         "reminders": {
-            "useDefault": True
+            "useDefault": True,
         },
         "extendedProperties": {
             "private": {
-                "annotation_task_id": str(annotation_task_id)
+                "annotation_task_id": str(annotation_task_id),
             }
-        }
+        },
     }
 
     logger.info(
@@ -385,18 +448,17 @@ def create_calendar_event_from_task_context(task: dict):
 
         return resp.json(), None
     except Exception as e:
-        logger.exception("LOG: Excepción creando evento en Google Calendar: %s", e)
-        return None, f"Excepción hablando con Google Calendar: {e}"
-
+        logger.exception("LOG: Excepci贸n creando evento en Google Calendar: %s", e)
+        return None, f"Excepci贸n hablando con Google Calendar: {e}"
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
-# 🔹 NUEVO: para que /google/ también funcione
+# 馃敼 NUEVO: para que /google/ tambi茅n funcione
 @app.route("/google/")
 def google_root():
-    # puedes enseñar la misma landing
+    # puedes ense帽ar la misma landing
     return render_template("index.html")
     # o si prefieres redirigir:
     # from flask import url_for
@@ -460,11 +522,11 @@ def google_oauth2callback():
         expires_in = token_data.get("expires_in", 3600)
 
         if not refresh_token:
-            logger.error("LOG: No se recibió refresh_token.")
+            logger.error("LOG: No se recibi贸 refresh_token.")
             return render_template(
                 "error.html",
-                message="No se recibió refresh_token de Google",
-                detail="Revisa 'prompt=consent' y 'access_type=offline' en la configuración de OAuth."
+                message="No se recibi贸 refresh_token de Google",
+                detail="Revisa 'prompt=consent' y 'access_type=offline' en la configuraci贸n de OAuth."
             ), 400
 
         expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
@@ -507,7 +569,7 @@ def google_oauth2callback():
             profile_email=profile_email,
         )
     except Exception as e:
-        logger.exception("LOG: Excepción en oauth2callback: %s", e)
+        logger.exception("LOG: Excepci贸n en oauth2callback: %s", e)
         return render_template(
             "error.html",
             message="Ha ocurrido un error al conectar con Google Calendar.",
@@ -519,7 +581,7 @@ def google_oauth2callback():
 def create_event_from_task():
     try:
         raw_data = request.data.decode("utf-8", errors="replace")
-        logger.info("LOG: Petición /google/calendar/from_task body RAW: %s", raw_data)
+        logger.info("LOG: Petici贸n /google/calendar/from_task body RAW: %s", raw_data)
 
         data = request.get_json(silent=True) or {}
         logger.info("LOG: JSON parseado en /from_task: %s", data)
@@ -527,19 +589,19 @@ def create_event_from_task():
         annotation_task_id = data.get("annotation_task_id")
 
         if not annotation_task_id:
-            logger.warning("LOG: annotation_task_id no enviado en la petición")
+            logger.warning("LOG: annotation_task_id no enviado en la petici贸n")
             return jsonify({"error": "annotation_task_id es requerido"}), 400
 
         logger.info("LOG: Creando evento desde annotation_task_id=%s", annotation_task_id)
 
         task = fetch_task_context(annotation_task_id)
         if not task:
-            logger.warning("LOG: No se encontró contexto de tarea para annotation_task_id=%s", annotation_task_id)
+            logger.warning("LOG: No se encontr贸 contexto de tarea para annotation_task_id=%s", annotation_task_id)
             return jsonify({"error": "No se ha encontrado la tarea o sus datos asociados"}), 404
 
         event, err = create_calendar_event_from_task_context(task)
         
-        # 🔹 Si el error indica que el tipo no requiere calendario, devolver 200 OK (no es un error)
+        # 馃敼 Si el error indica que el tipo no requiere calendario, devolver 200 OK (no es un error)
         if err and "no requiere evento de calendario" in err:
             logger.info("LOG: Tarea procesada pero no requiere evento de calendario")
             return jsonify({
@@ -561,28 +623,28 @@ def create_event_from_task():
             "summary": event.get("summary"),
         }), 200
     except Exception as e:
-        logger.exception("LOG: Excepción en /google/calendar/from_task: %s", e)
-        return jsonify({"error": f"Excepción interna: {e}"}), 500
+        logger.exception("LOG: Excepci贸n en /google/calendar/from_task: %s", e)
+        return jsonify({"error": f"Excepci贸n interna: {e}"}), 500
 
 
 if __name__ == "__main__":
     import ssl
     from threading import Thread
     
-    # Configuración de puertos
+    # Configuraci贸n de puertos
     HTTP_PORT = 5106
     HTTPS_PORT = 5107
     
-    # Cargar rutas de certificados SSL desde configuración
+    # Cargar rutas de certificados SSL desde configuraci贸n
     SSL_CERT_PATH = config.get("GOOGLE", "SSL_CERT_PATH", fallback=None)
     SSL_KEY_PATH = config.get("GOOGLE", "SSL_KEY_PATH", fallback=None)
     
-    # Función para ejecutar servidor HTTP
+    # Funci贸n para ejecutar servidor HTTP
     def run_http():
         logger.info("Iniciando servidor HTTP en puerto %d", HTTP_PORT)
         app.run(host="0.0.0.0", port=HTTP_PORT, debug=False, use_reloader=False)
     
-    # Función para ejecutar servidor HTTPS
+    # Funci贸n para ejecutar servidor HTTPS
     def run_https():
         if SSL_CERT_PATH and SSL_KEY_PATH:
             if os.path.exists(SSL_CERT_PATH) and os.path.exists(SSL_KEY_PATH):
