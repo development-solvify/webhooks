@@ -9,7 +9,7 @@ import configparser
 from flask import Flask, redirect, request, session, jsonify, render_template
 
 # ============================================================
-# CONFIGURACI脫N: scripts.conf + entorno
+# CONFIGURACIÓN: scripts.conf + entorno
 # ============================================================
 
 DEFAULT_CONF_PATH = os.path.join(os.path.dirname(__file__), "scripts.conf")
@@ -22,7 +22,7 @@ if not read_files:
     raise RuntimeError(f"No se ha podido leer scripts.conf en: {CONF_PATH}")
 
 if "GOOGLE" not in config:
-    raise RuntimeError("No se ha encontrado la secci贸n [GOOGLE] en scripts.conf")
+    raise RuntimeError("No se ha encontrado la sección [GOOGLE] en scripts.conf")
 
 GOOGLE_CLIENT_ID = config.get("GOOGLE", "GOOGLE_CLIENT_ID", fallback=None)
 GOOGLE_CLIENT_SECRET = config.get("GOOGLE", "GOOGLE_CLIENT_SECRET", fallback=None)
@@ -34,7 +34,7 @@ if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI):
 GOOGLE_SCOPES = "https://www.googleapis.com/auth/calendar.events"
 
 if "DB" not in config:
-    raise RuntimeError("No se ha encontrado la secci贸n [DB] en scripts.conf")
+    raise RuntimeError("No se ha encontrado la sección [DB] en scripts.conf")
 
 DB_HOST = config.get("DB", "DB_HOST")
 DB_PORT = config.getint("DB", "DB_PORT", fallback=5432)
@@ -72,7 +72,7 @@ app = Flask(
 )
 app.secret_key = SECRET_KEY
 
-# 馃敼 Habilitar CORS para las rutas /google/*
+# 🔐 Habilitar CORS para las rutas /google/*
 CORS(
     app,
     resources={r"/google/*": {"origins": "*"}},
@@ -140,7 +140,7 @@ def get_fresh_access_token(profile_id: str):
         logger.debug("LOG: token_expiry=%s ahora=%s", token_expiry, now)
 
         if token_expiry and token_expiry > now + timedelta(minutes=2):
-            logger.info("LOG: Access token a煤n v谩lido para profile_id=%s", profile_id)
+            logger.info("LOG: Access token aún válido para profile_id=%s", profile_id)
             return access_token, None
 
         logger.info("LOG: Renovando access token para profile_id=%s", profile_id)
@@ -253,7 +253,7 @@ def fetch_task_context(annotation_task_id: str):
 def create_calendar_event_from_task_context(task: dict):
     logger.debug("LOG: Creando evento desde contexto de tarea: %s", task)
 
-    # 馃敼 FILTRO: Solo crear evento para tipos espec铆ficos
+    # 🔐 FILTRO: Solo crear evento para tipos específicos
     ALLOWED_ANNOTATION_TYPES = {
         "Llamada seguimiento",
         "Visita programada",
@@ -336,14 +336,14 @@ def create_calendar_event_from_task_context(task: dict):
     # ---------- Summary del evento ----------
     summary = f"{annotation_type} - {lead_name}"
 
-    # ---------- Descripci贸n en el formato solicitado ----------
+    # ---------- Descripción en el formato solicitado ----------
     task_content = task.get("task_content") or ""
 
     description_lines = []
 
-    # 1. Tipo de visita/llamada + Hora y d铆a
+    # 1. Tipo de visita/llamada + Hora y día
     description_lines.append(f"Tipo de visita/llamada: {annotation_type or 'No indicado'}")
-    description_lines.append(f"Hora y d铆a: {start_dt.strftime('%d/%m/%Y %H:%M')}")
+    description_lines.append(f"Hora y día: {start_dt.strftime('%d/%m/%Y %H:%M')}")
     description_lines.append("")
 
     # 2. Nombre de quien lo crea
@@ -364,7 +364,7 @@ def create_calendar_event_from_task_context(task: dict):
     # 4. Datos del lead
     description_lines.append("Datos del lead:")
     description_lines.append(f"- Nombre: {lead_name}")
-    description_lines.append(f"- M贸vil: {lead_phone or 'No informado'}")
+    description_lines.append(f"- Móvil: {lead_phone or 'No informado'}")
     description_lines.append(f"- Correo: {lead_email or 'No informado'}")
     if portal_link:
         description_lines.append(f"- Link a su negocio en el portal: {portal_link}")
@@ -376,7 +376,7 @@ def create_calendar_event_from_task_context(task: dict):
         description_lines.append(task_content)
         description_lines.append("")
 
-    # 6. Info t茅cnica opcional
+    # 6. Info técnica opcional
     if deal_id:
         description_lines.append(f"Deal ID: {deal_id}")
     if annotation_task_id:
@@ -455,10 +455,10 @@ def create_calendar_event_from_task_context(task: dict):
 def index():
     return render_template("index.html")
 
-# 馃敼 NUEVO: para que /google/ tambi茅n funcione
+# 🔐 NUEVO: para que /google/ también funcione
 @app.route("/google/")
 def google_root():
-    # puedes ense帽ar la misma landing
+    # puedes enseñar la misma landing
     return render_template("index.html")
     # o si prefieres redirigir:
     # from flask import url_for
@@ -601,7 +601,7 @@ def create_event_from_task():
 
         event, err = create_calendar_event_from_task_context(task)
         
-        # 馃敼 Si el error indica que el tipo no requiere calendario, devolver 200 OK (no es un error)
+        # 🔐 Si el error indica que el tipo no requiere calendario, devolver 200 OK (no es un error)
         if err and "no requiere evento de calendario" in err:
             logger.info("LOG: Tarea procesada pero no requiere evento de calendario")
             return jsonify({
@@ -631,20 +631,20 @@ if __name__ == "__main__":
     import ssl
     from threading import Thread
     
-    # Configuraci贸n de puertos
+    # Configuración de puertos
     HTTP_PORT = 5106
     HTTPS_PORT = 5107
     
-    # Cargar rutas de certificados SSL desde configuraci贸n
+    # Cargar rutas de certificados SSL desde configuración
     SSL_CERT_PATH = config.get("GOOGLE", "SSL_CERT_PATH", fallback=None)
     SSL_KEY_PATH = config.get("GOOGLE", "SSL_KEY_PATH", fallback=None)
     
-    # Funci贸n para ejecutar servidor HTTP
+    # Función para ejecutar servidor HTTP
     def run_http():
         logger.info("Iniciando servidor HTTP en puerto %d", HTTP_PORT)
         app.run(host="0.0.0.0", port=HTTP_PORT, debug=False, use_reloader=False)
     
-    # Funci贸n para ejecutar servidor HTTPS
+    # Función para ejecutar servidor HTTPS
     def run_https():
         if SSL_CERT_PATH and SSL_KEY_PATH:
             if os.path.exists(SSL_CERT_PATH) and os.path.exists(SSL_KEY_PATH):
