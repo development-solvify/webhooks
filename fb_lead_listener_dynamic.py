@@ -1626,7 +1626,7 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
     # 2) Buscar deal_id
     deal_id = None
     max_retries = 3
-    retry_delay = 0.5  # 500ms entre intentos
+    retry_delay = 1  # 500ms entre intentos
 
     try:
         phone = strip_country_code(data.get('número_de_teléfono','') or '')
