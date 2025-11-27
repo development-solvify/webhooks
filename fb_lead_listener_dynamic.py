@@ -1625,46 +1625,75 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
 
     # 2) Buscar deal_id
     deal_id = None
+    max_retries = 3
+    retry_delay = 0.5  # 500ms entre intentos
+
     try:
-        conn = get_supabase_connection()
-        cur = conn.cursor()
         phone = strip_country_code(data.get('número_de_teléfono','') or '')
-        if phone:
-            query = (
-                "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
-                "WHERE TRIM(REPLACE(REPLACE(l.phone,'+34',''),' ',''))=%s "
-                "AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
-                "ORDER BY d.created_at DESC LIMIT 1"
-            )
-            cur.execute(query, (phone,))
-        else:
-            query = (
-                "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
-                "WHERE l.email=%s AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
-                "ORDER BY d.created_at DESC LIMIT 1"
-            )
-            cur.execute(query, (data.get('correo_electrónico',''),))
-        row = cur.fetchone()
-        deal_id = str(row[0]) if row else None
-        if deal_id:
-            app.logger.debug(f"Deal ID encontrado para {source}: {deal_id}")
-        else:
-            app.logger.debug(f"No se encontró deal_id para el lead de {source}")
+        
+        for attempt in range(max_retries):
+            try:
+                conn = get_supabase_connection()
+                cur = conn.cursor()
+                
+                if phone:
+                    query = (
+                        "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
+                        "WHERE TRIM(REPLACE(REPLACE(l.phone,'+34',''),' ',''))=%s "
+                        "AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
+                        "ORDER BY d.created_at DESC LIMIT 1"
+                    )
+                    cur.execute(query, (phone,))
+                else:
+                    query = (
+                        "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
+                        "WHERE l.email=%s AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
+                        "ORDER BY d.created_at DESC LIMIT 1"
+                    )
+                    cur.execute(query, (data.get('correo_electrónico',''),))
+                
+                row = cur.fetchone()
+                deal_id = str(row[0]) if row else None
+                
+                if deal_id:
+                    app.logger.info(
+                        f"✅ Deal ID encontrado para {source} (intento {attempt + 1}/{max_retries}): {deal_id}"
+                    )
+                    break
+                else:
+                    if attempt < max_retries - 1:
+                        app.logger.warning(
+                            f"⏳ Deal no encontrado aún para {source}, "
+                            f"reintentando en {retry_delay}s (intento {attempt + 1}/{max_retries})"
+                        )
+                        time.sleep(retry_delay)
+                    else:
+                        app.logger.warning(
+                            f"❌ No se encontró deal_id tras {max_retries} intentos para {source}"
+                        )
+            finally:
+                try:
+                    if 'cur' in locals(): cur.close()
+                    if 'conn' in locals(): conn.close()
+                except:
+                    pass
+                
+   
     except Exception as e:
         full = data.get('nombre_y_apellidos','').strip()
         phone = strip_country_code(data.get('número_de_teléfono','') or '')
-        app.logger.error(f"RECHAZADO InfoLead {source}: {full} | TEL={phone} | MOTIVO=Error buscando deal_id: {e}", exc_info=True)
-    finally:
-        try:
-            if 'cur' in locals(): cur.close()
-            if 'conn' in locals(): conn.close()
-        except:
-            pass
+        app.logger.error(
+            f"RECHAZADO InfoLead {source}: {full} | TEL={phone} | "
+            f"MOTIVO=Error buscando deal_id: {e}", 
+            exc_info=True
+        )
 
     if not deal_id:
         full = data.get('nombre_y_apellidos','').strip()
         phone = strip_country_code(data.get('número_de_teléfono','') or '')
-        app.logger.warning(f"RECHAZADO InfoLead {source}: {full} | TEL={phone} | MOTIVO=Sin deal_id")
+        app.logger.warning(
+            f"RECHAZADO InfoLead {source}: {full} | TEL={phone} | MOTIVO=Sin deal_id tras retries"
+        )
         return {
             "portal_user_created": True,
             "info_lead_created": False,
@@ -1787,8 +1816,7 @@ def receive_lead():
         mapped_key = mapping.get(k) or mapping.get(k.lstrip('¿'))
         if not mapped_key and k not in data:
             # Convertir a string si es necesario para consistencia
-            data[k] = str(v) if not isinstance(v, str) else v
-            app.logger.debug(f"SIN MAPEAR: '{k}' = '{v}' (tipo: {type(v)})")
+            data[k] = str(v) if not isinstance(v, str) : v
     
     # Debug final de datos mapeados
     app.logger.debug("DATOS FINALES MAPEADOS:")
@@ -1890,23 +1918,22 @@ def receive_alianza_lead():
         'correo_electrónico': ['mail', 'email', 'correo', 'e-mail'],
         'número_de_teléfono': ['teléfono', 'phone_number', 'telefono', 'tel', 'mobile'],
     }
-    for target_field, aliases in critical_fields.items():
-        cur = str(data.get(target_field, '')).strip()
+    for target, aliases in critical_fields.items():
+        cur = str(data.get(target, '')).strip()
         if not cur:
             for alias in aliases:
                 raw_value_original = raw.get(alias, '')
                 raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''
                 if raw_value:
-                    data[target_field] = raw_value
-                    app.logger.debug(f"FALLBACK: '{alias}' → '{target_field}' = {raw_value!r}")
+                    data[target] = raw_value
+                    app.logger.debug(f"FALLBACK: '{alias}' → '{target}' = {raw_value!r}")
                     break
 
     # 2.3 Agregar campos no mapeados
     for k, v in raw.items():
         mapped_key = mapping.get(k)
         if not mapped_key and k not in data:
-            data[k] = str(v) if not isinstance(v, str) else v
-            app.logger.debug(f"SIN MAPEAR: '{k}' = '{v}' (tipo: {type(v)})")
+            data[k] = str(v) if not isinstance(v, str) : v
 
     # 2.4 Debug final
     app.logger.debug("DATOS FINALES MAPEADOS ALIANZA:")
@@ -1998,7 +2025,7 @@ def receive_b2b_lead():
     for k, v in data.items():
         app.logger.debug(f"  {k!r}: {v!r}")
 
-    # 7) Flujo común: crea portal user -> busca deal_id -> crea tarea Info Lead
+    # 7) Flujo común: crea portal user -> busca deal_id -> crea tarea Info lead
     result = process_lead_common(source, data, raw, config)
 
     # 8) Respuesta
