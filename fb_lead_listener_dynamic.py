@@ -1363,7 +1363,9 @@ def create_portal_user(data, source, config=None):
 
     cat_id = 'bcb1ae3e-4c23-4461-9dae-30ed137d53e2'
     
-    app.logger.debug(f"Categoría de PortalUser para {full}: {cat_id}")    # 3️⃣ Determinar company_name desde config o fallback
+    app.logger.debug(f"Categoría de PortalUser para {full}: {cat_id}")
+    
+    # 3️⃣ Determinar company_name desde config o fallback
     company_name = config.get("company_name") if config else None
     app.logger.debug(f"=== COMPANY NAME DEBUG ===")
     app.logger.debug(f"config.get('company_name'): '{company_name}'")
@@ -1371,11 +1373,9 @@ def create_portal_user(data, source, config=None):
 
     if not company_name:
         if source in ('Backup_FB', 'Alianza_FB', 'MARTIN','fb'):
-            company_name = 'Solvify'
-            app.logger.debug("Company name asignado: 'Solvify'")
+            company_name = 'SICUEL'
         else:
             company_name = source
-            app.logger.debug(f"Company name asignado desde source: '{company_name}'")
     
     app.logger.debug(f"Company name final antes de DB lookup: '{company_name}'")
 
@@ -1395,44 +1395,49 @@ def create_portal_user(data, source, config=None):
             conn = get_supabase_connection()
             cur = conn.cursor()
 
-            cur.execute("""
-                SELECT 
-                    c.id AS company_id,
-                    ca.id AS company_address_id
-                FROM companies c
-                LEFT JOIN LATERAL (
-                    SELECT 
-                        a.id,
-                        a.created_at
-                    FROM company_addresses a
-                    WHERE a.company_id = c.id
-                      AND a.is_deleted = FALSE
-                    ORDER BY a.created_at ASC
-                    LIMIT 1
-                ) ca ON TRUE
-                WHERE c.is_deleted = FALSE
-                  AND LOWER(c.name) = LOWER(%s)
+            # Buscar company_id por nombre
+            cur.execute(
+                """
+                SELECT id 
+                FROM public.companies 
+                WHERE name = %s 
+                  AND (is_deleted = FALSE OR is_deleted IS NULL)
                 LIMIT 1;
-            """, (company_name,))
+                """,
+                (company_name,),
+            )
+            row_company = cur.fetchone()
 
-            row = cur.fetchone()
+            if row_company:
+                company_id = row_company[0]
+                app.logger.debug(f"Company ID encontrado en DB: {company_id}")
 
-            if row:
-                company_id = str(row[0]) if row[0] is not None else None
-                company_address_id = str(row[1]) if row[1] is not None else None
-
-                app.logger.debug(f"Company ID encontrado para '{company_name}': {company_id}")
-                app.logger.debug(f"Company Address ID encontrado para '{company_name}': {company_address_id}")
-            else:
-                app.logger.warning(f"No se encontró company para '{company_name}'")
+                # Buscar company_address_id (la primera dirección de esa company)
+                cur.execute(
+                    """
+                    SELECT id 
+                    FROM public.company_addresses 
+                    WHERE company_id = %s 
+                      AND (is_deleted = FALSE OR is_deleted IS NULL)
+                    ORDER BY created_at ASC
+                    LIMIT 1;
+                    """,
+                    (company_id,),
+                )
+                row_address = cur.fetchone()
+                if row_address:
+                    company_address_id = row_address[0]
+                    app.logger.debug(f"Company Address ID encontrado: {company_address_id}")
 
         except Exception as e:
-            app.logger.error(f"Error buscando company_id / company_address_id para '{company_name}': {e}")
+            app.logger.error(f"Error en lookup de company: {e}", exc_info=True)
 
         finally:
             try:
-                cur.close()
-                conn.close()
+                if cur:
+                    cur.close()
+                if conn:
+                    conn.close()
             except Exception:
                 pass
 
@@ -1441,56 +1446,36 @@ def create_portal_user(data, source, config=None):
         try:
             conn = get_supabase_connection()
             cur = conn.cursor()
-            
-            # Buscar deal existente
-            cur.execute("""
-                SELECT d.id, d.status
-                FROM leads l
-                JOIN deals d ON d.lead_id = l.id AND d.is_deleted = FALSE
-                WHERE TRIM(REPLACE(REPLACE(l.phone, '+34', ''), ' ', '')) = %s
-                AND l.is_deleted = FALSE
-                AND d.company_id = %s
-                ORDER BY d.created_at DESC
-                LIMIT 1
-            """, (phone, company_id))
-            existing_deal = cur.fetchone()
 
-            if existing_deal:
-                deal_id, current_status = existing_deal
+            cur.execute(
+                """
+                SELECT l.id, l.phone 
+                FROM public.leads l
+                WHERE l.phone = %s 
+                  AND l.company_id = %s
+                  AND (l.is_deleted = FALSE OR l.is_deleted IS NULL)
+                LIMIT 1;
+                """,
+                (phone, company_id),
+            )
+            existing_lead = cur.fetchone()
+
+            if existing_lead:
                 app.logger.warning(
-                    f"⚠️ DUPLICADO DETECTADO: {full} | TEL={phone} | "
-                    f"Company ID: {company_id} | Deal ID: {deal_id} | Status actual: {current_status}"
+                    f"RECHAZADO PortalUser: {full} | TEL={phone} | "
+                    f"MOTIVO=Lead duplicado para company_id={company_id} (lead_id={existing_lead[0]})"
                 )
-                
-                # Actualizar deal a "Nuevo Contacto"
-                cur.execute("""
-                    UPDATE public.deals
-                    SET status = 'Nuevo contacto',
-                        updated_at = now()
-                    WHERE id = %s
-                    AND is_deleted = FALSE
-                """, (deal_id,))
-                conn.commit()
-                
-                app.logger.info(
-                    f"✅ Deal {deal_id} actualizado a 'Nuevo contacto' | "
-                    f"Cliente: {full} | TEL={phone} | Status anterior: {current_status}"
-                )
-                
-                # Retornar None para no crear nuevo portal user
                 return None
-            else:
-                app.logger.debug(
-                    f"Cliente {phone} no existe en deals de company_id {company_id}, procediendo a crear"
-                )
 
         except Exception as e:
-            app.logger.error(f"Error verificando/actualizando duplicado para {phone} en company {company_id}: {e}")
+            app.logger.error(f"Error verificando lead duplicado: {e}", exc_info=True)
         finally:
             try:
-                cur.close()
-                conn.close()
-            except:
+                if cur:
+                    cur.close()
+                if conn:
+                    conn.close()
+            except Exception:
                 pass
     
 
@@ -1500,18 +1485,31 @@ def create_portal_user(data, source, config=None):
     last = ' '.join(parts[1:]) if len(parts) > 1 else ''
     email = data.get('correo_electrónico','') or data.get('email','')
 
+    # 🆕 NUEVA LÓGICA: Priorizar channel del payload/config
+    origin = None
     
-    #mappeo específico de origen
+    # 1. Primero intentar desde config (B2B_Manual, etc.)
+    if config and config.get('channel'):
+        origin = config.get('channel')
+        app.logger.debug(f"📍 Channel desde config: '{origin}'")
     
-    if source=='ETD2':
-        origin = 'gads'
-    elif source=='ETD':
-        origin = 'fb'
+    # 2. Luego intentar desde data (si vino mapeado desde el payload)
+    elif data.get('channel'):
+        origin = data.get('channel')
+        app.logger.debug(f"📍 Channel desde data (payload): '{origin}'")
+    
+    # 3. Fallback por source (retrocompatibilidad)
     else:
-        origin = 'fb'   
-#mappeo específico de origen
-
+        if source == 'ETD2':
+            origin = 'gads'
+        elif source == 'ETD':
+            origin = 'fb'
+        else:
+            origin = 'fb'
+        app.logger.debug(f"📍 Channel desde fallback (source={source}): '{origin}'")
     
+    app.logger.info(f"✅ Channel final usado: '{origin}'")
+
     payload = {
         'first_name': first,
         'last_name':  last,
@@ -1560,19 +1558,18 @@ def create_portal_user(data, source, config=None):
         app.logger.info(f"   Response Text: {r.text}")
         
         try:
-            response_json = r.json()
-            app.logger.info(f"   Response JSON: {response_json}")
+            app.logger.info(f"   Response JSON: {r.json()}")
         except:
-            app.logger.warning("   No se pudo parsear respuesta como JSON")
+            pass
         
         if r.status_code == 409:
-            app.logger.warning(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Portal user duplicado")
+            app.logger.warning(f"Lead duplicado (409): {full} | TEL={phone}")
             return None
         if r.status_code not in (200,201):
-            app.logger.error(f"❌ ERROR API - Status Code: {r.status_code}")
-            app.logger.error(f"❌ ERROR API - Response: {r.text}")
-            app.logger.error(f"❌ ERROR API - Headers: {dict(r.headers)}")
-            app.logger.error(f"RECHAZADO PortalUser: {full} | TEL={phone} | MOTIVO=Error creando portal user: {r.status_code} {r.text}")
+            app.logger.error(
+                f"RECHAZADO PortalUser: {full} | TEL={phone} | "
+                f"MOTIVO=Error API {r.status_code}: {r.text}"
+            )
             return None
             
         r.raise_for_status()
@@ -1694,7 +1691,7 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
         app.logger.warning(
             f"RECHAZADO InfoLead {source}: {full} | TEL={phone} | MOTIVO=Sin deal_id tras retries"
         )
-        return {
+               return {
             "portal_user_created": True,
             "info_lead_created": False,
             "deal_id": None,
