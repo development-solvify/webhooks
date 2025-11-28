@@ -8,6 +8,7 @@ import re
 import configparser
 import pg8000
 import datetime
+import time  # Necesario para retries de búsqueda de deal
 from pathlib import Path
 from flask import Flask, request, jsonify
 import datetime
@@ -1441,40 +1442,38 @@ def create_portal_user(data, source, config=None):
             except Exception:
                 pass
 
-    # 4.5️⃣ Verificar si el cliente (número) ya existe para ESTE company_id
+    # 4.5️⃣ Verificar si el cliente (número) ya existe para ESTE company_id vía deals
     if phone and company_id:
         try:
             conn = get_supabase_connection()
             cur = conn.cursor()
-
             cur.execute(
                 """
-                SELECT l.id, l.phone 
+                SELECT l.id, l.phone, d.company_id
                 FROM public.leads l
-                WHERE l.phone = %s 
-                  AND l.company_id = %s
+                JOIN public.deals d ON d.lead_id = l.id
+                WHERE l.phone = %s
+                  AND d.company_id = %s
                   AND (l.is_deleted = FALSE OR l.is_deleted IS NULL)
+                  AND (d.is_deleted = FALSE OR d.is_deleted IS NULL)
+                ORDER BY d.created_at DESC
                 LIMIT 1;
                 """,
                 (phone, company_id),
             )
             existing_lead = cur.fetchone()
-
             if existing_lead:
                 app.logger.warning(
                     f"RECHAZADO PortalUser: {full} | TEL={phone} | "
                     f"MOTIVO=Lead duplicado para company_id={company_id} (lead_id={existing_lead[0]})"
                 )
                 return None
-
         except Exception as e:
-            app.logger.error(f"Error verificando lead duplicado: {e}", exc_info=True)
+            app.logger.error(f"Error verificando lead duplicado (JOIN deals): {e}", exc_info=True)
         finally:
             try:
-                if cur:
-                    cur.close()
-                if conn:
-                    conn.close()
+                if cur: cur.close()
+                if conn: conn.close()
             except Exception:
                 pass
     
@@ -1906,7 +1905,7 @@ def receive_alianza_lead():
     for original_key, mapped_key in mapping.items():
         value = raw.get(original_key)
         if value is not None:
-            data[mapped_key] = str(value) if not isinstance(value, str) else value
+            data[mapped_key] = str(value) if not isinstance(value, str) : value
             app.logger.debug(f"MAPEADO: '{original_key}' → '{mapped_key}' = '{value}' (tipo: {type(value)})")
 
     # 2.2 Fallback para críticos
@@ -1930,7 +1929,7 @@ def receive_alianza_lead():
     for k, v in raw.items():
         mapped_key = mapping.get(k)
         if not mapped_key and k not in data:
-            data[k] = str(v) if not isinstance(v, str) else v
+            data[k] = str(v) if not isinstance(v, str) : v
 
     # 2.4 Debug final
     app.logger.debug("DATOS FINALES MAPEADOS ALIANZA:")
