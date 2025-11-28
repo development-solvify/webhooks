@@ -1691,7 +1691,7 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
         app.logger.warning(
             f"RECHAZADO InfoLead {source}: {full} | TEL={phone} | MOTIVO=Sin deal_id tras retries"
         )
-               return {
+        return {
             "portal_user_created": True,
             "info_lead_created": False,
             "deal_id": None,
