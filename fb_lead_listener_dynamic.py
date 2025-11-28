@@ -1519,8 +1519,8 @@ def create_portal_user(data, source, config=None):
         'form_name':  data.get('form_name',''),
         'campaign':   data.get('campaign_name',''),
         'lead_gen_id':data.get('lead_gen_id') or data.get('leadgen_id',''),
-        'company_id': company_id or FALLBACK_COMPANY_ID,
-        'company_address_id': company_address_id or FALLBACK_COMPANY_ID
+        'company_id': str(company_id) if company_id else str(FALLBACK_COMPANY_ID),  # ← Convertir a str
+        'company_address_id': str(company_address_id) if company_address_id else str(FALLBACK_COMPANY_ID)  # ← Convertir a str
     }
     app.logger.debug(f"Payload PortalUser para {company_name}: {payload}")
 
@@ -1940,6 +1940,7 @@ def receive_alianza_lead():
     # 3️⃣ Lógica COMÚN
     result = process_lead_common(source, data, raw, config)
 
+    # 8) Respuesta
     return jsonify({
         "message": f"Lead de {source} procesado",
         "source": source,
