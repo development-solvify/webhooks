@@ -5,7 +5,7 @@ import logging
 import os
 import configparser
 from pathlib import Path
-
+import re
 import pg8000
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -77,25 +77,21 @@ def run_search(company_id: str, query: str):
     Devuelve una lista de dicts ya listos para el front.
     """
 
-    # Normalizamos parámetros
     q = (query or "").strip()
     if not q:
         return []
 
-    # SQL:
-    #   - CTE "search" con patrones
-    #   - UNION ALL de:
-    #       * deals (con leads)
-    #       * leads (agrupados por company vía deals)
-    #       * profiles (vía profile_comp_addresses -> company_addresses -> companies)
-    #   - DISTINCT ON para no duplicar objetos
+    # Construimos patrón de búsqueda en Python
+    pattern = f"%{q}%"
+    digits = re.sub(r"\D", "", q or "")
+
+    # CTE 'search' para reutilizar pattern/digits en las 3 queries
     sql = """
     WITH search AS (
         SELECT
-            %(company_id)s::uuid AS company_id,
-            %(q)s::text          AS q,
-            ('%' || %(q)s || '%')::text AS pattern,
-            regexp_replace(%(q)s::text, '\\D', '', 'g') AS digits
+            %s::uuid AS company_id,
+            %s::text AS pattern,
+            %s::text AS digits
     ),
     raw_results AS (
         -- 1) DEALS
@@ -124,7 +120,8 @@ def run_search(company_id: str, query: str):
                 OR (l.first_name || ' ' || l.last_name) ILIKE s.pattern
                 OR l.email ILIKE s.pattern
                 OR (
-                    regexp_replace(COALESCE(l.phone, ''), '\\D', '', 'g') <> ''
+                    s.digits <> ''
+                    AND regexp_replace(COALESCE(l.phone, ''), '\\D', '', 'g') <> ''
                     AND regexp_replace(COALESCE(l.phone, ''), '\\D', '', 'g')
                         LIKE s.digits || '%'
                 )
@@ -157,7 +154,8 @@ def run_search(company_id: str, query: str):
                 (l.first_name || ' ' || l.last_name) ILIKE s.pattern
                 OR l.email ILIKE s.pattern
                 OR (
-                    regexp_replace(COALESCE(l.phone, ''), '\\D', '', 'g') <> ''
+                    s.digits <> ''
+                    AND regexp_replace(COALESCE(l.phone, ''), '\\D', '', 'g') <> ''
                     AND regexp_replace(COALESCE(l.phone, ''), '\\D', '', 'g')
                         LIKE s.digits || '%'
                 )
@@ -192,7 +190,8 @@ def run_search(company_id: str, query: str):
                 (p.first_name || ' ' || p.last_name) ILIKE s.pattern
                 OR p.email ILIKE s.pattern
                 OR (
-                    regexp_replace(COALESCE(p.phone, ''), '\\D', '', 'g') <> ''
+                    s.digits <> ''
+                    AND regexp_replace(COALESCE(p.phone, ''), '\\D', '', 'g') <> ''
                     AND regexp_replace(COALESCE(p.phone, ''), '\\D', '', 'g')
                         LIKE s.digits || '%'
                 )
@@ -212,10 +211,11 @@ def run_search(company_id: str, query: str):
     LIMIT 50;
     """
 
-    params = {
-        "company_id": company_id,
-        "q": q,
-    }
+    params = (
+        company_id,  # search.company_id
+        pattern,     # search.pattern
+        digits,      # search.digits
+    )
 
     conn = get_db_connection()
     try:
