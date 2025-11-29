@@ -73,21 +73,29 @@ def get_db_connection():
 # ----------------------------------------------------------------------------
 import re  # asegúrate de tener este import arriba del archivo
 
+import re  # arriba del archivo, si no lo tienes ya
+
 def run_search(company_id: str, query: str):
     """
     Ejecuta una búsqueda global para una company_id y un término q.
-    Devuelve una lista de dicts ya listos para el front.
+    Devuelve:
+      - results: lista de entidades (deals, leads, profiles)
+      - messages: mensajes asociados al teléfono buscado (si lo hay)
+      - tasks: tareas asociadas a deals de ese teléfono (si las hay)
     """
 
     q = (query or "").strip()
     if not q:
-        return []
+        return [], [], []
 
     # Construimos patrón de búsqueda en Python
     pattern = f"%{q}%"
     digits = re.sub(r"\D", "", q or "")
 
-    sql = """
+    # ------------------------------------------------------------
+    # 1) BÚSQUEDA DE ENTIDADES (deals, leads, profiles)
+    # ------------------------------------------------------------
+    search_sql = """
     WITH search AS (
         SELECT
             %s::uuid AS company_id,
@@ -139,7 +147,6 @@ def run_search(company_id: str, query: str):
             l.phone      AS phone,
             l.email      AS email,
             json_build_object(
-                -- quitamos l.status porque no existe en la BDD real
                 'channel', l.channel
             ) AS extra,
             '/leads/' || l.id::text AS link
@@ -212,49 +219,185 @@ def run_search(company_id: str, query: str):
     LIMIT 50;
     """
 
-    params = (
+    search_params = (
         company_id,  # search.company_id
         pattern,     # search.pattern
         digits,      # search.digits
     )
 
     conn = get_db_connection()
+    results = []
+    messages = []
+    tasks = []
+
     try:
         cur = conn.cursor()
-        cur.execute(sql, params)
+
+        # ------ ENTIDADES ------
+        cur.execute(search_sql, search_params)
         rows = cur.fetchall()
-        cur.close()
+
+        for row in rows:
+            (
+                entity_type,
+                entity_id,
+                title,
+                subtitle,
+                phone,
+                email,
+                extra,
+                link,
+            ) = row
+
+            results.append({
+                "entity_type": entity_type,
+                "entity_id": str(entity_id),
+                "title": title,
+                "subtitle": subtitle,
+                "phone": phone,
+                "email": email,
+                "extra": extra,
+                "link": link,
+            })
+
+        # Si no hay dígitos en la búsqueda, no tiene sentido buscar mensajes/tareas por teléfono
+        if digits:
+            # ------------------------------------------------------------
+            # 2) MENSAJES por teléfono (external_messages)
+            # ------------------------------------------------------------
+            msg_sql = """
+            SELECT
+                em.id,
+                em.message,
+                em.sender_phone,
+                em.responsible_email,
+                em.last_message_uid,
+                em.last_message_timestamp,
+                em.from_me,
+                em.status,
+                em.chat_url,
+                em.chat_id,
+                em.assigned_to_id
+            FROM public.external_messages em
+            WHERE
+                em.is_deleted = FALSE
+                AND em.company_id = %s
+                AND %s <> ''
+                AND regexp_replace(COALESCE(em.sender_phone, ''), '\\D', '', 'g')
+                    LIKE %s || '%%'
+            ORDER BY em.last_message_timestamp DESC
+            LIMIT 50;
+            """
+            msg_params = (company_id, digits, digits)
+            cur.execute(msg_sql, msg_params)
+            msg_rows = cur.fetchall()
+
+            for r in msg_rows:
+                (
+                    mid,
+                    message,
+                    sender_phone,
+                    responsible_email,
+                    last_message_uid,
+                    last_message_timestamp,
+                    from_me,
+                    status,
+                    chat_url,
+                    chat_id,
+                    assigned_to_id,
+                ) = r
+
+                messages.append({
+                    "id": str(mid),
+                    "message": message,
+                    "sender_phone": sender_phone,
+                    "responsible_email": responsible_email,
+                    "last_message_uid": last_message_uid,
+                    "last_message_timestamp": last_message_timestamp.isoformat() if last_message_timestamp else None,
+                    "from_me": from_me,
+                    "status": status,
+                    "chat_url": chat_url,
+                    "chat_id": chat_id,
+                    "assigned_to_id": str(assigned_to_id) if assigned_to_id else None,
+                })
+
+            # ------------------------------------------------------------
+            # 3) TAREAS ligadas a deals de ese teléfono
+            #    annotation_tasks -> annotations -> deals -> leads(phone)
+            # ------------------------------------------------------------
+            task_sql = """
+            SELECT
+                at.id,
+                at.annotation_type,
+                at.content,
+                at.status,
+                at.due_date,
+                at.is_completed,
+                at.priority,
+                at.user_assigned_id,
+                at.annotation_id,
+                a.object_reference_id,
+                a.object_reference_type
+            FROM public.annotation_tasks at
+            JOIN public.annotations a
+              ON a.id = at.annotation_id
+            JOIN public.deals d
+              ON d.id = a.object_reference_id
+            JOIN public.leads l
+              ON l.id = d.lead_id
+            WHERE
+                at.is_deleted = FALSE
+                AND a.is_deleted = FALSE
+                AND d.is_deleted = FALSE
+                AND l.is_deleted = FALSE
+                AND a.object_reference_type = 'deals'
+                AND d.company_id = %s
+                AND %s <> ''
+                AND regexp_replace(COALESCE(l.phone, ''), '\\D', '', 'g')
+                    LIKE %s || '%%'
+            ORDER BY at.due_date NULLS LAST, at.created_at DESC
+            LIMIT 50;
+            """
+            task_params = (company_id, digits, digits)
+            cur.execute(task_sql, task_params)
+            task_rows = cur.fetchall()
+
+            for t in task_rows:
+                (
+                    tid,
+                    annotation_type,
+                    content,
+                    status,
+                    due_date,
+                    is_completed,
+                    priority,
+                    user_assigned_id,
+                    annotation_id,
+                    object_reference_id,
+                    object_reference_type,
+                ) = t
+
+                tasks.append({
+                    "id": str(tid),
+                    "annotation_type": annotation_type,
+                    "content": content,
+                    "status": status,
+                    "due_date": due_date.isoformat() if due_date else None,
+                    "is_completed": is_completed,
+                    "priority": priority,
+                    "user_assigned_id": str(user_assigned_id) if user_assigned_id else None,
+                    "annotation_id": str(annotation_id),
+                    "object_reference_id": str(object_reference_id),
+                    "object_reference_type": object_reference_type,
+                })
+
     finally:
         try:
             conn.close()
         except Exception:
             pass
 
-    results = []
-    for row in rows:
-        (
-            entity_type,
-            entity_id,
-            title,
-            subtitle,
-            phone,
-            email,
-            extra,
-            link,
-        ) = row
-
-        results.append({
-            "entity_type": entity_type,
-            "entity_id": str(entity_id),
-            "title": title,
-            "subtitle": subtitle,
-            "phone": phone,
-            "email": email,
-            "extra": extra,
-            "link": link,
-        })
-
-    return results
+    return results, messages, tasks
 
 # ----------------------------------------------------------------------------
 # Flask + CORS
@@ -279,14 +422,17 @@ def log_request_info():
 def healthz():
     return jsonify({"status": "ok", "service": "search_service"}), 200
 
-
 @app.route("/search", methods=["GET"])
 def search_endpoint():
     """
     GET /search?company_id=<uuid>&q=<texto>
 
     Respuesta:
-      { "results": [ { ... }, ... ] }
+      {
+        "results": [...],
+        "messages": [...],
+        "tasks": [...]
+      }
     """
     try:
         company_id = (request.args.get("company_id") or "").strip()
@@ -298,17 +444,21 @@ def search_endpoint():
             }), 400
 
         if not q:
-            return jsonify({"results": []}), 200
+            return jsonify({"results": [], "messages": [], "tasks": []}), 200
 
         app.logger.info(f"🔎 /search company_id={company_id}, q={q!r}")
 
         try:
-            results = run_search(company_id=company_id, query=q)
+            results, messages, tasks = run_search(company_id=company_id, query=q)
         except Exception as e:
             app.logger.error(f"❌ Error ejecutando búsqueda: {e}", exc_info=True)
             return jsonify({"error": "Error ejecutando la búsqueda"}), 500
 
-        return jsonify({"results": results}), 200
+        return jsonify({
+            "results": results,
+            "messages": messages,
+            "tasks": tasks
+        }), 200
 
     except Exception as e:
         app.logger.error(f"💥 Error inesperado en /search: {e}", exc_info=True)
