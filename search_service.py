@@ -115,10 +115,10 @@ def run_search(company_id: str, query: str):
                 'status', d.status,
                 'sub_status', d.sub_status
             ) AS extra,
-            '/deals/' || d.id::text AS link
+            '/admin/negocios/' || d.id::text || '/lead/' || l.id::text AS link
         FROM public.deals d
         JOIN public.leads l
-          ON l.id = d.lead_id
+        ON l.id = d.lead_id
         JOIN search s ON TRUE
         WHERE
             d.company_id = s.company_id
@@ -136,6 +136,7 @@ def run_search(company_id: str, query: str):
                 )
             )
 
+
         UNION ALL
 
         -- 2) LEADS (asociados a esa company vía deals)
@@ -149,7 +150,7 @@ def run_search(company_id: str, query: str):
             json_build_object(
                 'channel', l.channel
             ) AS extra,
-            '/leads/' || l.id::text AS link
+            '/admin/negocios/' || d.id::text || '/lead/' || l.id::text AS link
         FROM public.leads l
         JOIN public.deals d
           ON d.lead_id = l.id
