@@ -71,6 +71,8 @@ def get_db_connection():
 #   - Siempre filtramos por company_id
 #   - Buscamos en deals + leads + profiles
 # ----------------------------------------------------------------------------
+import re  # asegúrate de tener este import arriba del archivo
+
 def run_search(company_id: str, query: str):
     """
     Ejecuta una búsqueda global para una company_id y un término q.
@@ -85,7 +87,6 @@ def run_search(company_id: str, query: str):
     pattern = f"%{q}%"
     digits = re.sub(r"\D", "", q or "")
 
-    # CTE 'search' para reutilizar pattern/digits en las 3 queries
     sql = """
     WITH search AS (
         SELECT
@@ -138,7 +139,7 @@ def run_search(company_id: str, query: str):
             l.phone      AS phone,
             l.email      AS email,
             json_build_object(
-                'status', l.status,
+                -- quitamos l.status porque no existe en la BDD real
                 'channel', l.channel
             ) AS extra,
             '/leads/' || l.id::text AS link
