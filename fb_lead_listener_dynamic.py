@@ -1144,7 +1144,7 @@ def build_info_lead_content(data: dict, source: str = None):
         '¿tienes_hipoteca_en_alguno_de_sus_bienes?': "Tiene hipoteca en alguno de sus bienes",
         
         # Campos específicos de FBLexCorner
-        'monto_total_deudas': "Monto total de deudas",
+        'monto_total_deudas': "Situación laboral",
         'situacion_laboral': "Situación laboral",
     }
     
@@ -1717,9 +1717,13 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
     # 4️⃣ Asignación final de deal (solo ETD / ETD2 de momento)
     assignment_result = None
     try:
-        if deal_id and source in ("ETD", "ETD2"):
+        if deal_id and 
             # ❌ antes: c_assign_deal_ETD(deal_id, source, data, config)
-            assignment_result = c_assign_deal_ETD(deal_id, source, data)
+            assignment_result = c_assign_deal_ETD(
+                deal_id=result['deal_id'],
+                source='B2B_Manual',
+                data=data_normalized
+            )
             app.logger.info(f"[ASSIGN_ETD] Resultado final: {assignment_result}")
     except Exception as e:
         app.logger.error(
