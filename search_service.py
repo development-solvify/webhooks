@@ -18,6 +18,43 @@ app.logger.setLevel(logging.DEBUG)
 logging.getLogger("werkzeug").setLevel(logging.INFO)
 
 # ----------------------------------------------------------------------------
+# CORS Configuration
+# ----------------------------------------------------------------------------
+ALLOWED_ORIGINS_RAW = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "https://app.solvify.es,https://clientes.solvify.es,https://portal.eliminamostudeuda.com"
+)
+ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS_RAW.split(",") if o.strip()]
+
+app.logger.info(f"🔧 CORS Config: ALLOWED_ORIGINS={ALLOWED_ORIGINS}")
+
+def is_origin_allowed(origin):
+    """Verifica si el origin está en la lista de permitidos."""
+    if not origin:
+        app.logger.debug("🔎 CORS check: no Origin header present -> denied")
+        return False
+    origin = origin.strip()
+    allowed = origin in ALLOWED_ORIGINS
+    app.logger.debug(f"🔎 CORS check origin={origin} allowed={allowed}")
+    return allowed
+
+@app.after_request
+def add_cors_headers(resp):
+    """Añade headers CORS dinámicamente según el origin."""
+    try:
+        origin = request.headers.get("Origin")
+        if is_origin_allowed(origin):
+            resp.headers["Access-Control-Allow-Origin"]  = origin
+            resp.headers["Vary"]                         = "Origin"
+            resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization,X-Internal-Token"
+            resp.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+            resp.headers["Access-Control-Max-Age"]       = "86400"
+    except Exception:
+        # No romper la respuesta por errores en CORS
+        pass
+    return resp
+
+# ----------------------------------------------------------------------------
 # Carga de configuración desde scripts.conf (igual que otros microservicios)
 # ----------------------------------------------------------------------------
 config_supabase = configparser.ConfigParser()
@@ -71,9 +108,6 @@ def get_db_connection():
 #   - Siempre filtramos por company_id
 #   - Buscamos en deals + leads + profiles
 # ----------------------------------------------------------------------------
-import re  # asegúrate de tener este import arriba del archivo
-
-import re  # arriba del archivo, si no lo tienes ya
 
 def run_search(company_id: str, query: str):
     """
@@ -401,12 +435,8 @@ def run_search(company_id: str, query: str):
     return results, messages, tasks
 
 # ----------------------------------------------------------------------------
-# Flask + CORS
+# Logging de requests
 # ----------------------------------------------------------------------------
-# Si luego lo pones detrás de Nginx en el mismo dominio, CORS casi no se usa,
-# pero lo dejamos abierto para desarrollo / pruebas.
-CORS(app, resources={r"/*": {"origins": "*"}})
-
 @app.before_request
 def log_request_info():
     app.logger.debug(f"--> {request.method} {request.url}")
@@ -419,11 +449,15 @@ def log_request_info():
 # Endpoints
 # ----------------------------------------------------------------------------
 
-@app.route("/healthz", methods=["GET"])
+@app.route("/healthz", methods=["GET", "OPTIONS"])
 def healthz():
+    """Health check endpoint con soporte OPTIONS para CORS."""
+    if request.method == "OPTIONS":
+        # Preflight ya manejado por @app.after_request
+        return jsonify({}), 204
     return jsonify({"status": "ok", "service": "search_service"}), 200
 
-@app.route("/search", methods=["GET"])
+@app.route("/search", methods=["GET", "OPTIONS"])
 def search_endpoint():
     """
     GET /search?company_id=<uuid>&q=<texto>
@@ -435,6 +469,10 @@ def search_endpoint():
         "tasks": [...]
       }
     """
+    if request.method == "OPTIONS":
+        # Preflight ya manejado por @app.after_request
+        return jsonify({}), 204
+    
     try:
         company_id = (request.args.get("company_id") or "").strip()
         q = (request.args.get("q") or "").strip()
