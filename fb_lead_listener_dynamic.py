@@ -1607,8 +1607,8 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
     app.logger.info(f"Lead de {source} procesado en portal: {portal_resp}")
 
     if portal_resp is None:
-        full = data.get('nombre_y_apellidos','').strip()
-        phone = strip_country_code(data.get('número_de_teléfono','') or '')
+        full = data.get('nombre_y_apellidos', '').strip()
+        phone = strip_country_code(data.get('número_de_teléfono', '') or '')
         app.logger.warning(
             f"SKIP InfoLead {source}: {full} | TEL={phone} | MOTIVO=PortalUser no creado"
         )
@@ -1619,38 +1619,38 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
             "task": None,
         }
 
-    # 2) Buscar deal_id
+    # 2) Buscar deal_id con reintentos
     deal_id = None
     max_retries = 3
-    retry_delay = 1  # 500ms entre intentos
+    retry_delay = 1  # segundos entre intentos
 
     try:
-        phone = strip_country_code(data.get('número_de_teléfono','') or '')
-        
+        phone = strip_country_code(data.get('número_de_teléfono', '') or '')
+
         for attempt in range(max_retries):
             try:
                 conn = get_supabase_connection()
                 cur = conn.cursor()
-                
+
                 if phone:
                     query = (
-                        "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
-                        "WHERE TRIM(REPLACE(REPLACE(l.phone,'+34',''),' ',''))=%s "
-                        "AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
+                        "SELECT d.id FROM leads l JOIN deals d ON l.id = d.lead_id "
+                        "WHERE TRIM(REPLACE(REPLACE(l.phone, '+34', ''), ' ', '')) = %s "
+                        "AND l.is_deleted = FALSE AND d.is_deleted = FALSE "
                         "ORDER BY d.created_at DESC LIMIT 1"
                     )
                     cur.execute(query, (phone,))
                 else:
                     query = (
-                        "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
-                        "WHERE l.email=%s AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
+                        "SELECT d.id FROM leads l JOIN deals d ON l.id = d.lead_id "
+                        "WHERE l.email = %s AND l.is_deleted = FALSE AND d.is_deleted = FALSE "
                         "ORDER BY d.created_at DESC LIMIT 1"
                     )
-                    cur.execute(query, (data.get('correo_electrónico',''),))
-                
+                    cur.execute(query, (data.get('correo_electrónico', ''),))
+
                 row = cur.fetchone()
                 deal_id = str(row[0]) if row else None
-                
+
                 if deal_id:
                     app.logger.info(
                         f"✅ Deal ID encontrado para {source} (intento {attempt + 1}/{max_retries}): {deal_id}"
@@ -1669,24 +1669,25 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
                         )
             finally:
                 try:
-                    if 'cur' in locals(): cur.close()
-                    if 'conn' in locals(): conn.close()
-                except:
+                    if 'cur' in locals():
+                        cur.close()
+                    if 'conn' in locals():
+                        conn.close()
+                except Exception:
                     pass
-                
-   
+
     except Exception as e:
-        full = data.get('nombre_y_apellidos','').strip()
-        phone = strip_country_code(data.get('número_de_teléfono','') or '')
+        full = data.get('nombre_y_apellidos', '').strip()
+        phone = strip_country_code(data.get('número_de_teléfono', '') or '')
         app.logger.error(
             f"RECHAZADO InfoLead {source}: {full} | TEL={phone} | "
-            f"MOTIVO=Error buscando deal_id: {e}", 
+            f"MOTIVO=Error buscando deal_id: {e}",
             exc_info=True
         )
 
     if not deal_id:
-        full = data.get('nombre_y_apellidos','').strip()
-        phone = strip_country_code(data.get('número_de_teléfono','') or '')
+        full = data.get('nombre_y_apellidos', '').strip()
+        phone = strip_country_code(data.get('número_de_teléfono', '') or '')
         app.logger.warning(
             f"RECHAZADO InfoLead {source}: {full} | TEL={phone} | MOTIVO=Sin deal_id tras retries"
         )
@@ -1706,36 +1707,27 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
         has_mapping = False
 
     if has_mapping:
-        info_content = build_info_lead_content_from_mapping(data, raw_payload, config, source)
+        info_content = build_info_lead_content_from_mapping(
+            data,
+            raw_payload,
+            config,
+            source
+        )
     else:
         info_content = build_info_lead_content(data)
-
 
     task = create_info_lead_task(deal_id, data, content=info_content)
     app.logger.info(f"Tarea Info lead creada para {source}: {task}")
 
-    # 4️⃣ Asignación final de deal (solo ETD / ETD2 de momento)
-    assignment_result = None
-    try:
-        if deal_id and 
-            # ❌ antes: c_assign_deal_ETD(deal_id, source, data, config)
-            assignment_result = c_assign_deal_ETD(
-                deal_id=result['deal_id'],
-                source='B2B_Manual',
-                data=data_normalized
-            )
-            app.logger.info(f"[ASSIGN_ETD] Resultado final: {assignment_result}")
-    except Exception as e:
-        app.logger.error(
-            f"[ASSIGN_ETD] Error inesperado al asignar deal {deal_id} para source={source}: {e}",
-            exc_info=True,
-               )
+    # 👇 OJO: la asignación (c_assign_deal_ETD, round-robin, etc.)
+    # se hace en cada endpoint concreto (p.ej. /B2B_Manual).
+    # Aquí NO se toca el deal.
+
     return {
         "portal_user_created": True,
         "info_lead_created": task is not None,
         "deal_id": deal_id,
         "task": task,
-        "assignment": assignment_result,  # útil para debug en logs/respuesta
     }
 
 # ----------------------------------------------------------------------------
