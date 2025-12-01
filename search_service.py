@@ -25,7 +25,7 @@ ALLOWED_ORIGINS = {
     "https://portal.solvify.es",
     "http://localhost:3000",
     "http://*.localhost:3000",
-    "http://eliminamostudeuda.localhost:3000",
+        "http://eliminamostudeuda.localhost:3000",
 }
 
 
