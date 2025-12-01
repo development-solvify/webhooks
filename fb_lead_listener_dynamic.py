@@ -490,6 +490,31 @@ def _get_gestores_leads_for_office(company_address_id, office_alias, cur):
     
     return rows_all
 
+def _pick_best_gestor(rows_gestores, cur=None):
+    """
+    Selecciona el mejor gestor a partir de la lista rows_gestores.
+    
+    rows_gestores: lista de tuplas
+      (user_id, first_name, last_name, email, role_id, total_deals)
+    que ya viene ORDENADA por:
+      - total_deals ASC
+      - p.created_at ASC
+    
+    De momento devolvemos simplemente el user_id del primer gestor
+    (el que menos carga tiene), pero centralizamos aquí la lógica
+    por si mañana queremos hacer algo más sofisticado.
+    """
+    if not rows_gestores:
+        return None
+
+    user_id, fname, lname, email, role_id, deals = rows_gestores[0]
+
+    app.logger.info(
+        f"[GESTORES_LEADS] _pick_best_gestor -> {fname} {lname} "
+        f"<{email}> (id={user_id}) con {deals} deals activos"
+    )
+
+    return user_id
 
 def c_assign_deal_ETD(deal_id: str, source: str, data: dict):
     """
