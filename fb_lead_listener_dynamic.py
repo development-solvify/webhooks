@@ -2054,8 +2054,213 @@ def health_check():
 
 FALLBACK_COMPANY_ID = "9d4c6ef7-b5fa-4890-893f-51cafc247875"  # SICUEL
 ETD_COMPANY_ID = "2e3b85ef-e26b-48ce-ba82-60ef5e46ef94"
+
+
 @app.route('/B2B_Manual', methods=['POST'])
 def receive_b2b_manual_lead():
+    raw = request.json or {}
+    app.logger.info(f"[B2B_MANUAL] Payload recibido: {raw}")
+
+    # 1️⃣ Validar campos obligatorios
+    required_fields = ['first_name', 'last_name', 'email', 'phone', 'company_id', 'company_address_id']
+    missing_fields = [f for f in required_fields if f not in raw or not str(raw[f]).strip()]
+    
+    if missing_fields:
+        error_msg = f"Faltan campos obligatorios: {', '.join(missing_fields)}"
+        app.logger.error(f"[B2B_MANUAL] ❌ {error_msg}")
+        return jsonify({
+            "success": False,
+            "error": error_msg,
+            "missing_fields": missing_fields
+        }), 400
+    
+    # 2️⃣ Sanitizar teléfono
+    phone = _sanitize_phone(raw.get('phone', ''))
+    
+    if not phone:
+        error_msg = "Teléfono inválido después de sanitización"
+        app.logger.error(f"[B2B_MANUAL] ❌ {error_msg}: {raw.get('phone')}")
+        return jsonify({
+            "success": False,
+            "error": error_msg,
+            "original_phone": raw.get('phone')
+        }), 400
+
+    # 2.5️⃣ Detectar si es ETD por company_id
+    company_id_raw = str(raw['company_id'])
+    is_etd = (company_id_raw == ETD_COMPANY_ID)
+    app.logger.info(f"[B2B_MANUAL] is_etd={is_etd} (company_id={company_id_raw})")
+    
+    # 3️⃣ NORMALIZAR a formato esperado por process_lead_common
+    data_normalized = {
+        'nombre_y_apellidos': f"{raw['first_name']} {raw['last_name']}".strip(),
+        'correo_electrónico': raw['email'],
+        'número_de_teléfono': phone,
+        'form_name': raw.get('form_name', 'Manual'),
+        'campaign_name': raw.get('campaign', 'Manual'),
+        'lead_gen_id': raw.get('lead_gen_id', '')
+    }
+    
+    # 4️⃣ Config especial que incluye company_id y company_address_id directos
+    config_manual = {
+        "fields": {},
+        "validations": {},
+        "company_name": None,  # No usamos company_name, tenemos IDs directos
+        "company_id": raw['company_id'],
+        "company_address_id": raw['company_address_id'],
+        "channel": raw.get('channel', 'presencial'),
+        "is_etd": is_etd,
+    }
+    
+    source = 'B2B_Manual'
+    
+    app.logger.info(f"[B2B_MANUAL] Datos normalizados: {data_normalized}")
+    app.logger.info(f"[B2B_MANUAL] Config: {config_manual}")
+    
+    # 5️⃣ Procesar lead común (crea PortalUser, busca deal, crea InfoLead)
+    result = process_lead_common(source, data_normalized, raw, config_manual)
+    deal_id = result.get("deal_id")
+    assignment_result = None
+
+    if not deal_id:
+        app.logger.warning("[B2B_MANUAL] No se encontró deal_id, no se aplica asignación.")
+        return jsonify({
+            **result,
+            "is_etd": is_etd,
+            "assignment": None
+        })
+
+    # 6️⃣ Asignación respetando SIEMPRE company + office que vienen del UI
+    conn = None
+    cur = None
+    try:
+        conn = get_supabase_connection()
+        cur = conn.cursor()
+
+        # Obtenemos alias y company_id de la oficina que viene del UI
+        cur.execute(
+            """
+            SELECT alias, company_id
+            FROM public.company_addresses
+            WHERE id = %s
+              AND (is_deleted = FALSE OR is_deleted IS NULL)
+            LIMIT 1;
+            """,
+            (config_manual['company_address_id'],)
+        )
+        row = cur.fetchone()
+        if not row:
+            app.logger.error(
+                f"[B2B_MANUAL] ❌ company_address_id={config_manual['company_address_id']} "
+                f"no existe o está borrado. No se puede asignar comercial."
+            )
+            return jsonify({
+                **result,
+                "is_etd": is_etd,
+                "assignment": None,
+                "error": "office_not_found"
+            })
+
+        office_alias = row[0]
+        company_id_db = row[1]
+
+        app.logger.info(
+            f"[B2B_MANUAL] Oficina desde UI respetada: alias='{office_alias}', "
+            f"company_id={company_id_db}, company_address_id={config_manual['company_address_id']}"
+        )
+
+        # Buscamos gestores solo en ESA oficina
+        rows_gestores = _get_gestores_leads_for_office(
+            config_manual['company_address_id'],
+            office_alias,
+            cur
+        )
+
+        if not rows_gestores:
+            # 👉 Aquí es donde respetamos 100% la oficina:
+            # NO cambiamos la oficina ni la compañía, simplemente dejamos el deal sin comercial.
+            app.logger.warning(
+                f"[B2B_MANUAL] ⚠️ No hay gestores de leads en la oficina '{office_alias}' "
+                f"(company_address_id={config_manual['company_address_id']}). "
+                f"Se respeta la oficina del UI, pero el deal queda sin user_assigned_id."
+            )
+            assignment_result = {
+                "deal_id": str(deal_id),
+                "company_id": str(company_id_db),
+                "company_address_id": str(config_manual['company_address_id']),
+                "office_alias": office_alias,
+                "user_assigned_id": None,
+                "is_etd": is_etd,
+                "no_gestores": True,
+            }
+
+            # Actualizamos solo company/company_address para asegurar que el deal
+            # está en la empresa y oficina del UI (por si venía creado en blanco).
+            cur.execute(
+                """
+                UPDATE public.deals
+                SET company_id        = %s,
+                    company_address_id = %s,
+                    updated_at        = NOW()
+                WHERE id = %s
+                  AND (is_deleted = FALSE OR is_deleted IS NULL);
+                """,
+                (company_id_db, config_manual['company_address_id'], deal_id)
+            )
+            conn.commit()
+
+        else:
+            # Elegimos gestor con menos carga
+            user_assigned_id = _pick_best_gestor(rows_gestores, cur)
+
+            # IMPORTANTE: aquí ponemos EXACTAMENTE los IDs que han llegado / están ligados a esa office
+            cur.execute(
+                """
+                UPDATE public.deals
+                SET user_assigned_id  = %s,
+                    company_id        = %s,
+                    company_address_id = %s,
+                    updated_at        = NOW()
+                WHERE id = %s
+                  AND (is_deleted = FALSE OR is_deleted IS NULL);
+                """,
+                (user_assigned_id, company_id_db, config_manual['company_address_id'], deal_id)
+            )
+            conn.commit()
+
+            assignment_result = {
+                "deal_id": str(deal_id),
+                "company_id": str(company_id_db),
+                "company_address_id": str(config_manual['company_address_id']),
+                "office_alias": office_alias,
+                "user_assigned_id": str(user_assigned_id),
+                "is_etd": is_etd,
+                "no_gestores": False,
+            }
+
+            app.logger.info(f"[B2B_MANUAL] ✅ Asignación completada respetando oficina UI: {assignment_result}")
+
+    except Exception as e:
+        app.logger.error(
+            f"[B2B_MANUAL] ❌ Error en asignación respetando oficina UI (is_etd={is_etd}): {e}",
+            exc_info=True
+        )
+    finally:
+        try:
+            if cur:
+                cur.close()
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+    # 7️⃣ Respuesta final al frontal
+    return jsonify({
+        **result,
+        "is_etd": is_etd,
+        "assignment": assignment_result
+    })
+
     raw = request.json or {}
     app.logger.info(f"[B2B_MANUAL] Payload recibido: {raw}")
 
