@@ -22,7 +22,7 @@ logging.getLogger("werkzeug").setLevel(logging.INFO)
 # ----------------------------------------------------------------------------
 ALLOWED_ORIGINS_RAW = os.environ.get(
     "ALLOWED_ORIGINS",
-    "https://app.solvify.es,https://clientes.solvify.es,https://portal.eliminamostudeuda.com,http://localhost:3000,http://127.0.0.1:3000,http://eliminamostudeuda.localhost:3000/"
+    "https://app.solvify.es,https://clientes.solvify.es,https://portal.eliminamostudeuda.com,http://localhost:3000,http://127.0.0.1:3000,http://.*localhost:3000"
 )
 ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS_RAW.split(",") if o.strip()]
 
