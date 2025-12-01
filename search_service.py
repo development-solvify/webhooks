@@ -20,11 +20,14 @@ logging.getLogger("werkzeug").setLevel(logging.INFO)
 # ----------------------------------------------------------------------------
 # CORS Configuration
 # ----------------------------------------------------------------------------
-ALLOWED_ORIGINS_RAW = os.environ.get(
-    "ALLOWED_ORIGINS",
-    "https://app.solvify.es,https://clientes.solvify.es,https://portal.eliminamostudeuda.com,http://localhost:3000,http://127.0.0.1:3000,http://.*localhost:3000"
-)
-ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS_RAW.split(",") if o.strip()]
+ALLOWED_ORIGINS = {
+    "https://portal.eliminamostudeuda.com",
+    "https://portal.solvify.es",
+    "http://localhost:3000",
+    "http://*.localhost:3000",
+    "http://eliminamostudeuda.localhost:3000",
+}
+
 
 app.logger.info(f"🔧 CORS Config: ALLOWED_ORIGINS={ALLOWED_ORIGINS}")
 
@@ -38,21 +41,40 @@ def is_origin_allowed(origin):
     app.logger.debug(f"🔎 CORS check origin={origin} allowed={allowed}")
     return allowed
 
+@app.before_request
+def handle_cors_preflight():
+    origin = request.headers.get("Origin")
+    allowed = origin in ALLOWED_ORIGINS if origin else False
+    app.logger.debug(f"🔎 CORS check origin={origin} allowed={allowed}")
+
+    # Preflight de CORS
+    if request.method == "OPTIONS":
+        if not allowed:
+            # Opcional: puedes devolver 204 sin CORS para no exponer nada
+            resp = make_response("", 204)
+            return resp
+
+        resp = make_response("", 204)
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Vary"] = "Origin"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        resp.headers["Access-Control-Allow-Credentials"] = "true"
+        resp.headers["Access-Control-Max-Age"] = "86400"
+        return resp
+
+    # Para peticiones normales seguimos; los headers se añaden en after_request
+    request._cors_allowed = allowed
+
+
 @app.after_request
-def add_cors_headers(resp):
-    """Añade headers CORS dinámicamente según el origin."""
-    try:
-        origin = request.headers.get("Origin")
-        if is_origin_allowed(origin):
-            resp.headers["Access-Control-Allow-Origin"]  = origin
-            resp.headers["Vary"]                         = "Origin"
-            resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization,X-Internal-Token"
-            resp.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
-            resp.headers["Access-Control-Max-Age"]       = "86400"
-    except Exception:
-        # No romper la respuesta por errores en CORS
-        pass
-    return resp
+def add_cors_headers(response):
+    origin = request.headers.get("Origin")
+    if getattr(request, "_cors_allowed", False) and origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 # ----------------------------------------------------------------------------
 # Carga de configuración desde scripts.conf (igual que otros microservicios)
@@ -434,16 +456,6 @@ def run_search(company_id: str, query: str):
 
     return results, messages, tasks
 
-# ----------------------------------------------------------------------------
-# Logging de requests
-# ----------------------------------------------------------------------------
-@app.before_request
-def log_request_info():
-    app.logger.debug(f"--> {request.method} {request.url}")
-    try:
-        app.logger.debug(f"Headers: {dict(request.headers)}")
-    except Exception:
-        pass
 
 # ----------------------------------------------------------------------------
 # Endpoints
