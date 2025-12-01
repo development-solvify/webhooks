@@ -1970,8 +1970,123 @@ def receive_alianza_lead():
         "task": result["task"],
     }), 200
 
+
 @app.route('/B2B', methods=['POST'])
 def receive_b2b_lead():
+    """
+    Endpoint B2B simplificado:
+    - source == company_name (mismo literal que en la tabla companies.name)
+      o bien códigos tipo 'ETD' / 'ETD2' según el origen
+    - mapping cargado desde form_mappings.json usando FormMappingManager
+    - mapeo directo raw -> data según mapping["fields"]
+    - fallback mínimo para nombre/email/teléfono
+    - flujo común con process_lead_common()
+    - ahora: incluye asignación ETD/ETD2 y devuelve 'assignment' para debug
+    """
+    # 0) Carga del payload
+    raw = request.json or {}
+    if isinstance(raw, list):
+        if not raw:
+            return jsonify({"error": "lista vacía"}), 400
+        raw = raw[0]
+
+    app.logger.debug("=" * 60)
+    app.logger.debug("RAW B2B LEAD:")
+    for k, v in raw.items():
+        app.logger.debug(f"  {k!r}: {v!r}")
+    app.logger.debug("=" * 60)
+
+    # 1) source obligatorio
+    source = (raw.get("source") or raw.get("Source") or "").strip()
+    if not source:
+        return jsonify({"error": "Falta 'source'/'Source' en el payload"}), 400
+
+    app.logger.debug(f"[B2B] source recibido: '{source}'")
+
+    # 2) Cargar mapping para el source
+    config = form_mapping_manager.get_mapping_for_form(source=source)
+    mapping = config.get("fields", {}) or {}
+    if not mapping:
+        app.logger.warning(f"[B2B] No hay mapping para source='{source}'. Se usará mapping vacío.")
+    app.logger.debug(f"[B2B] Mapping de '{source}': {len(mapping)} campos")
+
+    # 3) Mapear campos según mapping (raw_key -> normalized_key)
+    data = {}
+    for original_key, mapped_key in mapping.items():
+        # Permitimos variantes con '¿' inicial (formularios con preguntas)
+        val = raw.get(original_key)
+        if val is None and isinstance(original_key, str) and original_key.startswith('¿'):
+            val = raw.get(original_key.lstrip('¿'))
+        if val is not None:
+            data[mapped_key] = val if isinstance(val, str) else str(val)
+            app.logger.debug(f"MAP: '{original_key}' → '{mapped_key}' = {val!r}")
+
+    # 4) Fallback mínimo para críticos si no vienen en el mapping
+    critical_fallbacks = {
+        'nombre_y_apellidos': ['Nombre', 'Full Name', 'email'],
+        'correo_electrónico': ['Mail', 'Email', 'email', 'correo', 'e-mail'],
+        'número_de_teléfono': ['Teléfono', 'Phone Number', 'phone_number', 'telefono', 'teléfono', 'tel', 'mobile'],
+    }
+    for target, aliases in critical_fallbacks.items():
+        cur = str(data.get(target, '')).strip()
+        if not cur:
+            for alias in aliases:
+                raw_value_original = raw.get(alias, '')
+                raw_value = str(raw_value_original).strip() if raw_value_original != '' else ''
+                if raw_value:
+                    data[target] = raw_value
+                    app.logger.debug(f"FALLBACK: '{alias}' → '{target}' = {raw_value!r}")
+                    break
+
+    # 6) Log final de los datos mapeados
+    app.logger.debug(f"[B2B] DATOS MAPEADOS ({source}):")
+    for k, v in data.items():
+        app.logger.debug(f"  {k!r}: {v!r}")
+
+    # 7) Flujo común: crea portal user -> busca deal_id -> crea tarea Info lead
+    result = process_lead_common(source, data, raw, config)
+
+    deal_id = result.get("deal_id")
+    assignment_result = result.get("assignment")  # lo que ya haya hecho process_lead_common
+
+    # 7bis) Asignación ETD/ETD2 explícita para /B2B (por seguridad)
+    try:
+        # Normalizamos por si viene en minúsculas o con espacios
+        source_norm = source.strip().upper()
+
+        if deal_id and assignment_result is None and source_norm in ("ETD", "ETD2"):
+            app.logger.info(
+                f"[B2B] Lanzando asignación ETD desde /B2B para deal {deal_id} (source={source_norm})"
+            )
+            assignment_result = c_assign_deal_ETD(deal_id, source_norm, data)
+            app.logger.info(
+                f"[B2B] [ASSIGN_ETD] Resultado final asignación en /B2B: {assignment_result}"
+            )
+        else:
+            app.logger.debug(
+                f"[B2B] No se lanza asignación extra: "
+                f"deal_id={deal_id}, assignment_result={assignment_result}, source_norm={source_norm}"
+            )
+    except Exception as e:
+        app.logger.error(
+            f"[B2B] Error inesperado al asignar deal {deal_id} para source={source}: {e}",
+            exc_info=True,
+        )
+
+    # 8) Respuesta
+    return jsonify({
+        "message": f"Lead de {source} procesado",
+        "source": source,
+        "portal_user_created": result["portal_user_created"],
+        "info_lead_created": result["info_lead_created"],
+        "deal_id": result["deal_id"],
+        "task": result["task"],
+        "assignment": assignment_result,   # 👈 importante para ver en logs/front qué ha pasado
+    }), 200
+
+
+@app.route('/B21', methods=['POST'])
+def receive_b2b_lead1():
     """
     Endpoint B2B simplificado:
     - source == company_name (mismo literal que en la tabla companies.name)
@@ -2045,6 +2160,7 @@ def receive_b2b_lead():
 
     # 7) Flujo común: crea portal user -> busca deal_id -> crea tarea Info lead
     result = process_lead_common(source, data, raw, config)
+
 
     # 8) Respuesta
     return jsonify({
@@ -2285,444 +2401,3 @@ def receive_b2b_manual_lead():
         "is_etd": is_etd,
         "assignment": assignment_result
     })
-
-    raw = request.json or {}
-    app.logger.info(f"[B2B_MANUAL] Payload recibido: {raw}")
-
-    # 1️⃣ Validar campos obligatorios
-    required_fields = ['first_name', 'last_name', 'email', 'phone', 'company_id', 'company_address_id']
-    missing_fields = [f for f in required_fields if f not in raw or not str(raw[f]).strip()]
-    
-    if missing_fields:
-        error_msg = f"Faltan campos obligatorios: {', '.join(missing_fields)}"
-        app.logger.error(f"[B2B_MANUAL] ❌ {error_msg}")
-        return jsonify({
-            "success": False,
-            "error": error_msg,
-            "missing_fields": missing_fields
-        }), 400
-    
-    # 2️⃣ Sanitizar teléfono
-    phone = _sanitize_phone(raw.get('phone', ''))
-    
-    if not phone:
-        error_msg = "Teléfono inválido después de sanitización"
-        app.logger.error(f"[B2B_MANUAL] ❌ {error_msg}: {raw.get('phone')}")
-        return jsonify({
-            "success": False,
-            "error": error_msg,
-            "original_phone": raw.get('phone')
-        }), 400
-
-    # 2.5️⃣ Detectar si es ETD por company_id
-    company_id_raw = str(raw['company_id'])
-    is_etd = (company_id_raw == ETD_COMPANY_ID)
-    app.logger.info(f"[B2B_MANUAL] is_etd={is_etd} (company_id={company_id_raw})")
-    
-    # 3️⃣ NORMALIZAR a formato esperado por process_lead_common
-    data_normalized = {
-        'nombre_y_apellidos': f"{raw['first_name']} {raw['last_name']}".strip(),
-        'correo_electrónico': raw['email'],
-        'número_de_teléfono': phone,
-        'form_name': raw.get('form_name', 'Manual'),
-        'campaign_name': raw.get('campaign', 'Manual'),
-        'lead_gen_id': raw.get('lead_gen_id', '')
-    }
-    
-    # 4️⃣ Config especial que incluye company_id y company_address_id directos
-    config_manual = {
-        "fields": {},
-        "validations": {},
-        "company_name": None,  # No usamos company_name, tenemos IDs directos
-        "company_id": raw['company_id'],
-        "company_address_id": raw['company_address_id'],
-        "channel": raw.get('channel', 'presencial'),
-        "is_etd": is_etd,
-    }
-    
-    source = 'B2B_Manual'
-    
-    app.logger.info(f"[B2B_MANUAL] Datos normalizados: {data_normalized}")
-    app.logger.info(f"[B2B_MANUAL] Config: {config_manual}")
-    
-    # 5️⃣ Procesar lead común (crea PortalUser, busca deal, crea InfoLead)
-    result = process_lead_common(source, data_normalized, raw, config_manual)
-    deal_id = result.get("deal_id")
-    assignment_result = None
-
-    if not deal_id:
-        app.logger.warning("[B2B_MANUAL] No se encontró deal_id, no se aplica asignación.")
-        return jsonify({
-            **result,
-            "is_etd": is_etd,
-            "assignment": None
-        })
-
-    # 6️⃣ Asignación según si es ETD o no
-    try:
-        if is_etd:
-            app.logger.info(f"[B2B_MANUAL] Lead ETD detectado, aplicando reglas ETD.")
-            # Usamos la lógica estándar ETD (solo usará P1/P2 si los tuviera;
-            # en este caso va a tirar del fallback round-robin entre oficinas ETD)
-            assignment_result = c_assign_deal_ETD(
-                deal_id=deal_id,
-                source='ETD2',        # etiqueta que verás en logs; puedes poner 'B2B_Manual_ETD'
-                data=data_normalized,
-            )
-        else:
-            app.logger.info(f"[B2B_MANUAL] Lead NO ETD, asignación estándar por oficina (lógica actual).")
-
-            conn = None
-            cur = None
-            try:
-                conn = get_supabase_connection()
-                cur = conn.cursor()
-
-                # Obtener alias y company_id de la oficina que llega del frontal
-                cur.execute(
-                    """
-                    SELECT alias, company_id
-                    FROM public.company_addresses
-                    WHERE id = %s AND (is_deleted = FALSE OR is_deleted IS NULL)
-                    LIMIT 1;
-                    """,
-                    (config_manual['company_address_id'],)
-                )
-                
-                row = cur.fetchone()
-                if not row:
-                    app.logger.warning(
-                        f"[B2B_MANUAL] No se encontró company_address para "
-                        f"id={config_manual['company_address_id']}"
-                    )
-                    raise Exception("company_address_id no válido")
-
-                office_alias = row[0]
-                company_id_db = row[1]
-
-                # Buscar gestores de leads para esa oficina
-                rows_gestores = _get_gestores_leads_for_office(
-                    config_manual['company_address_id'],
-                    office_alias,
-                    cur
-                )
-
-                # Si no hay gestores -> fallback round-robin como antes
-                final_company_address_id = config_manual['company_address_id']
-                if not rows_gestores:
-                    app.logger.info(
-                        f"[B2B_MANUAL] Sin gestores en {office_alias}, "
-                        f"aplicando fallback round-robin."
-                    )
-
-                    # Round-robin entre ROUND_ROBIN_OFFICES
-                    max_attempts = len(ROUND_ROBIN_OFFICES)
-                    attempts = 0
-                    rows_gestores = []
-                    while not rows_gestores and attempts < max_attempts:
-                        fallback_alias = _get_round_robin_office()
-                        attempts += 1
-
-                        app.logger.info(
-                            f"[B2B_MANUAL] Fallback intento {attempts}/{max_attempts}: "
-                            f"buscando oficina '{fallback_alias}'"
-                        )
-
-                        cur.execute(
-                            """
-                            SELECT id, company_id
-                            FROM public.company_addresses
-                            WHERE alias = %s
-                              AND (is_deleted = FALSE OR is_deleted IS NULL)
-                            LIMIT 1;
-                            """,
-                            (fallback_alias,)
-                        )
-                        fallback_row = cur.fetchone()
-                        if fallback_row:
-                            final_company_address_id = fallback_row[0]
-                            company_id_db = fallback_row[1]
-                            rows_gestores = _get_gestores_leads_for_office(
-                                final_company_address_id,
-                                fallback_alias,
-                                cur
-                            )
-
-                    if not rows_gestores:
-                        raise Exception(
-                            f"Sin gestores en oficinas fallback {ROUND_ROBIN_OFFICES}"
-                        )
-
-                # Elegir gestor con menos deals (lógica ya existente)
-                user_assigned_id = _pick_best_gestor(rows_gestores, cur)
-
-                # Actualizar deal
-                cur.execute(
-                    """
-                    UPDATE public.deals
-                    SET user_assigned_id = %s,
-                        company_id       = %s,
-                        company_address_id = %s,
-                        updated_at       = NOW()
-                    WHERE id = %s
-                      AND (is_deleted = FALSE OR is_deleted IS NULL);
-                    """,
-                    (user_assigned_id, company_id_db, final_company_address_id, deal_id)
-                )
-                conn.commit()
-
-                assignment_result = {
-                    "deal_id": str(deal_id),
-                    "company_id": str(company_id_db),
-                    "user_assigned_id": str(user_assigned_id),
-                    "company_address_id": str(final_company_address_id),
-                    "office_alias": office_alias,
-                    "is_etd": False,
-                }
-
-                app.logger.info(f"[B2B_MANUAL] ✅ Asignación completada: {assignment_result}")
-
-            finally:
-                try:
-                    if cur:
-                        cur.close()
-                    if conn:
-                        conn.close()
-                except Exception:
-                    pass
-
-    except Exception as e:
-        app.logger.error(
-            f"[B2B_MANUAL] ❌ Error en asignación (is_etd={is_etd}): {e}",
-            exc_info=True
-        )
-
-    # 7️⃣ Respuesta final al frontal
-    return jsonify({
-        **result,
-        "is_etd": is_etd,
-        "assignment": assignment_result
-    })
-
-    if request.method == 'OPTIONS':
-        # flask-cors se encarga de las cabeceras, solo respondemos vacío
-        return '', 204
-    """
-    Endpoint para leads creados manualmente en el sistema (presencial, etc.)
-    
-    Payload esperado:
-    {
-        "first_name": "nombre",
-        "last_name": "apellido",
-        "email": "email@example.com",
-        "phone": "123456789",
-        "channel": "presencial",
-        "company_id": "uuid",
-        "company_address_id": "uuid",
-        "campaign": null,
-        "form_name": null
-    }
-    
-    Normaliza el payload y reutiliza process_lead_common().
-    """
-    raw = request.json or {}
-    
-    app.logger.info("="*80)
-    app.logger.info("NUEVO LEAD B2B_MANUAL RECIBIDO:")
-    for key, value in raw.items():
-        app.logger.info(f"  {key}: {value}")
-    app.logger.info("="*80)
-    
-    # 1️⃣ Validar campos requeridos
-    required_fields = ['first_name', 'last_name', 'email', 'phone', 'company_id', 'company_address_id']
-    missing_fields = [field for field in required_fields if not raw.get(field)]
-    
-    if missing_fields:
-        error_msg = f"Campos requeridos faltantes: {', '.join(missing_fields)}"
-        app.logger.error(f"[B2B_MANUAL] ❌ {error_msg}")
-        return jsonify({
-            "success": False,
-            "error": error_msg,
-            "missing_fields": missing_fields
-        }), 400
-    
-    # 2️⃣ Sanitizar teléfono
-    phone = _sanitize_phone(raw.get('phone', ''))
-    
-    if not phone:
-        error_msg = "Teléfono inválido después de sanitización"
-        app.logger.error(f"[B2B_MANUAL] ❌ {error_msg}: {raw.get('phone')}")
-        return jsonify({
-            "success": False,
-            "error": error_msg,
-            "original_phone": raw.get('phone')
-        }), 400
-
-    # 2.5️⃣ Detectar si es ETD por company_id
-    company_id_raw = str(raw['company_id'])
-    is_etd = (company_id_raw == ETD_COMPANY_ID)
-    app.logger.info(f"[B2B_MANUAL] is_etd={is_etd} (company_id={company_id_raw})")
-    
-    
-    # 3️⃣ NORMALIZAR a formato esperado por process_lead_common
-    # Transformar payload manual → formato estándar
-    data_normalized = {
-        'nombre_y_apellidos': f"{raw['first_name']} {raw['last_name']}".strip(),
-        'correo_electrónico': raw['email'],
-        'número_de_teléfono': phone,
-        'form_name': raw.get('form_name', 'Manual'),
-        'campaign_name': raw.get('campaign', 'Manual'),
-        'lead_gen_id': raw.get('lead_gen_id', '')
-    }
-    
-    # 4️⃣ Config especial que incluye company_id y company_address_id directos
-    config_manual = {
-        "fields": {},
-        "validations": {},
-        "company_name": None,  # No usamos company_name, tenemos IDs directos
-        "company_id": raw['company_id'],
-        "company_address_id": raw['company_address_id'],
-        "channel": raw.get('channel', 'presencial'),
-        "is_etd": is_etd
-    }
-    
-    source = 'B2B_Manual'
-    
-    app.logger.info(f"[B2B_MANUAL] Datos normalizados: {data_normalized}")
-    app.logger.info(f"[B2B_MANUAL] Config: {config_manual}")
-    
-    # 5️⃣ MODIFICAR create_portal_user para aceptar company_id directo desde config
-    # (necesitamos un pequeño ajuste en create_portal_user)
-    
-    # 6️⃣ REUTILIZAR process_lead_common (con pequeño ajuste)
-    result = process_lead_common(source, data_normalized, raw, config_manual)
-    
-    # 7️⃣ Si hay deal_id, REUTILIZAR lógica de asignación
-    if result.get("deal_id") and config_manual.get("company_address_id"):
-        try:
-            # Simular data para asignación con company_address_id
-            data_for_assignment = {
-                "company_address_id": config_manual["company_address_id"]
-            }
-            
-            # Crear un pseudo office_info
-            conn = get_supabase_connection()
-            cur = conn.cursor()
-            
-            cur.execute(
-                """
-                SELECT alias, company_id
-                FROM public.company_addresses
-                WHERE id = %s AND is_deleted = FALSE
-                LIMIT 1;
-                """,
-                (config_manual['company_address_id'],)
-            )
-            
-            row = cur.fetchone()
-            
-            if row:
-                office_alias = row[0]
-                company_id = row[1]
-                
-                # REUTILIZAR _get_gestores_leads_for_office
-                rows_gestores = _get_gestores_leads_for_office(
-                    config_manual['company_address_id'],
-                    office_alias,
-                    cur
-                )
-                
-                if not rows_gestores:
-                    # REUTILIZAR round-robin
-                    app.logger.info(f"[B2B_MANUAL] Sin gestores en {office_alias}, round-robin")
-                    
-                    for attempt in range(len(ROUND_ROBIN_OFFICES)):
-                        rr_office = _get_round_robin_office()
-                        
-                        cur.execute(
-                            """
-                            SELECT id, company_id
-                            FROM public.company_addresses
-                            WHERE alias = %s AND is_deleted = FALSE
-                            LIMIT 1;
-                            """,
-                            (rr_office,)
-                        )
-                        
-                        row_rr = cur.fetchone()
-                        
-                        if row_rr:
-                            config_manual['company_address_id'] = row_rr[0]
-                            company_id = row_rr[1]
-                            office_alias = rr_office
-                            
-                            rows_gestores = _get_gestores_leads_for_office(
-                                config_manual['company_address_id'],
-                                office_alias,
-                                cur
-                            )
-                            
-                            if rows_gestores:
-                                break
-                
-                if rows_gestores:
-                    # Asignar al gestor con menor carga
-                    gestor = rows_gestores[0]
-                    user_id, fname, lname, email, role_id, deals = gestor
-                    
-                    # Obtener company_address_id del usuario
-                    cur.execute(
-                        """
-                        SELECT company_address_id
-                        FROM public.profile_comp_addresses
-                        WHERE user_id = %s AND is_deleted = FALSE
-                        ORDER BY created_at DESC
-                        LIMIT 1;
-                        """,
-                        (user_id,)
-                    )
-                    
-                    user_ca = cur.fetchone()
-                    user_company_address_id = user_ca[0] if user_ca else config_manual['company_address_id']
-                    
-                    # UPDATE del deal
-                    cur.execute(
-                        """
-                        UPDATE public.deals
-                        SET user_assigned_id = %s,
-                            company_id = %s,
-                            company_address_id = %s,
-                            updated_at = now()
-                        WHERE id = %s AND is_deleted = FALSE;
-                        """,
-                        (user_id, company_id, user_company_address_id, result['deal_id'])
-                    )
-                    
-                    conn.commit()
-                    
-                    result['assignment'] = {
-                        "success": True,
-                        "user_assigned": f"{fname} {lname}",
-                        "office": office_alias,
-                        "carga": int(deals)
-                    }
-                    
-                    app.logger.info(f"[B2B_MANUAL] ✅ Deal asignado a {fname} {lname}")
-                else:
-                    app.logger.warning(f"[B2B_MANUAL] ⚠️ Sin gestores disponibles")
-            
-            cur.close()
-            conn.close()
-            
-        except Exception as e:
-            app.logger.error(f"[B2B_MANUAL] Error en asignación: {e}", exc_info=True)
-    
-    # 8️⃣ Respuesta
-    return jsonify({
-        "success": True,
-        "portal_user_created": result["portal_user_created"],
-        "deal_id": result["deal_id"],
-        "assignment": result.get("assignment"),
-        "info_lead_created": result["info_lead_created"],
-        "message": "Lead manual procesado"
-    }), 200
