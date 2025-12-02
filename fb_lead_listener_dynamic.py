@@ -1941,7 +1941,7 @@ def receive_alianza_lead():
     for original_key, mapped_key in mapping.items():
         value = raw.get(original_key)
         if value is not None:
-            data[mapped_key] = str(value) if not isinstance(value, str) : value
+            data[mapped_key] = str(value) if not isinstance(value, str) else value
             app.logger.debug(f"MAPEADO: '{original_key}' → '{mapped_key}' = '{value}' (tipo: {type(value)})")
 
     # 2.2 Fallback para críticos
