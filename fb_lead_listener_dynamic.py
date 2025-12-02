@@ -38,6 +38,7 @@ CORS(
 )
 
 FALLBACK_COMPANY_ID = "9d4c6ef7-b5fa-4890-893f-51cafc247875"  # SICUEL
+ETD_COMPANY_ID = "2e3b85ef-e26b-48ce-ba82-60ef5e46ef94"  # ETD
 
 # Nombre del rol GESTOR_LEADS para asignaciones ETD (se busca en user_roles)
 GESTOR_LEADS_ROLE_NAME = "GESTOR_LEADS"
@@ -1855,24 +1856,24 @@ def receive_lead():
         phone = strip_country_code(data.get('número_de_teléfono','') or '')
         if phone:
             query = (
-                "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
-                "WHERE TRIM(REPLACE(REPLACE(l.phone,'+34',''),' ',''))=%s "
-                "AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
+                "SELECT d.id FROM leads l JOIN deals d ON l.id = d.lead_id "
+                "WHERE TRIM(REPLACE(REPLACE(l.phone, '+34', ''), ' ', '')) = %s "
+                "AND l.is_deleted = FALSE AND d.is_deleted = FALSE "
                 "ORDER BY d.created_at DESC LIMIT 1"
             )
             cur.execute(query, (phone,))
         else:
             query = (
-                "SELECT d.id FROM leads l JOIN deals d ON l.id=d.lead_id "
-                "WHERE l.email=%s AND l.is_deleted=FALSE AND d.is_deleted=FALSE "
+                "SELECT d.id FROM leads l JOIN deals d ON l.id = d.lead_id "
+                "WHERE l.email = %s AND l.is_deleted = FALSE AND d.is_deleted = FALSE "
                 "ORDER BY d.created_at DESC LIMIT 1"
             )
             cur.execute(query, (data.get('correo_electrónico',''),))
         row = cur.fetchone()
         deal_id = str(row[0]) if row else None
     except Exception as e:
-        full = data.get('nombre_y_apellidos','').strip()
-        phone = strip_country_code(data.get('número_de_teléfono','') or '')
+        full = data.get('nombre_y_apellidos', '').strip()
+        phone = strip_country_code(data.get('número_de_teléfono', '') or '')
         app.logger.error(f"RECHAZADO InfoLead {source}: {full} | TEL={phone} | MOTIVO=Error buscando deal_id: {e}", exc_info=True)
     finally:
         try:
@@ -2194,7 +2195,7 @@ def health_check():
 
 
 FALLBACK_COMPANY_ID = "9d4c6ef7-b5fa-4890-893f-51cafc247875"  # SICUEL
-ETD_COMPANY_ID = "2e3b85ef-e26b-48ce-ba82-60ef5e46ef94"
+ETD_COMPANY_ID = "2e3b85ef-e26b-48ce-ba82-60ef5e46ef94"  # ETD
 
 
 @app.route('/B2B_Manual', methods=['POST'])
