@@ -209,6 +209,7 @@ def fetch_task_context(annotation_task_id: str):
         p.email AS profile_email,
         p.first_name AS profile_first_name,
         p.last_name AS profile_last_name,
+        p.company_address_id AS profile_office_id,
 
         pc.first_name AS creator_first_name,
         pc.last_name  AS creator_last_name,
@@ -235,7 +236,7 @@ def fetch_task_context(annotation_task_id: str):
             cur.execute(sql, (annotation_task_id,))
             row = cur.fetchone()
             if not row:
-                logger.warning("LOG: No se encontr贸 tarea para annotation_task_id=%s", annotation_task_id)
+                logger.warning("LOG: No se encontró tarea para annotation_task_id=%s", annotation_task_id)
                 return None
 
             columns = [desc[0] for desc in cur.description]
@@ -248,6 +249,49 @@ def fetch_task_context(annotation_task_id: str):
     finally:
         conn.close()
 
+
+def get_office_calendar_id(office_id: str):
+    """
+    Obtiene el calendar_id de Google asociado a una oficina (company_address).
+    
+    Busca en object_property_values donde:
+    - property_id = '21a7ee8c-9cf6-4110-9dcf-21974d2ba98b' (ID de la propiedad calendar_id)
+    - object_reference_id = office_id (ID de la oficina)
+    
+    Retorna: (calendar_id, error)
+    """
+    if not office_id:
+        return None, "No se proporcionó office_id"
+    
+    logger.info("LOG: Buscando calendar_id para office_id=%s", office_id)
+    
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            sql = """
+            SELECT value
+            FROM object_property_values
+            WHERE property_id = '21a7ee8c-9cf6-4110-9dcf-21974d2ba98b'
+              AND object_reference_id = %s
+              AND is_deleted = false
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+            cur.execute(sql, (office_id,))
+            row = cur.fetchone()
+            
+            if not row:
+                logger.warning("LOG: No se encontró calendar_id para office_id=%s", office_id)
+                return None, f"No hay calendar_id configurado para la oficina {office_id}"
+            
+            calendar_id = row[0]
+            logger.info("LOG: Calendar_id encontrado para office_id=%s: %s", office_id, calendar_id)
+            return calendar_id, None
+    except Exception as e:
+        logger.exception("LOG: Error obteniendo calendar_id para office_id=%s: %s", office_id, e)
+        return None, f"Error obteniendo calendar_id: {e}"
+    finally:
+        conn.close()
 
 
 def create_calendar_event_from_task_context(task: dict):
@@ -279,6 +323,20 @@ def create_calendar_event_from_task_context(task: dict):
         return None, "La tarea no tiene user_assigned_id (profile_id) asignado"
 
     logger.info("LOG: Usando profile_id=%s para crear evento", profile_id)
+
+    # 🔐 NUEVO: Obtener el calendar_id de la oficina del agente
+    profile_office_id = task.get("profile_office_id")
+    
+    if profile_office_id:
+        calendar_id, err = get_office_calendar_id(str(profile_office_id))
+        if err:
+            logger.warning("LOG: %s. Se usará el calendario personal del agente.", err)
+            calendar_id = "primary"
+    else:
+        logger.warning("LOG: El agente no tiene oficina asignada (company_address_id). Se usará su calendario personal.")
+        calendar_id = "primary"
+    
+    logger.info("LOG: Evento se creará en calendar_id=%s", calendar_id)
 
     access_token, err = get_fresh_access_token(str(profile_id))
     if err or not access_token:
@@ -442,12 +500,14 @@ def create_calendar_event_from_task_context(task: dict):
     }
 
     logger.info(
-        "LOG: Enviando event_body a Google Calendar para profile_id=%s: %s",
+        "LOG: Enviando event_body a Google Calendar para profile_id=%s en calendar_id=%s: %s",
         profile_id,
+        calendar_id,
         event_body,
     )
 
-    url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+    # 🔐 CAMBIO: Usar el calendar_id de la oficina en lugar de 'primary'
+    url = f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
