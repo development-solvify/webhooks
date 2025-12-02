@@ -209,7 +209,9 @@ def fetch_task_context(annotation_task_id: str):
         p.email AS profile_email,
         p.first_name AS profile_first_name,
         p.last_name AS profile_last_name,
-        p.company_address_id AS profile_office_id,
+
+        -- Oficina del deal (no existe company_address_id en profiles)
+        d.company_address_id AS profile_office_id,
 
         pc.first_name AS creator_first_name,
         pc.last_name  AS creator_last_name,
