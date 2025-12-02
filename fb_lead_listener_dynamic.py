@@ -1678,6 +1678,7 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
                 deal_id = str(row[0]) if row else None
 
                 if deal_id:
+                    
                     app.logger.info(
                         f"✅ Deal ID encontrado para {source} (intento {attempt + 1}/{max_retries}): {deal_id}"
                     )
@@ -1725,6 +1726,16 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
         }
 
     # 3) Crear tarea Info lead
+    # Política: no crear Info Lead para B2B_Manual
+    if str(source).strip().lower() == 'b2b_manual':
+        app.logger.info("SKIP InfoLead B2B_Manual: no se crea tarea")
+        return {
+            "portal_user_created": True,
+            "info_lead_created": False,
+            "deal_id": deal_id,
+            "task": None,
+        }
+
     # Si hay mapping (config con fields), usa SIEMPRE el builder dinámico.
     # Si no, fallback al builder estático.
     try:
@@ -1883,11 +1894,14 @@ def receive_lead():
             pass
 
     if deal_id:
-        task = create_info_lead_task(deal_id, data)
-        app.logger.info(f"Tarea Info lead creada: {task}")
+        if str(source).strip().lower() != 'b2b_manual':
+            task = create_info_lead_task(deal_id, data)
+            app.logger.info(f"Tarea Info lead creada: {task}")
+        else:
+            app.logger.info("SKIP InfoLead B2B_Manual: no se crea tarea")
     else:
-        full = data.get('nombre_y_apellidos','').strip()
-        phone = strip_country_code(data.get('número_de_teléfono','') or '')
+        full = data.get('nombre_y_apellidos', '').strip()
+        phone = strip_country_code(data.get('número_de_teléfono', '') or '')
         app.logger.warning(f"RECHAZADO InfoLead: {full} | TEL={phone} | MOTIVO=Sin deal_id")
 
     return jsonify({"message":"Procesado","source":source}), 200
@@ -1927,7 +1941,7 @@ def receive_alianza_lead():
     for original_key, mapped_key in mapping.items():
         value = raw.get(original_key)
         if value is not None:
-            data[mapped_key] = str(value) if not isinstance(value, str) else value
+            data[mapped_key] = str(value) if not isinstance(value, str) : value
             app.logger.debug(f"MAPEADO: '{original_key}' → '{mapped_key}' = '{value}' (tipo: {type(value)})")
 
     # 2.2 Fallback para críticos
@@ -1951,7 +1965,7 @@ def receive_alianza_lead():
     for k, v in raw.items():
         mapped_key = mapping.get(k)
         if not mapped_key and k not in data:
-            data[k] = str(v) if not isinstance(v, str) else v
+            data[k] = str(v) if not isinstance(v, str) : v
 
     # 2.4 Debug final
     app.logger.debug("DATOS FINALES MAPEADOS ALIANZA:")
