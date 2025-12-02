@@ -485,7 +485,13 @@ def google_login():
     session["profile_id"] = profile_id
 
     logger.info("LOG: Iniciando OAuth para profile_id=%s", profile_id)
-    auth_url = build_google_auth_url(state=profile_id)
+    
+    # Usar un state aleatorio corto en lugar del profile_id completo
+    import secrets
+    state_token = secrets.token_urlsafe(16)
+    session["oauth_state"] = state_token
+    
+    auth_url = build_google_auth_url(state=state_token)
     return redirect(auth_url)
 
 
@@ -505,10 +511,17 @@ def google_oauth2callback():
             logger.error("LOG: Falta 'code' en la respuesta de Google")
             return render_template("error.html", message="Falta 'code' en la respuesta de Google", detail=""), 400
 
-        profile_id = state or session.get("profile_id")
+        # Verificar el state token para seguridad
+        expected_state = session.get("oauth_state")
+        if state != expected_state:
+            logger.error("LOG: State token no coincide. Posible ataque CSRF")
+            return render_template("error.html", message="State token inválido", detail="Posible ataque CSRF"), 400
+
+        # Obtener el profile_id de la sesión (no del state)
+        profile_id = session.get("profile_id")
         if not profile_id:
             logger.error("LOG: No se ha podido determinar el profile_id en callback")
-            return render_template("error.html", message="No se ha podido determinar el profile_id", detail=""), 400
+            return render_template("error.html", message="No se ha podido determinar el profile_id", detail="La sesión ha expirado. Por favor, vuelve a iniciar el proceso."), 400
 
         logger.info("LOG: Recibido callback OAuth para profile_id=%s", profile_id)
 
@@ -537,11 +550,11 @@ def google_oauth2callback():
         expires_in = token_data.get("expires_in", 3600)
 
         if not refresh_token:
-            logger.error("LOG: No se recibi贸 refresh_token.")
+            logger.error("LOG: No se recibió refresh_token.")
             return render_template(
                 "error.html",
-                message="No se recibi贸 refresh_token de Google",
-                detail="Revisa 'prompt=consent' y 'access_type=offline' en la configuraci贸n de OAuth."
+                message="No se recibió refresh_token de Google",
+                detail="Revisa 'prompt=consent' y 'access_type=offline' en la configuración de OAuth."
             ), 400
 
         expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
@@ -576,6 +589,9 @@ def google_oauth2callback():
 
         logger.info("LOG: Tokens guardados/actualizados para profile_id=%s", profile_id)
 
+        # Limpiar los datos de la sesión
+        session.pop("oauth_state", None)
+
         profile_email = None
 
         return render_template(
@@ -584,7 +600,7 @@ def google_oauth2callback():
             profile_email=profile_email,
         )
     except Exception as e:
-        logger.exception("LOG: Excepci贸n en oauth2callback: %s", e)
+        logger.exception("LOG: Excepción en oauth2callback: %s", e)
         return render_template(
             "error.html",
             message="Ha ocurrido un error al conectar con Google Calendar.",
