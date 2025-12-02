@@ -266,12 +266,12 @@ def create_calendar_event_from_task_context(task: dict):
     annotation_type = task.get("annotation_type")
     if annotation_type not in ALLOWED_ANNOTATION_TYPES:
         logger.info(
-            "LOG: Tarea con annotation_type='%s' NO requiere evento de calendario. Se omite creaci贸n.",
+            "LOG: Tarea con annotation_type='%s' NO requiere evento de calendario. Se omite creación.",
             annotation_type,
         )
         return None, f"Tipo de tarea '{annotation_type}' no requiere evento de calendario"
 
-    logger.info("LOG: Tipo de tarea '%s' v谩lido para crear evento de calendario", annotation_type)
+    logger.info("LOG: Tipo de tarea '%s' válido para crear evento de calendario", annotation_type)
 
     profile_id = task.get("profile_id")
     if not profile_id:
@@ -290,7 +290,7 @@ def create_calendar_event_from_task_context(task: dict):
 
     if not isinstance(due_date, datetime):
         logger.error("LOG: due_date no es datetime: %s", due_date)
-        return None, "La tarea no tiene due_date v谩lido"
+        return None, "La tarea no tiene due_date válido"
 
     tz = ZoneInfo("Europe/Madrid")
     if due_date.tzinfo is None:
@@ -302,7 +302,7 @@ def create_calendar_event_from_task_context(task: dict):
 
     logger.debug("LOG: start_dt=%s end_dt=%s", start_dt.isoformat(), end_dt.isoformat())
 
-    # ---------- Datos del lead ----------
+    # ---------- Datos del lead (cliente) ----------
     lead_first_name = task.get("lead_first_name") or ""
     lead_last_name = task.get("lead_last_name") or ""
     lead_name = (lead_first_name + " " + lead_last_name).strip() or "Cliente"
@@ -333,54 +333,67 @@ def create_calendar_event_from_task_context(task: dict):
     profile_last_name = task.get("profile_last_name") or ""
     profile_name = (profile_first_name + " " + profile_last_name).strip() or "No asignado"
 
-    # ---------- Summary del evento ----------
-    summary = f"{annotation_type} - {lead_name}"
+    # ---------- Determinar si es llamada o cita ----------
+    # Tipos considerados como "presenciales" / "Cita"
+    TIPOS_PRESENCIALES = {
+        "Visita programada",
+        "Visita presencial agendada",
+    }
+    
+    is_presencial = annotation_type in TIPOS_PRESENCIALES
+    tipo_evento = "Cita Agendada" if is_presencial else "Llamada Agendada"
 
-    # ---------- Descripción en el formato solicitado ----------
+    # ---------- Summary del evento ----------
+    summary = f"{tipo_evento} - {lead_name}"
+
+    # ---------- Descripción en el NUEVO formato ----------
     task_content = task.get("task_content") or ""
 
     description_lines = []
 
-    # 1. Tipo de visita/llamada + Hora y día
-    description_lines.append(f"Tipo de visita/llamada: {annotation_type or 'No indicado'}")
-    description_lines.append(f"Hora y día: {start_dt.strftime('%d/%m/%Y %H:%M')}")
+    # 1. Datos de la llamada/visita (día y hora)
+    description_lines.append(f"Datos de la {'visita' if is_presencial else 'llamada'} (día y hora):")
+    description_lines.append(f"{start_dt.strftime('%d/%m/%Y a las %H:%M')}")
     description_lines.append("")
 
-    # 2. Nombre de quien lo crea
-    if creator_email:
-        description_lines.append(f"Nombre de quien lo crea: {creator_name} ({creator_email})")
-    else:
-        description_lines.append(f"Nombre de quien lo crea: {creator_name}")
+    # 2. Dirección (solo si es presencial)
+    if is_presencial:
+        # Aquí podrías extraer la dirección del task_content o de otro campo
+        # Por ahora, si hay contenido en la tarea, lo mostramos como dirección
+        direccion = task_content if task_content else "Por determinar"
+        description_lines.append("Dirección:")
+        description_lines.append(direccion)
+        description_lines.append("")
 
-    # 3. Nombre del agente asignado
+    # 3. Nombre de quien lo crea
+    description_lines.append(f"Creado por: {creator_name}")
+    
+    # 4. Nombre del agente asignado (con correo)
     if profile_email:
-        description_lines.append(
-            f"Nombre del agente asignado: {profile_name} ({profile_email})"
-        )
+        description_lines.append(f"Agente asignado: {profile_name} ({profile_email})")
     else:
-        description_lines.append(f"Nombre del agente asignado: {profile_name}")
+        description_lines.append(f"Agente asignado: {profile_name}")
     description_lines.append("")
 
-    # 4. Datos del lead
-    description_lines.append("Datos del lead:")
-    description_lines.append(f"- Nombre: {lead_name}")
-    description_lines.append(f"- Móvil: {lead_phone or 'No informado'}")
-    description_lines.append(f"- Correo: {lead_email or 'No informado'}")
+    # 5. Datos del cliente
+    description_lines.append("Datos del cliente:")
+    description_lines.append(f"Nombre: {lead_name}")
+    description_lines.append(f"Teléfono: {lead_phone or 'No informado'}")
     if portal_link:
-        description_lines.append(f"- Link a su negocio en el portal: {portal_link}")
+        description_lines.append(f"Enlace al portal: {portal_link}")
     description_lines.append("")
 
-    # 5. Notas adicionales (contenido de la tarea, si lo hay)
-    if task_content:
-        description_lines.append("Notas de la tarea:")
+    # 6. Notas adicionales (solo si es llamada y hay contenido)
+    if not is_presencial and task_content:
+        description_lines.append("Notas adicionales:")
         description_lines.append(task_content)
         description_lines.append("")
 
-    # 6. Info técnica opcional
+    # 7. Info técnica opcional (al final, menos visible)
     if deal_id:
-        description_lines.append(f"Deal ID: {deal_id}")
+        description_lines.append(f"[ID Negocio: {deal_id}]")
     if annotation_task_id:
-        description_lines.append(f"Tarea (annotation_task_id): {annotation_task_id}")
+        description_lines.append(f"[ID Tarea: {annotation_task_id}]")
 
     description = "\n".join(description_lines)
 
@@ -390,12 +403,14 @@ def create_calendar_event_from_task_context(task: dict):
     # ---------- Asistentes ----------
     attendees = []
 
+    # Siempre agregar al agente asignado primero
     if profile_email:
         att = {"email": profile_email}
         if profile_name:
             att["displayName"] = profile_name
         attendees.append(att)
 
+    # Agregar al cliente si tiene email
     if lead_email:
         att = {"email": lead_email}
         if lead_name:
@@ -448,8 +463,8 @@ def create_calendar_event_from_task_context(task: dict):
 
         return resp.json(), None
     except Exception as e:
-        logger.exception("LOG: Excepci贸n creando evento en Google Calendar: %s", e)
-        return None, f"Excepci贸n hablando con Google Calendar: {e}"
+        logger.exception("LOG: Excepción creando evento en Google Calendar: %s", e)
+        return None, f"Excepción hablando con Google Calendar: {e}"
 
 @app.route("/")
 def index():
