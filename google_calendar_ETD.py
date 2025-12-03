@@ -251,65 +251,6 @@ def fetch_task_context(annotation_task_id: str):
     finally:
         conn.close()
 
-def get_agent_office_calendar_id(profile_id: str):
-    """
-    Devuelve el calendar_id de la OFICINA principal del agente (profile_id).
-
-    1) Busca la oficina principal del perfil en profile_company_addresses
-    2) Con ese company_address_id llama a get_office_calendar_id(...)
-    """
-    if not profile_id:
-        return None, "No se proporcionó profile_id"
-
-    logger.info("LOG: Buscando oficina principal para profile_id=%s", profile_id)
-
-    conn = get_db_conn()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            """
-            SELECT pca.company_address_id
-            FROM profile_company_addresses pca
-            WHERE pca.profile_id = %s
-              AND pca.is_deleted = FALSE
-            ORDER BY 
-                COALESCE(pca.is_main, FALSE) DESC,
-                pca.created_at ASC
-            LIMIT 1
-            """,
-            (profile_id,),
-        )
-        row = cur.fetchone()
-
-        if not row:
-            logger.warning(
-                "LOG: profile_id=%s no tiene oficinas asignadas en profile_company_addresses",
-                profile_id,
-            )
-            return None, "El agente no tiene oficina asignada"
-
-        office_id = row[0]
-        logger.info(
-            "LOG: Oficina principal para profile_id=%s es office_id=%s",
-            profile_id,
-            office_id,
-        )
-
-        # Reutilizamos la lógica existente de calendar por oficina
-        return get_office_calendar_id(str(office_id))
-
-    except Exception as e:
-        logger.exception(
-            "LOG: Error buscando oficina principal para profile_id=%s: %s",
-            profile_id,
-            e,
-        )
-        return None, f"Error buscando oficina del agente: {e}"
-    finally:
-        cur.close()
-        conn.close()
-
-
 def get_office_calendar_id(office_id: str):
     """
     Obtiene el calendar_id de Google asociado a una oficina (company_address).
