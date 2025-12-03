@@ -325,18 +325,28 @@ def create_calendar_event_from_task_context(task: dict):
 
     logger.info("LOG: Usando profile_id=%s para crear evento", profile_id)
 
-    # ✅ Siempre usar el calendario de la OFICINA del agente asignado
-    calendar_id, err = get_agent_office_calendar_id(str(profile_id))
-    if err or not calendar_id:
+    # ✅ Usar SIEMPRE el calendario de la OFICINA del agente (profile_office_id del contexto)
+    profile_office_id = task.get("profile_office_id")
+
+    if profile_office_id:
+        calendar_id, err = get_office_calendar_id(str(profile_office_id))
+        if err or not calendar_id:
+            logger.warning(
+                "LOG: No se pudo obtener calendar_id para profile_office_id=%s: %s. "
+                "Se usará el calendario personal (primary) del agente.",
+                profile_office_id,
+                err or "Sin calendar_id",
+            )
+            calendar_id = "primary"
+    else:
         logger.warning(
-            "LOG: No se pudo obtener calendar_id de la oficina del agente profile_id=%s: %s. "
-            "Se usará su calendario personal (primary).",
-            profile_id,
-            err or "Sin calendar_id",
+            "LOG: La tarea no tiene profile_office_id (oficina del agente). "
+            "Se usará el calendario personal (primary)."
         )
         calendar_id = "primary"
 
-    logger.info("LOG: Evento se creará en calendar_id=%s (oficina del agente)", calendar_id)
+    logger.info("LOG: Evento se creará en calendar_id=%s (oficina del agente o fallback primary)", calendar_id)
+
 
 
     access_token, err = get_fresh_access_token(str(profile_id))
