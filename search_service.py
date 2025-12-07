@@ -202,7 +202,7 @@ def run_search(company_id: str, query: str):
         cur = conn.cursor()
 
         # ----------------------------------------------------------------------------
-        # Ejemplo de búsqueda en deals (simplificado; aquí iría tu SQL real)
+        # Búsqueda en deals
         # ----------------------------------------------------------------------------
         sql_deals = """
         SELECT
@@ -213,16 +213,13 @@ def run_search(company_id: str, query: str):
             d.created_at
         FROM deals d
         WHERE d.company_id = %s
-          AND (
-              d.name ILIKE %s
-              OR d.description ILIKE %s
-          )
+          AND d.name ILIKE %s
         ORDER BY d.created_at DESC
         LIMIT 50
         """
 
         like_pattern = f"%{query}%"
-        cur.execute(sql_deals, (company_id, like_pattern, like_pattern))
+        cur.execute(sql_deals, (company_id, like_pattern))
         deal_rows = cur.fetchall()
 
         deals_results = [
