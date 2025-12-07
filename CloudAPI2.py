@@ -1656,7 +1656,7 @@ class Config:
         # Comprobar si existen los certificados
         cert_exists = bool(ssl_cert)  # Asumir que existe si tiene valor
         key_exists = bool(ssl_key)    # Asumir que existe si tiene valor
-        if not (cert_exists and key_exists):
+        `   if not (cert_exists and key_exists):
             self._logger.warning(f"[Config] SSL cert or key not found. Falling back to HTTP only. Cert: {ssl_cert}, Key: {ssl_key}")
             ssl_cert = None
             ssl_key = None
