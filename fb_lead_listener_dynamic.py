@@ -1473,7 +1473,7 @@ def create_portal_user(data, source, config=None):
                 pass
 
     # 4.5️⃣ Verificar si el cliente (número) ya existe para ESTE company_id vía deals
-    if phone and company_id:
+    if phone and company_id and str(source).strip().lower() != "b2b_manual":
         try:
             conn = get_supabase_connection()
             cur = conn.cursor()
