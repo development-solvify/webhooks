@@ -337,6 +337,21 @@ form_mapping_manager = FormMappingManager()
 # ----------------------------------------------------------------------------
 # Funciones auxiliares
 # ----------------------------------------------------------------------------
+
+def debug_db_context(conn, logger):
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT current_database(), current_schema()")
+        db_name, schema_name = cur.fetchone()
+        logger.info(f"[DB DEBUG] current_database={db_name}, current_schema={schema_name}")
+
+        cur.execute("SELECT to_regclass('public.external_messages')")
+        regclass = cur.fetchone()[0]
+        logger.info(f"[DB DEBUG] to_regclass('public.external_messages') = {regclass}")
+    except Exception as e:
+        logger.error(f"[DB DEBUG] Error verificando contexto de BD: {e}", exc_info=True)
+
+
 def get_supabase_connection():
     params = {
         'user': config_supabase.get('DB','DB_USER',fallback=None),
@@ -1425,7 +1440,7 @@ def create_portal_user(data, source, config=None):
         try:
             conn = get_supabase_connection()
             cur = conn.cursor()
-
+            debug_db_context(conn, app.logger)
             # Buscar company_id por nombre
             cur.execute(
                 """
@@ -1476,6 +1491,7 @@ def create_portal_user(data, source, config=None):
     if phone and company_id and str(source).strip().lower() != "b2b_manual":
         try:
             conn = get_supabase_connection()
+            debug_db_context(conn, app.logger)
             cur = conn.cursor()
             cur.execute(
                 """
