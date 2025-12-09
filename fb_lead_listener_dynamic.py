@@ -1851,7 +1851,7 @@ def receive_lead():
         mapped_key = mapping.get(k) or mapping.get(k.lstrip('¿'))
         if not mapped_key and k not in data:
             # Convertir a string si es necesario para consistencia
-            data[k] = str(v) if not isinstance(v, str) : v
+            data[k] = str(v) if not isinstance(v, str) else v
     
     # Debug final de datos mapeados
     app.logger.debug("DATOS FINALES MAPEADOS:")
