@@ -1971,7 +1971,7 @@ def receive_alianza_lead():
     for k, v in raw.items():
         mapped_key = mapping.get(k)
         if not mapped_key and k not in data:
-            data[k] = str(v) if not isinstance(v, str) else v
+            data[k] = str(v) if not isinstance(v, str) : v
 
     # 2.4 Debug final
     app.logger.debug("DATOS FINALES MAPEADOS ALIANZA:")
