@@ -2262,6 +2262,7 @@ def receive_b2b_manual_lead():
     }
     
     # 4️⃣ Config especial que incluye company_id y company_address_id directos
+    # 🆕 NUEVO: Aceptar category_id desde parámetros del request
     config_manual = {
         "fields": {},
         "validations": {},
@@ -2269,6 +2270,7 @@ def receive_b2b_manual_lead():
         "company_id": raw['company_id'],
         "company_address_id": raw['company_address_id'],
         "channel": raw.get('channel', 'presencial'),
+        "category_id": raw.get('category_id'),  # 🆕 NUEVO: parámetro opcional
         "is_etd": is_etd,
     }
     
