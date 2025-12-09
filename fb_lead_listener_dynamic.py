@@ -1375,20 +1375,26 @@ def create_portal_user(data, source, config=None):
             return None
     
     # 2️⃣ Determinar categoría (cat_id)
-    try:
-        ans_empresa = str(data.get(
-            'has_pedido_algún_préstamo_desde_tu_empresa_(sociedad)_y_ahora_te_lo_están_reclamando_personalmente?',
-            ''
-        )).lower()
-        cat_id = (
-            '932bbf6f-b505-495c-be19-f4dc186b4bd3'
-            if ans_empresa in ('si','sí') 
-            else 'bcb1ae3e-4c23-4461-9dae-30ed137d53e2'
-        )
-    except Exception:
-        cat_id = 'bcb1ae3e-4c23-4461-9dae-30ed137d53e2'
+    # NUEVO: Si viene en config (ej. B2B_Manual), usarlo directamente
+    if config and config.get("category_id"):
+        cat_id = config.get("category_id")
+        app.logger.info(f"Categoría desde config (override): {cat_id}")
+    else:
+        # Lógica original: auto-detect
+        try:
+            ans_empresa = str(data.get(
+                'has_pedido_algún_préstamo_desde_tu_empresa_(sociedad)_y_ahora_te_lo_están_reclamando_personalmente?',
+                ''
+            )).lower()
+            cat_id = (
+                '932bbf6f-b505-495c-be19-f4dc186b4bd3'
+                if ans_empresa in ('si','sí') 
+                else 'bcb1ae3e-4c23-4461-9dae-30ed137d53e2'
+            )
+        except Exception:
+            cat_id = 'bcb1ae3e-4c23-4461-9dae-30ed137d53e2'
 
-    cat_id = 'bcb1ae3e-4c23-4461-9dae-30ed137d53e2'
+        cat_id = 'bcb1ae3e-4c23-4461-9dae-30ed137d53e2'
     
     app.logger.debug(f"Categoría de PortalUser para {full}: {cat_id}")
     
@@ -1845,7 +1851,7 @@ def receive_lead():
         mapped_key = mapping.get(k) or mapping.get(k.lstrip('¿'))
         if not mapped_key and k not in data:
             # Convertir a string si es necesario para consistencia
-            data[k] = str(v) if not isinstance(v, str) else v
+            data[k] = str(v) if not isinstance(v, str) : v
     
     # Debug final de datos mapeados
     app.logger.debug("DATOS FINALES MAPEADOS:")
@@ -1965,7 +1971,7 @@ def receive_alianza_lead():
     for k, v in raw.items():
         mapped_key = mapping.get(k)
         if not mapped_key and k not in data:
-            data[k] = str(v) if not isinstance(v, str) else v
+            data[k] = str(v) if not isinstance(v, str) : v
 
     # 2.4 Debug final
     app.logger.debug("DATOS FINALES MAPEADOS ALIANZA:")
