@@ -1680,58 +1680,84 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
                 conn = get_supabase_connection()
                 cur = conn.cursor()
 
-                # 🆕 PASO 1: Verificar si el LEAD existe en DB
-                if phone:
+                # 1) Buscar deal directamente por portal_user_id (lead_id en deals)
+                if portal_user_id:
                     cur.execute(
-                        "SELECT id, email FROM leads WHERE TRIM(REPLACE(REPLACE(phone, '+34', ''), ' ', '')) = %s "
-                        "AND is_deleted = FALSE ORDER BY created_at DESC LIMIT 1",
-                        (phone,)
-                    )
-                else:
-                    cur.execute(
-                        "SELECT id, email FROM leads WHERE email = %s AND is_deleted = FALSE "
-                        "ORDER BY created_at DESC LIMIT 1",
-                        (data.get('correo_electrónico', ''),)
-                    )
-            
-                lead_row = cur.fetchone()
-                if lead_row:
-                    lead_id = str(lead_row[0])
-                    app.logger.info(
-                        f"✅ LEAD encontrado en DB: {lead_id} | email={lead_row[1]} | "
-                        f"Portal User ID={portal_user_id}"
-                    )
-                    
-                    # 🆕 PASO 2: Buscar DEAL asociado a ese lead
-                    cur.execute(
-                        "SELECT id, status FROM deals WHERE lead_id = %s "
-                        "AND is_deleted = FALSE ORDER BY created_at DESC LIMIT 1",
-                        (lead_id,)
+                        """
+                        SELECT id, status
+                        FROM deals
+                        WHERE lead_id = %s
+                          AND is_deleted = FALSE
+                        ORDER BY created_at DESC
+                        LIMIT 1;
+                        """,
+                        (portal_user_id,),
                     )
                     deal_row = cur.fetchone()
-                    
+
                     if deal_row:
                         deal_id = str(deal_row[0])
+                        lead_id = str(portal_user_id)
                         app.logger.info(
-                            f"✅ DEAL encontrado para lead {lead_id}: {deal_id} | status={deal_row[1]}"
+                            f"✅ DEAL encontrado para portal_user_id/lead_id {lead_id}: {deal_id} | status={deal_row[1]}"
                         )
                         break
                     else:
                         app.logger.warning(
-                            f"⚠️ LEAD existe ({lead_id}) pero SIN DEAL asociado (intento {attempt + 1}/{max_retries})"
+                            f"⚠️ SIN DEAL para portal_user_id={portal_user_id} (intento {attempt + 1}/{max_retries})"
                         )
-                else:
-                    app.logger.warning(
-                        f"⚠️ LEAD NO encontrado en DB para phone={phone} (intento {attempt + 1}/{max_retries})"
-                    )
-            
-                if attempt < max_retries - 1:
+
+                # 2) Fallback: buscar lead por teléfono/email y luego su deal
+                if not deal_id:
+                    if phone:
+                        cur.execute(
+                            "SELECT id, email FROM leads WHERE TRIM(REPLACE(REPLACE(phone, '+34', ''), ' ', '')) = %s "
+                            "AND is_deleted = FALSE ORDER BY created_at DESC LIMIT 1",
+                            (phone,),
+                        )
+                    else:
+                        cur.execute(
+                            "SELECT id, email FROM leads WHERE email = %s AND is_deleted = FALSE "
+                            "ORDER BY created_at DESC LIMIT 1",
+                            (data.get('correo_electrónico', ''),),
+                        )
+
+                    lead_row = cur.fetchone()
+                    if lead_row:
+                        lead_id = str(lead_row[0])
+                        app.logger.info(
+                            f"✅ LEAD encontrado en DB: {lead_id} | email={lead_row[1]} | Portal User ID={portal_user_id}"
+                        )
+
+                        cur.execute(
+                            "SELECT id, status FROM deals WHERE lead_id = %s "
+                            "AND is_deleted = FALSE ORDER BY created_at DESC LIMIT 1",
+                            (lead_id,),
+                        )
+                        deal_row = cur.fetchone()
+
+                        if deal_row:
+                            deal_id = str(deal_row[0])
+                            app.logger.info(
+                                f"✅ DEAL encontrado para lead {lead_id}: {deal_id} | status={deal_row[1]}"
+                            )
+                            break
+                        else:
+                            app.logger.warning(
+                                f"⚠️ LEAD existe ({lead_id}) pero SIN DEAL asociado (intento {attempt + 1}/{max_retries})"
+                            )
+                    else:
+                        app.logger.warning(
+                            f"⚠️ LEAD NO encontrado en DB para phone={phone} (intento {attempt + 1}/{max_retries})"
+                        )
+
+                if attempt < max_retries - 1 and not deal_id:
                     app.logger.info(f"⏳ Esperando {retry_delay}s antes del siguiente intento...")
                     time.sleep(retry_delay)
-                else:
+                elif not deal_id:
                     app.logger.error(
                         f"❌ No se encontró deal_id tras {max_retries} intentos para {source} | "
-                        f"Lead ID: {lead_id or 'NO ENCONTRADO'}"
+                        f"Lead/Portal ID: {lead_id or portal_user_id or 'NO ENCONTRADO'}"
                     )
                     
             finally:
