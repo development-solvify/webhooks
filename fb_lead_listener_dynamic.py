@@ -1667,53 +1667,73 @@ def process_lead_common(source: str, data: dict, raw_payload: dict, config: dict
 
     # 2) Buscar deal_id con reintentos
     deal_id = None
+    lead_id = None  # 🆕 Para verificar si el lead existe
     max_retries = 5
-    retry_delay = 2  # segundos entre intentos
+    retry_delay = 2
 
     try:
         phone = strip_country_code(data.get('número_de_teléfono', '') or '')
+        portal_user_id = portal_resp.get('id') if portal_resp else None  # 🆕
 
         for attempt in range(max_retries):
             try:
                 conn = get_supabase_connection()
                 cur = conn.cursor()
 
+                # 🆕 PASO 1: Verificar si el LEAD existe en DB
                 if phone:
-                    query = (
-                        "SELECT d.id FROM leads l JOIN deals d ON l.id = d.lead_id "
-                        "WHERE TRIM(REPLACE(REPLACE(l.phone, '+34', ''), ' ', '')) = %s "
-                        "AND l.is_deleted = FALSE AND d.is_deleted = FALSE "
-                        "ORDER BY d.created_at DESC LIMIT 1"
+                    cur.execute(
+                        "SELECT id, email FROM leads WHERE TRIM(REPLACE(REPLACE(phone, '+34', ''), ' ', '')) = %s "
+                        "AND is_deleted = FALSE ORDER BY created_at DESC LIMIT 1",
+                        (phone,)
                     )
-                    cur.execute(query, (phone,))
                 else:
-                    query = (
-                        "SELECT d.id FROM leads l JOIN deals d ON l.id = d.lead_id "
-                        "WHERE l.email = %s AND l.is_deleted = FALSE AND d.is_deleted = FALSE "
-                        "ORDER BY d.created_at DESC LIMIT 1"
+                    cur.execute(
+                        "SELECT id, email FROM leads WHERE email = %s AND is_deleted = FALSE "
+                        "ORDER BY created_at DESC LIMIT 1",
+                        (data.get('correo_electrónico', ''),)
                     )
-                    cur.execute(query, (data.get('correo_electrónico', ''),))
-
-                row = cur.fetchone()
-                deal_id = str(row[0]) if row else None
-
-                if deal_id:
-                    
+            
+                lead_row = cur.fetchone()
+                if lead_row:
+                    lead_id = str(lead_row[0])
                     app.logger.info(
-                        f"✅ Deal ID encontrado para {source} (intento {attempt + 1}/{max_retries}): {deal_id}"
+                        f"✅ LEAD encontrado en DB: {lead_id} | email={lead_row[1]} | "
+                        f"Portal User ID={portal_user_id}"
                     )
-                    break
-                else:
-                    if attempt < max_retries - 1:
-                        app.logger.warning(
-                            f"⏳ Deal no encontrado aún para {source}, "
-                            f"reintentando en {retry_delay}s (intento {attempt + 1}/{max_retries})"
+                    
+                    # 🆕 PASO 2: Buscar DEAL asociado a ese lead
+                    cur.execute(
+                        "SELECT id, status FROM deals WHERE lead_id = %s "
+                        "AND is_deleted = FALSE ORDER BY created_at DESC LIMIT 1",
+                        (lead_id,)
+                    )
+                    deal_row = cur.fetchone()
+                    
+                    if deal_row:
+                        deal_id = str(deal_row[0])
+                        app.logger.info(
+                            f"✅ DEAL encontrado para lead {lead_id}: {deal_id} | status={deal_row[1]}"
                         )
-                        time.sleep(retry_delay)
+                        break
                     else:
                         app.logger.warning(
-                            f"❌ No se encontró deal_id tras {max_retries} intentos para {source}"
+                            f"⚠️ LEAD existe ({lead_id}) pero SIN DEAL asociado (intento {attempt + 1}/{max_retries})"
                         )
+                else:
+                    app.logger.warning(
+                        f"⚠️ LEAD NO encontrado en DB para phone={phone} (intento {attempt + 1}/{max_retries})"
+                    )
+            
+                if attempt < max_retries - 1:
+                    app.logger.info(f"⏳ Esperando {retry_delay}s antes del siguiente intento...")
+                    time.sleep(retry_delay)
+                else:
+                    app.logger.error(
+                        f"❌ No se encontró deal_id tras {max_retries} intentos para {source} | "
+                        f"Lead ID: {lead_id or 'NO ENCONTRADO'}"
+                    )
+                    
             finally:
                 try:
                     if 'cur' in locals():
@@ -1961,7 +1981,7 @@ def receive_alianza_lead():
     for original_key, mapped_key in mapping.items():
         value = raw.get(original_key)
         if value is not None:
-            data[mapped_key] = str(value) if not isinstance(value, str) else value
+            data[mapped_key] = str(value) if not isinstance(value, str) : value
             app.logger.debug(f"MAPEADO: '{original_key}' → '{mapped_key}' = '{value}' (tipo: {type(value)})")
 
     # 2.2 Fallback para críticos
@@ -1985,7 +2005,7 @@ def receive_alianza_lead():
     for k, v in raw.items():
         mapped_key = mapping.get(k)
         if not mapped_key and k not in data:
-            data[k] = str(v) if not isinstance(v, str) else v
+            data[k] = str(v) if not isinstance(v, str) : v
 
     # 2.4 Debug final
     app.logger.debug("DATOS FINALES MAPEADOS ALIANZA:")
