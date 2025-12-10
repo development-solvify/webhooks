@@ -29,15 +29,21 @@ from flask import Flask, request, jsonify
 # Token de verificación que configuras en Meta Developers (Webhooks)
 VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN", "SICUEL2025")
 
-# Page Access Token para llamar a Graph API y sacar los datos del lead
-# (de momento puedes sacarlo a mano desde Graph API Explorer)
-PAGE_ACCESS_TOKEN = os.getenv("META_PAGE_ACCESS_TOKEN", "EAAMUdsKLqqkBQD4g1R8WeBiYrshJZB3Rkw88Vxa4P3i69czmIx6ZBmME4C3sIF9mtvVpP0nBZBkZA2cE6ZASj8AXg5JYrCWKIDWrIGSthmACZC7ZAZCSwjclNZCT4S7pYAuZC0de3mRcAoOgmHJc2GmC3jkOtDvkBOTGLt4RxiReFTJp8zuL9Q55qlgthgDle8OQZDZD")
+# Usamos preferentemente un SYSTEM USER TOKEN, si existe
+SYSTEM_USER_TOKEN = os.getenv("META_SYSTEM_USER_TOKEN", "EAAMUdsKLqqkBQD4g1R8WeBiYrshJZB3Rkw88Vxa4P3i69czmIx6ZBmME4C3sIF9mtvVpP0nBZBkZA2cE6ZASj8AXg5JYrCWKIDWrIGSthmACZC7ZAZCSwjclNZCT4S7pYAuZC0de3mRcAoOgmHJc2GmC3jkOtDvkBOTGLt4RxiReFTJp8zuL9Q55qlgthgDle8OQZDZD")
+PAGE_ACCESS_TOKEN = os.getenv("META_PAGE_ACCESS_TOKEN", "")
+
+# Token efectivo que usaremos contra Graph API
+GRAPH_TOKEN = SYSTEM_USER_TOKEN or PAGE_ACCESS_TOKEN
 
 # Nivel de log
 LOG_LEVEL = os.getenv("META_LOG_LEVEL", "INFO").upper()
 
 # Puerto por defecto para modo desarrollo (solo si lanzas __main__)
 DEV_PORT = int(os.getenv("META_DEV_PORT", "5005"))
+
+# Versión de Graph API (puedes subirla a v24.0 si quieres)
+GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v21.0")
 
 # ======================================================
 # LOGGING
@@ -79,31 +85,52 @@ def fetch_lead_details(leadgen_id: str) -> Dict[str, Any]:
 
     Devuelve el JSON completo que responde Meta, o {} en caso de error.
     """
-    if not PAGE_ACCESS_TOKEN:
+
+    if not GRAPH_TOKEN:
         logger.warning(
-            "[META-LEAD] No hay META_PAGE_ACCESS_TOKEN configurado; "
-            "no se puede pedir detalle del lead a Graph API."
+            "[META-LEAD] No hay META_SYSTEM_USER_TOKEN ni META_PAGE_ACCESS_TOKEN "
+            "configurados; no se puede pedir detalle del lead a Graph API."
         )
         return {}
 
-    url = f"https://graph.facebook.com/v21.0/{leadgen_id}"
+    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{leadgen_id}"
+    # IMPORTANTE: pedir los fields que nos interesan
     params = {
-        "access_token": PAGE_ACCESS_TOKEN
+        "access_token": GRAPH_TOKEN,
+        "fields": "field_data,created_time,ad_id,form_id,platform,adset_id,campaign_id"
     }
 
     logger.info(f"[META-LEAD] Llamando a Graph API para leadgen_id={leadgen_id}")
+    logger.debug(f"[META-LEAD] URL Graph: {url}  params={params}")
 
     try:
         resp = requests.get(url, params=params, timeout=10)
+        # Log completo de respuesta en DEBUG siempre:
+        logger.debug(
+            f"[META-LEAD] Graph API status={resp.status_code}, body={resp.text}"
+        )
         resp.raise_for_status()
         data = resp.json()
         logger.info(
-            f"[META-LEAD] Respuesta Graph API para lead {leadgen_id}: "
+            f"[META-LEAD] Respuesta Graph API OK para lead {leadgen_id}: "
             f"{json.dumps(data, indent=2, ensure_ascii=False)}"
         )
         return data
+
+    except requests.exceptions.HTTPError as e:
+        # Aquí vemos exactamente qué se queja Meta (permisos, token, etc.)
+        try:
+            err_json = resp.json()
+        except Exception:
+            err_json = {"raw": resp.text}
+
+        logger.error(
+            f"[META-LEAD] Error HTTP al llamar a Graph API para lead {leadgen_id}: "
+            f"status={resp.status_code}, body={json.dumps(err_json, ensure_ascii=False)}"
+        )
+        return {}
     except Exception as e:
-        logger.exception(f"[META-LEAD] Error llamando a Graph API para lead {leadgen_id}: {e}")
+        logger.exception(f"[META-LEAD] Error genérico llamando a Graph API para lead {leadgen_id}: {e}")
         return {}
 
 
@@ -224,7 +251,13 @@ if __name__ == "__main__":
     logger.info("========================================")
     logger.info("  SERVICIO META LEADS - MODO DESARROLLO")
     logger.info(f"  VERIFY_TOKEN        = {VERIFY_TOKEN}")
-    logger.info(f"  PAGE_ACCESS_TOKEN   = {'SET' if PAGE_ACCESS_TOKEN else 'NOT SET'}")
+    if SYSTEM_USER_TOKEN:
+        logger.info("  GRAPH_TOKEN         = SYSTEM_USER_TOKEN (META_SYSTEM_USER_TOKEN)")
+    elif PAGE_ACCESS_TOKEN:
+        logger.info("  GRAPH_TOKEN         = PAGE_ACCESS_TOKEN (META_PAGE_ACCESS_TOKEN)")
+    else:
+        logger.info("  GRAPH_TOKEN         = NOT SET")
+    logger.info(f"  GRAPH_API_VERSION   = {GRAPH_API_VERSION}")
     logger.info(f"  Escuchando en http://0.0.0.0:{DEV_PORT}/meta-leads")
     logger.info("  IMPORTANTE: Para Meta en producción debe ir detrás de HTTPS (nginx).")
     logger.info("========================================")
