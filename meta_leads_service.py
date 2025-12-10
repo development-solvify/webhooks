@@ -31,7 +31,7 @@ VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN", "SICUEL2025")
 
 # Page Access Token para llamar a Graph API y sacar los datos del lead
 # (de momento puedes sacarlo a mano desde Graph API Explorer)
-PAGE_ACCESS_TOKEN = os.getenv("META_PAGE_ACCESS_TOKEN", "")
+PAGE_ACCESS_TOKEN = os.getenv("META_PAGE_ACCESS_TOKEN", "EAAMUdsKLqqkBQD4g1R8WeBiYrshJZB3Rkw88Vxa4P3i69czmIx6ZBmME4C3sIF9mtvVpP0nBZBkZA2cE6ZASj8AXg5JYrCWKIDWrIGSthmACZC7ZAZCSwjclNZCT4S7pYAuZC0de3mRcAoOgmHJc2GmC3jkOtDvkBOTGLt4RxiReFTJp8zuL9Q55qlgthgDle8OQZDZD")
 
 # Nivel de log
 LOG_LEVEL = os.getenv("META_LOG_LEVEL", "INFO").upper()
